@@ -1,0 +1,26 @@
+<Project>
+  <PropertyGroup>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <DebugType>portable</DebugType>
+    <!-- Keep the conventional trees excluded even when a privileged variant
+         relocates BaseOutputPath/BaseIntermediateOutputPath outside the project. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildProjectDirectory)\bin\**\*;$(MSBuildProjectDirectory)\obj\**\*</DefaultItemExcludes>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'InvokersRu.Core' and ('$(EnableCoreMutations)' == 'true' or '$(EnableSupervisedInstallWrites)' == 'true')">
+    <BaseOutputPath>$(MSBuildThisFileDirectory)work\supervised-write-bin\core\</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)work\supervised-write-obj\core\</BaseIntermediateOutputPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'InvokersRu.Cli' and '$(EnableSupervisedInstallWrites)' == 'true'">
+    <BaseOutputPath>$(MSBuildThisFileDirectory)work\supervised-write-bin\cli\</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)work\supervised-write-obj\cli\</BaseIntermediateOutputPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'InvokersRu.Core' and ('$(EnableCoreTestMutations)' == 'true' or '$(EnableMutationSmokeTests)' == 'true')">
+    <BaseOutputPath>$(MSBuildThisFileDirectory)work\test-write-bin\core\</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)work\test-write-obj\core\</BaseIntermediateOutputPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'InvokersRu.SmokeTests' and '$(EnableMutationSmokeTests)' == 'true'">
+    <BaseOutputPath>$(MSBuildThisFileDirectory)work\test-write-bin\smoke\</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)work\test-write-obj\smoke\</BaseIntermediateOutputPath>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>14.0</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>InvokersRu.Cli</AssemblyName>
+    <Version>0.2.0-preview</Version>
+    <Company>Invokers Russian Community</Company>
+    <Product>InvokersRu localization patcher</Product>
+    <Description>Version-aware community localization tooling for Invokers: Titan Legacy.</Description>
+    <EnableSupervisedInstallWrites Condition="'$(EnableSupervisedInstallWrites)' == ''">false</EnableSupervisedInstallWrites>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(EnableSupervisedInstallWrites)' == 'true'">
+    <DefineConstants>$(DefineConstants);INVOKERSRU_SUPERVISED_WRITES</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\InvokersRu.Core\InvokersRu.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(EnableSupervisedInstallWrites)' == 'true' and '$(TrustedCompatibilityPath)' != ''">
+    <EmbeddedResource Include="$(TrustedCompatibilityPath)" LogicalName="InvokersRu.TrustedCompatibility.json" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(EnableSupervisedInstallWrites)' == 'true' and '$(TrustedRuntimeCacheCompatibilityPath)' != ''">
+    <EmbeddedResource Include="$(TrustedRuntimeCacheCompatibilityPath)" LogicalName="InvokersRu.TrustedRuntimeCacheCompatibility.json" />
+  </ItemGroup>
+  <Target Name="ValidateSupervisedWriteBuild" BeforeTargets="CoreCompile" Condition="'$(EnableSupervisedInstallWrites)' == 'true'">
+    <Error Condition="'$(TrustedCompatibilityPath)' == ''" Text="A supervised write build requires /p:TrustedCompatibilityPath=ABSOLUTE_PATH." />
+    <Error Condition="'$(TrustedCompatibilityPath)' != '' and !$([System.IO.Path]::IsPathFullyQualified('$(TrustedCompatibilityPath)'))" Text="TrustedCompatibilityPath must be an absolute path: $(TrustedCompatibilityPath)" />
+    <Error Condition="'$(TrustedCompatibilityPath)' != '' and !Exists('$(TrustedCompatibilityPath)')" Text="TrustedCompatibilityPath does not exist: $(TrustedCompatibilityPath)" />
+  </Target>
+  <Target Name="ValidateOptionalRuntimeCacheWriteProfile" BeforeTargets="CoreCompile" Condition="'$(EnableSupervisedInstallWrites)' == 'true' and '$(TrustedRuntimeCacheCompatibilityPath)' != ''">
+    <Error Condition="!$([System.IO.Path]::IsPathFullyQualified('$(TrustedRuntimeCacheCompatibilityPath)'))" Text="TrustedRuntimeCacheCompatibilityPath must be an absolute path: $(TrustedRuntimeCacheCompatibilityPath)" />
+    <Error Condition="!Exists('$(TrustedRuntimeCacheCompatibilityPath)')" Text="TrustedRuntimeCacheCompatibilityPath does not exist: $(TrustedRuntimeCacheCompatibilityPath)" />
+  </Target>
+</Project>

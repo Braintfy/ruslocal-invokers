@@ -1,0 +1,66 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>14.0</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableCoreMutations Condition="'$(EnableCoreMutations)' == '' and '$(EnableSupervisedInstallWrites)' == 'true'">true</EnableCoreMutations>
+    <EnableCoreMutations Condition="'$(EnableCoreMutations)' == ''">false</EnableCoreMutations>
+    <EnableCoreTestMutations Condition="'$(EnableCoreTestMutations)' == '' and '$(EnableMutationSmokeTests)' == 'true'">true</EnableCoreTestMutations>
+    <EnableCoreTestMutations Condition="'$(EnableCoreTestMutations)' == ''">false</EnableCoreTestMutations>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="Patching\MutationCapability.*.cs" />
+    <Compile Include="Patching\MutationCapability.Disabled.cs" Condition="'$(EnableCoreMutations)' != 'true' and '$(EnableCoreTestMutations)' != 'true'" />
+    <Compile Include="Patching\MutationCapability.Production.cs" Condition="'$(EnableCoreMutations)' == 'true' and '$(EnableCoreTestMutations)' != 'true'" />
+    <Compile Include="Patching\MutationCapability.Test.cs" Condition="'$(EnableCoreMutations)' != 'true' and '$(EnableCoreTestMutations)' == 'true'" />
+  </ItemGroup>
+  <Target Name="RejectInjectedCoreMutationSymbols" BeforeTargets="PrepareForBuild;ResolvePackageAssets;CoreCompile">
+    <Error Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(DefineConstants)', '(^|[;,\s])INVOKERSRU_CORE_(TEST_)?MUTATIONS(?=$|[;,\s])'))" Text="Reserved Core mutation symbols cannot be supplied through DefineConstants; capability is selected only by the validated build mode." />
+    <Error Condition="'$(EnableCoreMutations)' == 'true' and '$(EnableCoreTestMutations)' == 'true'" Text="Production and test Core mutation modes are mutually exclusive." />
+  </Target>
+  <Target Name="ValidateProductionCoreMutationBuild" BeforeTargets="PrepareForBuild;ResolvePackageAssets;CoreCompile" Condition="'$(EnableCoreMutations)' == 'true'">
+    <Error Condition="'$(TrustedCompatibilityPath)' == '' or '$(TrustedRuntimeCacheCompatibilityPath)' == ''" Text="Production Core mutations require absolute trusted game and runtime-cache inputs." />
+    <Error Condition="!$([System.IO.Path]::IsPathFullyQualified('$(TrustedCompatibilityPath)'))" Text="TrustedCompatibilityPath must be absolute for a mutation-enabled Core." />
+    <Error Condition="!$([System.IO.Path]::IsPathFullyQualified('$(TrustedRuntimeCacheCompatibilityPath)'))" Text="TrustedRuntimeCacheCompatibilityPath must be absolute for a mutation-enabled Core." />
+    <Error Condition="!Exists('$(TrustedCompatibilityPath)')" Text="TrustedCompatibilityPath does not exist." />
+    <Error Condition="!Exists('$(TrustedRuntimeCacheCompatibilityPath)')" Text="TrustedRuntimeCacheCompatibilityPath does not exist." />
+    <Error Condition="'$(Configuration)' != 'Release' or '$(TargetFramework)' != 'net10.0'" Text="Production mutation Core is supported only for Release/net10.0." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RuntimeIdentifier)', '^(|win-x64)$'))" Text="Production mutation Core supports only an empty RuntimeIdentifier or exact win-x64." />
+    <Error Condition="'$(AssemblyName)' != 'InvokersRu.Core' or '$(TargetName)' != 'InvokersRu.Core'" Text="Production mutation Core requires its fixed assembly and target name." />
+    <Error Condition="'$(TargetExt)' != '.dll' or '$(TargetFileName)' != 'InvokersRu.Core.dll'" Text="Production mutation Core requires its fixed target extension and file name." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(BaseOutputPath)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\supervised-write-bin\core\'))" Text="Production mutation Core requires its exact isolated supervised-write BaseOutputPath." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(OutputPath)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\supervised-write-bin\core\Release\net10.0\$(RuntimeIdentifier)\'))" Text="Production mutation Core requires its exact isolated supervised-write OutputPath." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(OutDir)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\supervised-write-bin\core\Release\net10.0\$(RuntimeIdentifier)\'))" Text="Production mutation Core requires its exact isolated supervised-write OutDir." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(TargetDir)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\supervised-write-bin\core\Release\net10.0\$(RuntimeIdentifier)\'))" Text="Production mutation Core requires its exact isolated supervised-write TargetDir." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(TargetPath)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\supervised-write-bin\core\Release\net10.0\$(RuntimeIdentifier)\InvokersRu.Core.dll'))" Text="Production mutation Core requires its exact isolated supervised-write TargetPath." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\supervised-write-obj\core\'))" Text="Production mutation Core requires its exact isolated supervised-write BaseIntermediateOutputPath." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(MSBuildProjectExtensionsPath)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\supervised-write-obj\core\'))" Text="Production mutation Core requires its exact isolated supervised-write MSBuildProjectExtensionsPath." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(IntermediateOutputPath)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\supervised-write-obj\core\Release\net10.0\$(RuntimeIdentifier)\'))" Text="Production mutation Core requires its exact isolated supervised-write IntermediateOutputPath." />
+    <Error Condition="'@(IntermediateAssembly->Count())' != '1'" Text="Production mutation Core requires exactly one intermediate assembly path." />
+    <Error Condition="'%(IntermediateAssembly.FullPath)' != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\supervised-write-obj\core\Release\net10.0\$(RuntimeIdentifier)\InvokersRu.Core.dll'))" Text="Production mutation Core requires its exact isolated intermediate assembly path." />
+    <Error Condition="'@(IntermediateRefAssembly->Count())' != '1'" Text="Production mutation Core requires exactly one intermediate reference path." />
+    <Error Condition="'%(IntermediateRefAssembly.FullPath)' != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\supervised-write-obj\core\Release\net10.0\$(RuntimeIdentifier)\refint\InvokersRu.Core.dll'))" Text="Production mutation Core requires its exact isolated intermediate reference path." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(TargetRefPath)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\supervised-write-obj\core\Release\net10.0\$(RuntimeIdentifier)\ref\InvokersRu.Core.dll'))" Text="Production mutation Core requires its exact isolated target reference path." />
+  </Target>
+  <Target Name="ValidateTestCoreMutationBuild" BeforeTargets="PrepareForBuild;ResolvePackageAssets;CoreCompile" Condition="'$(EnableCoreTestMutations)' == 'true'">
+    <Error Condition="'$(Configuration)' != 'Release' or '$(TargetFramework)' != 'net10.0'" Text="Test-write Core is supported only for Release/net10.0." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RuntimeIdentifier)', '^(|win-x64)$'))" Text="Test-write Core supports only an empty RuntimeIdentifier or exact win-x64." />
+    <Error Condition="'$(AssemblyName)' != 'InvokersRu.Core' or '$(TargetName)' != 'InvokersRu.Core'" Text="Test-write Core requires its fixed assembly and target name." />
+    <Error Condition="'$(TargetExt)' != '.dll' or '$(TargetFileName)' != 'InvokersRu.Core.dll'" Text="Test-write Core requires its fixed target extension and file name." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(BaseOutputPath)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\test-write-bin\core\'))" Text="Test-write Core requires its exact isolated BaseOutputPath." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(OutputPath)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\test-write-bin\core\Release\net10.0\$(RuntimeIdentifier)\'))" Text="Test-write Core requires its exact isolated OutputPath." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(OutDir)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\test-write-bin\core\Release\net10.0\$(RuntimeIdentifier)\'))" Text="Test-write Core requires its exact isolated OutDir." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(TargetDir)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\test-write-bin\core\Release\net10.0\$(RuntimeIdentifier)\'))" Text="Test-write Core requires its exact isolated TargetDir." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(TargetPath)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\test-write-bin\core\Release\net10.0\$(RuntimeIdentifier)\InvokersRu.Core.dll'))" Text="Test-write Core requires its exact isolated TargetPath." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\test-write-obj\core\'))" Text="Test-write Core requires its exact isolated BaseIntermediateOutputPath." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(MSBuildProjectExtensionsPath)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\test-write-obj\core\'))" Text="Test-write Core requires its exact isolated MSBuildProjectExtensionsPath." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(IntermediateOutputPath)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\test-write-obj\core\Release\net10.0\$(RuntimeIdentifier)\'))" Text="Test-write Core requires its exact isolated IntermediateOutputPath." />
+    <Error Condition="'@(IntermediateAssembly->Count())' != '1'" Text="Test-write Core requires exactly one intermediate assembly path." />
+    <Error Condition="'%(IntermediateAssembly.FullPath)' != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\test-write-obj\core\Release\net10.0\$(RuntimeIdentifier)\InvokersRu.Core.dll'))" Text="Test-write Core requires its exact isolated intermediate assembly path." />
+    <Error Condition="'@(IntermediateRefAssembly->Count())' != '1'" Text="Test-write Core requires exactly one intermediate reference path." />
+    <Error Condition="'%(IntermediateRefAssembly.FullPath)' != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\test-write-obj\core\Release\net10.0\$(RuntimeIdentifier)\refint\InvokersRu.Core.dll'))" Text="Test-write Core requires its exact isolated intermediate reference path." />
+    <Error Condition="$([System.IO.Path]::GetFullPath('$(TargetRefPath)')) != $([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\work\test-write-obj\core\Release\net10.0\$(RuntimeIdentifier)\ref\InvokersRu.Core.dll'))" Text="Test-write Core requires its exact isolated target reference path." />
+  </Target>
+</Project>

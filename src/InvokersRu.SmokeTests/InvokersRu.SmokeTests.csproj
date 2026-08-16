@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>14.0</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableMutationSmokeTests Condition="'$(EnableMutationSmokeTests)' == ''">false</EnableMutationSmokeTests>
+    <RuntimeCacheProfileUnderTest Condition="'$(RuntimeCacheProfileUnderTest)' == ''">$(MSBuildThisFileDirectory)Fixtures\runtime-cache-profile.observed.v1.json</RuntimeCacheProfileUnderTest>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(EnableMutationSmokeTests)' == 'true'">
+    <DefineConstants>$(DefineConstants);INVOKERSRU_MUTATION_SMOKES</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\InvokersRu.Core\InvokersRu.Core.csproj" />
+    <Content Include="$(RuntimeCacheProfileUnderTest)" Link="runtime-cache-profile-under-test.json" CopyToOutputDirectory="Always" />
+  </ItemGroup>
+  <Target Name="ValidateRuntimeCacheProfileUnderTest" BeforeTargets="CoreCompile">
+    <Error Condition="!Exists('$(RuntimeCacheProfileUnderTest)')" Text="RuntimeCacheProfileUnderTest does not exist: $(RuntimeCacheProfileUnderTest)" />
+  </Target>
+</Project>

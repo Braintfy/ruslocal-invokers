@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://invokersru.local/schema/installer-payload-v1.json",
+  "title": "InvokersRu verified installer payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "app_version",
+    "files"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "app_version": {
+      "type": "string",
+      "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,4}(?:-[A-Za-z0-9](?:[A-Za-z0-9.-]{0,31})?)?$"
+    },
+    "files": {
+      "type": "array",
+      "minItems": 13,
+      "maxItems": 13,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "length",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "enum": [
+              "InvokersRu.Gui.exe",
+              "InvokersRu.Cli.exe",
+              "ru_RU.mvp.jsonl",
+              "GUI-PUBLISH.json",
+              "TRUSTED-COMPATIBILITY.json",
+              "PREVIEW-BUILD-REPORT.json",
+              "TRANSLATION-AUDIT.json",
+              "SUPERVISED-PUBLISH.json",
+              "README.md",
+              "TEST-INSTRUCTIONS.md",
+              "LICENSE.txt",
+              "glossary.ru.json",
+              "style-guide.ru.md"
+            ]
+          },
+          "length": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[A-Fa-f0-9]{64}$"
+          }
+        }
+      }
+    }
+  }
+}
