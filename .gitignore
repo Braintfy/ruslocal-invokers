@@ -1,0 +1,38 @@
+work/
+outputs/
+installer/tooling-probe.*.json
+bin/
+obj/
+.vs/
+.idea/
+*.user
+*.suo
+.agents/
+.codex/
+*.log
+*.pdb
+*.dll
+*.exe
+*.msi
+*.zip
+*.7z
+
+# Private copies extracted from the user's installation.
+work/private-fixtures/
+work/i18n-analysis/
+work/translation-jobs/
+work/translation-results/
+work/dotnet-10/
+work/dotnet-home/
+work/dotnet-install.ps1
+
+# Never commit original game assets or generated patched containers.
+*.bin
+*.bin.br
+manifest.dat
+*.patched
+
+# Local patcher state and secrets.
+.env
+appsettings.local.json
+patch-state.json

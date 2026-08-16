@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "builds": [
+    {
+      "id": "win64-0.60.1239-prod-0.60.0-26",
+      "game_version": "0.60.1239",
+      "content_guid": "ad875e27-1bf6-4f4a-8ed5-3957d0ed05fa",
+      "content_version": "Prod_0.60.0_26",
+      "readiness": "blocked",
+      "certified": false,
+      "blocked_reason": "legacy embedded StreamingAssets path is not used by the live loader; supported runtime-cache compatibility is defined separately in config/runtime-cache-profile.0.60.1239.json",
+      "english_relative_path": "Invokers_Data\\StreamingAssets\\i18n\\en_US.bin.br",
+      "english_sha256": "EF1357B4A72910AD12711BDF5CF5F815698BCC3EE94A9E3A86053B79C5E9EE7A",
+      "english_raw_sha256": "A76878590A54A9232F7ADA73653171E1E467238DFE0801BD264304541BF2724D",
+      "base_relative_path": "Invokers_Data\\StreamingAssets\\i18n\\uk_UA.bin.br",
+      "base_sha256": "48946EDD5D3FB974FBE7622A9CDE62C89A0E0BC49DADAF00E7515188D5F5DF82",
+      "base_raw_sha256": "617EDC140A4495B40F51FD5AC07E8FCCDC17A834161AB767FF4BF9AB63BE825F",
+      "base_locale_id": 8,
+      "base_locale_revision": 4156327008,
+      "entry_count": 41282,
+      "manifest_relative_path": "Invokers_Data\\StreamingAssets\\i18n\\manifest.dat",
+      "manifest_sha256": "4C868D208229E4691C1314A925C66B17E3AD8B525588BA38DE72649595F7D918",
+      "game_files": [
+        {
+          "relative_path": "Invokers.exe",
+          "size": 677448,
+          "sha256": "17BE002C5DDDC865B68FCB0C4A4B1A30D06E695F83189900FF0CF3A3611CD34F"
+        },
+        {
+          "relative_path": "GameAssembly.dll",
+          "size": 89782272,
+          "sha256": "8D5373E0C269C0728B2EA3A7908B1F729221ED0336AB1465A39606BA3525BA33"
+        },
+        {
+          "relative_path": "UnityPlayer.dll",
+          "size": 36673448,
+          "sha256": "5158C9F49DB8CE4ED77A5BF10D0AD0FAEE7A9F246EC9A9C97E7CB9AE1CCCEC1D"
+        }
+      ]
+    }
+  ]
+}

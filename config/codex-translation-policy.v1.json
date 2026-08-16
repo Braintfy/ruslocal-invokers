@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "checked_at": "2026-08-15",
+  "execution": "codex-task-no-external-api",
+  "bulk_translation": {
+    "model": "gpt-5.6-terra",
+    "reasoning_effort": "medium",
+    "purpose": "deterministic local EN+UK-hint to RU work chunks"
+  },
+  "translation_escalation": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "purpose": "ambiguous context, lore, critical mechanics, terminology conflicts, and independent QA"
+  },
+  "patcher_engineering": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "purpose": "LOC1 writer, transactional patching, threat review, and release gates"
+  },
+  "work_chunks": {
+    "maximum_items": 150,
+    "maximum_characters": 60000,
+    "checkpoint_states": [
+      "pending",
+      "terra_done",
+      "validated",
+      "needs_sol",
+      "human_review",
+      "approved"
+    ]
+  },
+  "gates": {
+    "external_api_calls": false,
+    "model_output_status": "draft",
+    "sensitive_text_policy": "official English fallback until separate human or HitZone approval",
+    "public_release_requires_human_approval": true
+  }
+}

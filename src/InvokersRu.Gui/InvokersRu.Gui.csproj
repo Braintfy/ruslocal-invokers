@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>14.0</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>InvokersRu.Gui</AssemblyName>
+    <Version>0.2.0-preview</Version>
+    <Company>Invokers Russian Community</Company>
+    <Product>InvokersRu localization patcher</Product>
+    <Description>Safe graphical wrapper for the Invokers: Titan Legacy Russian localization patcher.</Description>
+  </PropertyGroup>
+</Project>
