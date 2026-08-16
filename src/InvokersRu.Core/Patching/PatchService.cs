@@ -117,7 +117,10 @@ namespace InvokersRu.Core.Patching
                 catalog,
                 includeDraft: supervisedPreview,
                 approvedOnly: !supervisedPreview,
-                excludeNeedsReview: supervisedPreview && build.ExcludeNeedsReview);
+                excludeNeedsReview: supervisedPreview && build.ExcludeNeedsReview,
+                eligibility: supervisedPreview
+                    ? (record, source, hint) => RuntimeSafeDraftPolicy.IsPreviewEligible(record, source, hint, out _)
+                    : null);
             if (composition.AppliedTranslations < build.MinimumAppliedTranslations)
             {
                 throw new InvalidDataException($"Patch would apply only {composition.AppliedTranslations} translations; certified minimum is {build.MinimumAppliedTranslations}.");

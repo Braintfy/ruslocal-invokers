@@ -2,7 +2,7 @@
 
 ## Принцип
 
-Проект не использует внешний API-клиент, API-ключи или Batch-загрузки. Оригинальные EN/UK строки остаются в `work/` и обрабатываются последовательными задачами Codex. Публичный `translations/ru_RU.jsonl` содержит только hash-ID, source/hint hashes, русский текст и структурированный provenance.
+Проект не использует внешний API-клиент, API-ключи или Batch-загрузки. Оригинальные EN/UK строки остаются в `work/` и обрабатываются последовательными задачами Codex. Публичные `translations/ru_RU.jsonl` и `translations/ru_RU.next.jsonl` содержат только hash-ID, source/hint hashes, русский текст и структурированный provenance. Первый файл закреплён за последним runtime-тестом, второй накапливает полный перевод и не считается протестированным пакетом.
 
 Это не offline inference: модели работают внутри Codex. Координатор сообщил о согласии HitZone на текущий контролируемый POC без вмешательства в процессы игры; публичный релиз и передача за пределы review-контура всё равно требуют отдельного одобрения.
 
@@ -34,7 +34,7 @@ Importer заново проверяет canonical `job_id`, content GUID/versio
 
 ```powershell
 InvokersRu.Cli.exe jobs --english en_US.bin.br --ukrainian uk_UA.bin.br `
-  --translations ru_RU.jsonl --output work\private.jsonl
+  --translations translations\ru_RU.next.jsonl --output work\private.jsonl
 
 .\work\mvp\select-mvp.ps1 -InputJobs work\private.jsonl `
   -OutputJobs work\mvp\Prod_0.60.0_26\mvp.jobs.jsonl
@@ -45,6 +45,15 @@ InvokersRu.Cli.exe jobs --english en_US.bin.br --ukrainian uk_UA.bin.br `
   -GlossaryPath localization\glossary.ru.json
 ```
 
+Для полного корпуса сначала создаются детерминированные очереди. Они оставляют
+короткий UI отдельно от структурированных формул и длинных описаний:
+
+```powershell
+.\scripts\partition-translation-jobs.ps1 `
+  -InputJobs work\full-translation\0.60.1239\missing.jobs.jsonl `
+  -OutputDirectory work\full-translation\0.60.1239\lanes
+```
+
 Каждый checkpoint закрепляет SHA-256 входного чанка, prompt и glossary. Состояния:
 
 ```text
@@ -53,6 +62,50 @@ pending → terra_done → validated → needs_sol → human_review → approved
 
 Уже завершённый SHA не переводится повторно. Результаты с механической ошибкой не сливаются. Один merge-процесс обновляет overlay атомарно.
 
+## Безопасный импорт волны
+
+Working draft должен сохранять и строки `needs_review`: именно из него затем строится очередь Sol. Это не делает такие строки допустимыми для runtime/release. Для импорта явно перечисляется завершённая волна; glob и автоматический выбор всех найденных result-файлов не используются.
+
+```powershell
+.\scripts\mark-checkpoint.ps1 `
+  -CheckpointPath work\full-translation\0.60.1239\chunks\lane-01\chunk-0001.checkpoint.json `
+  -PromptPath prompts\translation-system.ru-v2.md `
+  -ReviewPromptPath prompts\translation-review.ru-v1.md `
+  -GlossaryPath localization\glossary.ru.json `
+  -ValidationErrors 0
+
+$baseSha = (Get-FileHash translations\ru_RU.next.jsonl -Algorithm SHA256).Hash
+
+.\scripts\new-translation-wave-selection.ps1 `
+  -Chunks work\full-translation\0.60.1239\chunks\lane-01 `
+  -CompleteChunkId chunk-0001,chunk-0002 `
+  -BaseOverlay translations\ru_RU.next.jsonl `
+  -ExpectedBaseOverlaySha256 $baseSha `
+  -PromptPath prompts\translation-system.ru-v2.md `
+  -ReviewPromptPath prompts\translation-review.ru-v1.md `
+  -GlossaryPath localization\glossary.ru.json `
+  -PromptVersion ru-v2 `
+  -ReviewPromptVersion ru-review-v1 `
+  -Output work\full-translation\0.60.1239\wave-01.selection.json
+
+.\scripts\import-translation-wave.ps1 `
+  -Chunks work\full-translation\0.60.1239\chunks\lane-01 `
+  -SelectionManifest work\full-translation\0.60.1239\wave-01.selection.json `
+  -English work\private\dl_en_US.bin `
+  -BaseOverlay translations\ru_RU.next.jsonl `
+  -ExpectedBaseOverlaySha256 $baseSha `
+  -PromptPath prompts\translation-system.ru-v2.md `
+  -ReviewPromptPath prompts\translation-review.ru-v1.md `
+  -GlossaryPath localization\glossary.ru.json `
+  -CliPath path\to\InvokersRu.Cli.dll `
+  -Output translations\ru_RU.wave-01.jsonl `
+  -ReceiptPath translations\ru_RU.wave-01.receipt.json
+```
+
+Сначала можно добавить `-DryRun` и не указывать `-CliPath`; это проверяет цепочку manifest/checkpoint/result, точное покрытие и формирует source-free receipt без создания overlay. Боевой запуск единожды вызывает `import-results` без `--allow-partial`. Для локального .NET host можно передать `-DotnetPath work\dotnet-10\dotnet.exe`.
+
+Selection закрепляет SHA-256 chunks manifest, base overlay, Terra prompt, Sol review prompt, glossary, каждого checkpoint и result. Checkpoint хранит точный отсортированный набор фактических моделей; допустимы только пары `gpt-5.6-terra`/`ru-v2` и `gpt-5.6-sol`/`ru-review-v1`. Допускаются только явно выбранные состояния `terra_done`, `validated` и `needs_sol`; для проверенных checkpoints набор эскалаций заново выводится из confidence/needs_review и рисков `context_required`/`long_text`. Jobs/results и временные агрегаты остаются приватными и удаляются после вызова CLI. Receipt содержит только hashes, counts, chunk IDs и имя нового overlay — исходных EN/UK строк или переводческих result-файлов в нём нет. Любой существующий output/receipt приводит к отказу без перезаписи.
+
 ## Release gate
 
 `validate --profile release` требует Ukrainian hint package, только `approved` записи, reviewer/timestamp/revision metadata, 100% покрытия несекретного корпуса, screenshot QA для context-required строк и отдельное двойное подтверждение sensitive-текста. `build --release` применяет только approved записи. Установочный `apply` дополнительно требует catalog SHA-256, закреплённый certified compatibility entry.
@@ -60,9 +113,14 @@ pending → terra_done → validated → needs_sol → human_review → approved
 ## Текущий корпус
 
 - Текущий runtime tuple версии `0.60.1239`: 41 290 ID.
-- Публичный overlay: 1 842 draft-записи.
-- Подтверждённый safe preview: 576 применяемых записей.
-- До контекстной проверки исключено: 1 266 записей.
+- Замороженный протестированный overlay: 1 842 draft-записи.
+- Исторический runtime preview: 576 применённых записей. После усиления sensitive- и EN↔UK context-политик тот же каталог даёт 539 безопасных кандидатов, поэтому старый build-профиль намеренно не проходит exact gate.
+- Первая полная волна: 684 новых ID; рабочий `ru_RU.next.jsonl` содержит 2 526 draft-записей.
+- Локальная проверочная сборка рабочего каталога: 994 применяемых записи, 1 495 `needs_review` fallback и 255 пустых значений базового locale. Она ещё не проходила runtime QA.
+- Исходная полная приватная очередь: 25 016 дедуплицированных заданий для 39 153 ещё не покрытых ID.
+- После первой волны и повторной классификации: 24 467 дедуплицированных заданий для 38 602 ID; записи с устаревшей risk-метаинформацией снова поставлены в очередь.
+- 101 чувствительный ID остаётся в официальном английском до отдельной двойной проверки; 255 пустых ID не требуют перевода.
+- Полный рабочий overlay ведётся как `translations/ru_RU.next.jsonl`; certified-профиль не перепинивается до новой сборки и runtime QA.
 - Исторический стратифицированный MVP начинался с 1 000 work items / 1 820 ID в 20 детерминированных чанках; после миграции на фактически загружаемый runtime-кэш добавлены и повторно проверены изменившиеся ID.
 
 Dedup экономит работу, но не доказывает одинаковый UI-контекст. Такие группы помечаются `context_required`, не могут пройти release без screenshot QA и при необходимости получают per-ID override.

@@ -2,7 +2,7 @@
 
 Windows-first community localization tooling for **Invokers: Titan Legacy**.
 
-Состояние на 16 августа 2026 года: **контролируемый runtime-тест на Windows успешно пройден** для версии игры `0.60.1239`. Клиент загрузил изменённый локальный кэш, а пользовательские скриншоты подтвердили появление русского текста без вмешательства в процессы игры. Preview содержит 576 консервативно отобранных строк; остальной интерфейс ожидаемо остаётся смешанным EN/UK. Это всё ещё технический preview, а не полная локализация, официальный релиз или подтверждение одобрения разработчиками. Подробности: [docs/runtime-test-receipt.md](docs/runtime-test-receipt.md).
+Состояние на 16 августа 2026 года: **контролируемый runtime-тест на Windows успешно пройден** для версии игры `0.60.1239`. Клиент загрузил изменённый локальный кэш, а пользовательские скриншоты подтвердили появление русского текста без вмешательства в процессы игры. В испытанном preview было 576 консервативно отобранных строк; остальной интерфейс ожидаемо оставался смешанным EN/UK. После теста sensitive-политика была усилена, поэтому старый профиль намеренно больше не пересобирается текущим кодом и не выдаётся за актуальный установочный пакет. Это всё ещё технический preview, а не полная локализация, официальный релиз или подтверждение одобрения разработчиками. Подробности: [docs/runtime-test-receipt.md](docs/runtime-test-receipt.md).
 
 Проект неофициальный и не содержит оригинальных файлов игры. Правовой и брендовый статус описан в [NOTICE.md](NOTICE.md).
 
@@ -23,7 +23,8 @@ Windows-first community localization tooling for **Invokers: Titan Legacy**.
 
 Первый POC использует существующий слот `uk_UA`: ключи, locale ID `8` и identity-поля текущего runtime-файла сохраняются, русские значения подставляются по hash-ID. Цель — `%USERPROFILE%\AppData\LocalLow\Hit_Zone\Invokers\i18n\dl_uk_UA.bin`; файлы в каталоге установки игры не изменяются. Непроверенные записи получают официальный английский fallback, а отдельные vendor/server строки могут остаться украинскими. Поэтому в игре нужно выбирать украинский язык, а текущий результат является смешанным RU/EN/UK preview.
 
-Публичный overlay `translations/ru_RU.jsonl` хранит только:
+Протестированный overlay `translations/ru_RU.jsonl` и рабочий полный каталог
+`translations/ru_RU.next.jsonl` хранят только:
 
 ```json
 {"id":"16_HEX","source_sha256":"64_HEX","translation":"Русский текст","status":"draft","model":"gpt-5.6-terra","prompt_version":"ru-v2","updated_at":"2026-08-15T00:00:00Z"}
@@ -48,18 +49,18 @@ InvokersRu.Cli.exe cache-plan
 InvokersRu.Cli.exe jobs `
   --english dl_en_US.bin `
   --ukrainian dl_uk_UA.bin `
-  --translations ru_RU.jsonl `
-  --output Prod_0.60-runtime.private.jsonl
+  --translations translations\ru_RU.next.jsonl `
+  --output work\full-translation\Prod_0.60-runtime.private.jsonl
 
 InvokersRu.Cli.exe import-results `
   --english dl_en_US.bin `
-  --jobs Prod_0.60-runtime.private.jsonl `
-  --results model-results.jsonl `
-  --translations ru_RU.jsonl `
-  --output ru_RU.next.jsonl
+  --jobs work\full-translation\Prod_0.60-runtime.private.jsonl `
+  --results work\full-translation\model-results.jsonl `
+  --translations translations\ru_RU.next.jsonl `
+  --output work\full-translation\ru_RU.next.imported.jsonl
 
-InvokersRu.Cli.exe validate --english dl_en_US.bin --ukrainian dl_uk_UA.bin --translations ru_RU.next.jsonl --include-draft --per-locale-content-version
-InvokersRu.Cli.exe build --english dl_en_US.bin --base dl_uk_UA.bin --translations ru_RU.next.jsonl --output dl_uk_UA.preview.bin --report preview.json --include-draft --exclude-needs-review --raw --per-locale-content-version
+InvokersRu.Cli.exe validate --english dl_en_US.bin --ukrainian dl_uk_UA.bin --translations translations\ru_RU.next.jsonl --include-draft --per-locale-content-version
+InvokersRu.Cli.exe build --english dl_en_US.bin --base dl_uk_UA.bin --translations translations\ru_RU.next.jsonl --output work\preview\dl_uk_UA.preview.bin --report work\preview\preview.json --include-draft --exclude-needs-review --raw --per-locale-content-version
 ```
 
 `jobs` дедуплицирует одинаковые пары EN+UK. Полный job-файл содержит оригинальный текст, поэтому остаётся приватным и попадает под `.gitignore`; публичный overlay содержит только hashes и русский перевод.
@@ -77,7 +78,7 @@ InvokersRu.Cli.exe build --english dl_en_US.bin --base dl_uk_UA.bin --translatio
 
 Отдельного API-клиента, API-ключа и Batch-загрузки нет. `jobs` создаёт приватный локальный корпус, `work/mvp/select-mvp.ps1` выбирает 1 000 заданий / 1 820 ID для связного MVP, а `scripts/split-work-items.ps1` создаёт 20 детерминированных чанков и checkpoint-файлы. Перевод выполняется в задачах Codex; это не означает offline inference, но исключает отдельную интеграцию со сторонним API.
 
-Актуальный runtime overlay содержит 1 842 draft-записи. В подтверждённый conservative preview попадают 576 записей с высокой уверенностью и без `needs_review`; 1 266 строк исключены до контекстной проверки. Terra делает массовый draft, validator немедленно отбрасывает механические ошибки, Sol получает только эскалации и QA-выборку. Подробнее: [docs/translation-workflow.md](docs/translation-workflow.md).
+Замороженный runtime overlay содержит 1 842 draft-записи; именно из него был собран исторический preview на 576 строк. Усиленные sensitive- и EN↔UK context-политики оставляют в этом же каталоге 539 безопасных кандидатов и тем самым fail-closed инвалидируют старый build-профиль. Первая полная переводческая волна добавила 684 ID: рабочий `ru_RU.next.jsonl` теперь содержит 2 526 draft-записей, из которых локальная проверочная сборка отбирает 994, а 1 495 сохраняет за английским fallback до дальнейшего review. После волны и повторной классификации осталось 24 467 дедуплицированных заданий для 38 602 ID; ещё 101 чувствительный ID остаётся на официальном английском до отдельной двойной проверки. Terra делает массовый draft, validator немедленно отбрасывает механические ошибки, Sol получает эскалации и QA-выборку. Новый пакет не считается протестированным до отдельного runtime QA. Подробнее: [docs/translation-workflow.md](docs/translation-workflow.md).
 
 ## Новые версии игры
 

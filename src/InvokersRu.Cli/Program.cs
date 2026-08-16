@@ -295,7 +295,7 @@ namespace InvokersRu.Cli
             bool excludeNeedsReview = options.Has("exclude-needs-review");
             bool rawOutput = options.Has("raw");
             bool allowPerLocaleContentVersion = options.Has("per-locale-content-version");
-            bool supervisedSafeDrafts = includeDraft && excludeNeedsReview;
+            bool supervisedSafeDrafts = includeDraft;
             if (release && includeDraft) throw new ArgumentException("Release build never accepts --include-draft.");
             if (excludeNeedsReview && !includeDraft) throw new ArgumentException("--exclude-needs-review requires --include-draft.");
             ValidationReport report = TranslationValidator.Validate(
@@ -319,7 +319,7 @@ namespace InvokersRu.Cli
                 excludeNeedsReview: excludeNeedsReview,
                 allowPerLocaleContentVersion: allowPerLocaleContentVersion,
                 eligibility: supervisedSafeDrafts
-                    ? (record, source) => RuntimeSafeDraftPolicy.IsEligible(record, source, out _)
+                    ? (record, source, hint) => RuntimeSafeDraftPolicy.IsPreviewEligible(record, source, hint, out _)
                     : null);
             byte[] raw = Loc1Codec.BuildRaw(baseLocale);
             byte[] compressed = Loc1Codec.Compress(raw);

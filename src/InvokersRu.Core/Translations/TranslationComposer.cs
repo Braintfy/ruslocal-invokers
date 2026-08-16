@@ -26,7 +26,7 @@ namespace InvokersRu.Core.Translations
             bool approvedOnly = false,
             bool excludeNeedsReview = false,
             bool allowPerLocaleContentVersion = false,
-            Func<TranslationRecord, string, bool>? eligibility = null)
+            Func<TranslationRecord, string, string?, bool>? eligibility = null)
         {
             Loc1Compatibility.RequireComposableCorpus(english, baseLocale, allowPerLocaleContentVersion);
 
@@ -34,6 +34,7 @@ namespace InvokersRu.Core.Translations
             var summary = new CompositionSummary();
             foreach (Loc1Entry target in baseLocale.Entries)
             {
+                string? contextHint = target.Value;
                 if (!englishByHash.TryGetValue(target.KeyHash, out Loc1Entry? source) || source.Value == null)
                 {
                     summary.BaseFallbacks++;
@@ -50,7 +51,7 @@ namespace InvokersRu.Core.Translations
                         continue;
                     }
 
-                    if (eligibility != null && !eligibility(record!, source.Value))
+                    if (eligibility != null && !eligibility(record!, source.Value, contextHint))
                     {
                         summary.PolicyFallbacks++;
                         target.Value = source.Value;

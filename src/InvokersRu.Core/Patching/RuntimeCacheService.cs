@@ -183,7 +183,7 @@ namespace InvokersRu.Core.Patching
                 excludeNeedsReview: supervisedSafeDrafts,
                 allowPerLocaleContentVersion: true,
                 eligibility: supervisedSafeDrafts
-                    ? (record, source) => RuntimeSafeDraftPolicy.IsEligible(record, source, out _)
+                    ? (record, source, hint) => RuntimeSafeDraftPolicy.IsPreviewEligible(record, source, hint, out _)
                     : null);
             if (composition.AppliedTranslations < profile.MinimumAppliedTranslations)
             {

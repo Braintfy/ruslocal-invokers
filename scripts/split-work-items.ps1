@@ -95,6 +95,7 @@ for ($index = 0; $index -lt $chunks.Count; $index++) {
         result_file = $resultName
         result_sha256 = $null
         prompt_sha256 = $promptSha
+        review_prompt_sha256 = $null
         glossary_sha256 = $glossarySha
         model = $null
         validation_errors = $null

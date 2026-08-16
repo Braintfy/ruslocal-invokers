@@ -82,3 +82,48 @@ function Assert-SafeNewOutputPath {
     Assert-NoReparsePath -Path $fullPath -Label $Label
     return $fullPath
 }
+
+function Get-ProjectPrivateWorkRoot {
+    param([Parameter(Mandatory = $true)][string] $RepoRoot)
+
+    return [IO.Path]::GetFullPath([IO.Path]::Combine([IO.Path]::GetFullPath($RepoRoot), 'work'))
+}
+
+function Assert-PrivateWorkflowPath {
+    param(
+        [Parameter(Mandatory = $true)][string] $Path,
+        [Parameter(Mandatory = $true)][string] $RepoRoot,
+        [Parameter(Mandatory = $true)][string] $Label
+    )
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $privateRoot = Get-ProjectPrivateWorkRoot -RepoRoot $RepoRoot
+    if (-not (Test-CanonicalPathWithin -Path $fullPath -Directory $privateRoot)) {
+        throw "$Label must stay below the ignored private work directory: $privateRoot"
+    }
+    Assert-OutsideProtectedRuntime -Path $fullPath -Label $Label
+    Assert-NoReparsePath -Path $fullPath -Label $Label
+    return $fullPath
+}
+
+function Assert-PrivateTempRoot {
+    param(
+        [Parameter(Mandatory = $true)][string] $Path,
+        [Parameter(Mandatory = $true)][string] $RepoRoot,
+        [Parameter(Mandatory = $true)][string] $Label
+    )
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $fullRepoRoot = [IO.Path]::GetFullPath($RepoRoot)
+    $privateRoot = Get-ProjectPrivateWorkRoot -RepoRoot $fullRepoRoot
+    if (-not [IO.Directory]::Exists($fullPath)) {
+        throw "$Label must be an existing directory: $fullPath"
+    }
+    if ((Test-CanonicalPathWithin -Path $fullPath -Directory $fullRepoRoot) -and
+        -not (Test-CanonicalPathWithin -Path $fullPath -Directory $privateRoot)) {
+        throw "$Label cannot use a public repository path; use ignored work/ or an external temporary directory."
+    }
+    Assert-OutsideProtectedRuntime -Path $fullPath -Label $Label
+    Assert-NoReparsePath -Path $fullPath -Label $Label
+    return $fullPath
+}

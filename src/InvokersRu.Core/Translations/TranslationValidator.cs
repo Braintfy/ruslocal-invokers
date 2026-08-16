@@ -60,6 +60,13 @@ namespace InvokersRu.Core.Translations
         private static readonly Regex RichTagRegex = new Regex(@"<\s*(/?)\s*([A-Za-z][A-Za-z0-9]*)\b[^<>]*>", RegexOptions.Compiled | RegexOptions.CultureInvariant);
         private static readonly Regex LegalPrivacyRegex = new Regex(@"\b(terms of (use|service)|privacy policy|privacy notice|personal data|data processing|consent|copyright|license agreement|legal notice)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
         private static readonly Regex AccountPaymentRegex = new Regex(@"\b(payment|purchase|refund|subscription|billing|credit card|delete (your )?account|account deletion|real[ -]?money|in-app purchase)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+        // Generic UI nouns such as "Account Level", "Profile", and "Daily Login Streak"
+        // are intentionally not sensitive. These expressions cover actions that can change
+        // account/profile state, authentication sessions, or an external identity binding.
+        private static readonly Regex AccountAuthenticationRegex = new Regex(@"\b(sign[ -]in|log(?:ged)?[ -]in(?:to)?|log[ -]out|switch(?:ing)? (?:to )?(?:your |the |this |that |a |an |another |different )?accounts?|account already exists|existing account found|verify (?:your )?account details|login is associated with|(?:game )?account (?:is |already )?(?:associated with|connected to)|(?:banned|deleted|suspended|locked) account|(?:game )?account (?:that )?(?:has been |was |is )?(?:permanently )?(?:deleted|banned|suspended|locked)|account stats)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+        private static readonly Regex ExternalAccountRegex = new Regex(@"\b(apple (?:id|account|game cent(?:er|re))|google (?:account|play(?: games)? account)|facebook account|steam account|discord account)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+        private static readonly Regex ProfileStateRegex = new Regex(@"\b(failed to (?:load|save|create|delete|switch) (?:game )?profile|start (?:a )?new (?:game )?profile|switch(?:ing)? (?:to )?(?:this |that |another |the |your |a |load )?(?:game )?profile|(?:create|delete)(?:ing)? (?:this |that |your |the |a |an |every |new |existing )?(?:game )?profiles?|(?:game )?profile (?:is currently logged in|has been logged into|will be saved|no longer exists|(?:has been |was |is )?(?:deleted|banned|suspended|locked))|(?:deleted|banned|suspended|locked) (?:game )?profile)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+        private static readonly Regex ProfileIdentityRegex = new Regex(@"\b(unique username|(?:change|set|enter|choose|create) (?:your|you|a|the)? ?username|username (?:change|creation))\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
         private static readonly HashSet<string> SelfClosingRichTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "br", "sprite" };
 
         public static ValidationReport Validate(
@@ -101,9 +108,11 @@ namespace InvokersRu.Core.Translations
                 }
 
                 report.FreshRecords++;
+                string? currentHint = null;
                 if (hintByHash != null && hintByHash.TryGetValue(id, out Loc1Entry? hintEntry))
                 {
-                    string? currentHintHash = hintEntry.Value == null ? null : Hashing.Sha256Text(hintEntry.Value);
+                    currentHint = hintEntry.Value;
+                    string? currentHintHash = currentHint == null ? null : Hashing.Sha256Text(currentHint);
                     if ((record.HintSha256 == null) != (currentHintHash == null)
                         || (record.HintSha256 != null && currentHintHash != null && !Hashing.FixedEqualsHex(record.HintSha256, currentHintHash)))
                     {
@@ -114,17 +123,32 @@ namespace InvokersRu.Core.Translations
 
                 int errorsBefore = report.ErrorCount;
                 ValidatePair(record.Id, source, record.Translation, report.Issues);
+                bool pairValid = report.ErrorCount == errorsBefore;
                 string[] expectedSourceRisks = ClassifyRisks(source).OrderBy(value => value, StringComparer.Ordinal).ToArray();
-                string[] recordedSourceRisks = record.RiskFlags
-                    .Where(value => !string.Equals(value, "context_required", StringComparison.Ordinal))
-                    .Distinct(StringComparer.Ordinal)
-                    .OrderBy(value => value, StringComparer.Ordinal)
-                    .ToArray();
-                if (!expectedSourceRisks.SequenceEqual(recordedSourceRisks, StringComparer.Ordinal))
+                bool hintRequiresContext = hintByHash != null && RequiresContextReview(source, currentHint);
+                bool recordedContextRequired = record.RiskFlags.Contains("context_required", StringComparer.Ordinal);
+                if (!IsRiskMetadataCurrent(record, source, hintByHash == null ? null : currentHint))
                 {
-                    report.Issues.Add(new TranslationIssue(record.Id, "risk-metadata-mismatch", profile == ValidationProfile.Release ? ValidationSeverity.Error : ValidationSeverity.Warning, "Risk flags are not derived from the current source."));
+                    report.Issues.Add(new TranslationIssue(record.Id, "risk-metadata-mismatch", profile == ValidationProfile.Release ? ValidationSeverity.Error : ValidationSeverity.Warning, "Risk flags are not derived from the current source and Ukrainian context hint."));
                 }
-                if (catalog.TryGetUsable(id, source, includeDraft, out _, out _))
+                if (hintRequiresContext && !record.ScreenshotQa)
+                {
+                    report.Issues.Add(new TranslationIssue(record.Id, "screenshot-qa-required", profile == ValidationProfile.Release ? ValidationSeverity.Error : ValidationSeverity.Warning, "Structurally divergent English and Ukrainian locale context needs screenshot QA before this translation is safe."));
+                }
+
+                bool profileEligible = profile == ValidationProfile.Preview && includeDraft
+                    ? RuntimeSafeDraftPolicy.IsPreviewEligible(record, source, hintByHash == null ? null : currentHint, out _)
+                    : (!hintRequiresContext || recordedContextRequired)
+                        && (!(hintRequiresContext || recordedContextRequired) || record.ScreenshotQa);
+                if (pairValid
+                    && profileEligible
+                    && catalog.TryGetUsable(
+                        id,
+                        source,
+                        includeDraft,
+                        out _,
+                        out _,
+                        approvedOnly: profile == ValidationProfile.Release))
                 {
                     report.UsableRecords++;
                 }
@@ -148,7 +172,7 @@ namespace InvokersRu.Core.Translations
                             report.Issues.Add(new TranslationIssue(record.Id, "human-review-metadata", ValidationSeverity.Error, "Approved release text requires reviewer, timestamp, revision, and no pending review flag."));
                         }
 
-                        if (record.RiskFlags.Contains("context_required", StringComparer.Ordinal) && !record.ScreenshotQa)
+                        if (recordedContextRequired && !hintRequiresContext && !record.ScreenshotQa)
                         {
                             report.Issues.Add(new TranslationIssue(record.Id, "screenshot-qa-required", ValidationSeverity.Error, "Deduplicated/context-sensitive text needs screenshot QA before release."));
                         }
@@ -203,12 +227,82 @@ namespace InvokersRu.Core.Translations
         {
             var flags = new List<string>();
             if (LegalPrivacyRegex.IsMatch(source)) flags.Add("legal_or_privacy");
-            if (AccountPaymentRegex.IsMatch(source)) flags.Add("account_or_payment");
+            if (AccountPaymentRegex.IsMatch(source)
+                || AccountAuthenticationRegex.IsMatch(source)
+                || ExternalAccountRegex.IsMatch(source)
+                || ProfileStateRegex.IsMatch(source)
+                || ProfileIdentityRegex.IsMatch(source))
+            {
+                flags.Add("account_or_payment");
+            }
             if (source.Length > 1000) flags.Add("long_text");
             if (ProtectedTokenRegex.IsMatch(source)) flags.Add("protected_tokens");
             if (NumericTokenRegex.IsMatch(source)) flags.Add("numeric");
             if (source.Any(character => (char.IsControl(character) && character != '\r' && character != '\n' && character != '\t') || IsBidirectionalControl(character))) flags.Add("legacy_control");
             return flags;
+        }
+
+        public static IReadOnlyList<string> DeriveJobRiskFlags(string source, string? ukrainianHint, bool deduplicated)
+        {
+            return ClassifyRisks(source)
+                .Concat(deduplicated || RequiresContextReview(source, ukrainianHint)
+                    ? new[] { "context_required" }
+                    : Array.Empty<string>())
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(value => value, StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        internal static bool IsRiskMetadataCurrent(TranslationRecord record, string source, string? ukrainianHint)
+        {
+            if (record.RiskFlags == null
+                || record.RiskFlags.Any(string.IsNullOrWhiteSpace)
+                || record.RiskFlags.Distinct(StringComparer.Ordinal).Count() != record.RiskFlags.Length)
+            {
+                return false;
+            }
+
+            string[] expectedSourceRisks = ClassifyRisks(source)
+                .OrderBy(value => value, StringComparer.Ordinal)
+                .ToArray();
+            string[] recordedSourceRisks = record.RiskFlags
+                .Where(value => !string.Equals(value, "context_required", StringComparison.Ordinal))
+                .OrderBy(value => value, StringComparer.Ordinal)
+                .ToArray();
+            return expectedSourceRisks.SequenceEqual(recordedSourceRisks, StringComparer.Ordinal)
+                && (!RequiresContextReview(source, ukrainianHint)
+                    || record.RiskFlags.Contains("context_required", StringComparer.Ordinal));
+        }
+
+        public static bool RequiresContextReview(string source, string? ukrainianHint)
+        {
+            if (ukrainianHint == null)
+            {
+                return false;
+            }
+
+            string[] sourceProtected = ExtractProtectedTokens(source).ToArray();
+            string[] hintProtected = ExtractProtectedTokens(ukrainianHint).ToArray();
+            if (!sourceProtected.SequenceEqual(hintProtected, StringComparer.Ordinal))
+            {
+                return true;
+            }
+
+            string[] sourceNumbers = ExtractMatches(NumericTokenRegex, source, StringComparer.Ordinal);
+            string[] hintNumbers = ExtractMatches(NumericTokenRegex, ukrainianHint, StringComparer.Ordinal);
+            if (!sourceNumbers.SequenceEqual(hintNumbers, StringComparer.Ordinal))
+            {
+                return true;
+            }
+
+            string[] sourceUnits = ExtractMatches(MechanicUnitRegex, source, StringComparer.OrdinalIgnoreCase);
+            string[] hintUnits = ExtractMatches(MechanicUnitRegex, ukrainianHint, StringComparer.OrdinalIgnoreCase);
+            if (!sourceUnits.SequenceEqual(hintUnits, StringComparer.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return source.Count(value => value == '\n') != ukrainianHint.Count(value => value == '\n');
         }
 
         public static bool IsSensitiveRisk(string risk)
@@ -303,6 +397,15 @@ namespace InvokersRu.Core.Translations
         private static bool ContainsLatinWord(string value)
         {
             return Regex.IsMatch(value, "[A-Za-z]{2,}", RegexOptions.CultureInvariant);
+        }
+
+        private static string[] ExtractMatches(Regex regex, string value, StringComparer comparer)
+        {
+            return regex.Matches(value)
+                .Cast<Match>()
+                .Select(match => match.Value)
+                .OrderBy(item => item, comparer)
+                .ToArray();
         }
 
         private static bool HasBalancedRichTags(string value)

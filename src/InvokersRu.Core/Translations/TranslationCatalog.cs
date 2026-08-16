@@ -217,20 +217,26 @@ namespace InvokersRu.Core.Translations
                     continue;
                 }
 
-                bool freshExisting = existing._records.TryGetValue(entry.KeyHash, out TranslationRecord? prior)
+                bool boundExisting = existing._records.TryGetValue(entry.KeyHash, out TranslationRecord? prior)
                     && Hashing.FixedEqualsHex(prior.SourceSha256, Hashing.Sha256Text(source))
                     && ((prior.HintSha256 == null && hintSha256 == null)
                         || (prior.HintSha256 != null && hintSha256 != null && Hashing.FixedEqualsHex(prior.HintSha256, hintSha256)));
+                bool currentRiskMetadata = boundExisting
+                    && TranslationValidator.IsRiskMetadataCurrent(prior!, source, ukEntry?.Value);
+                bool freshExisting = boundExisting && currentRiskMetadata;
                 if (!includeAlreadyTranslated)
                 {
                     if (reviewQueue)
                     {
-                        bool requiresEscalation = freshExisting
-                            && prior!.Status.Equals("draft", StringComparison.OrdinalIgnoreCase)
-                            && (prior.NeedsReview
-                                || !string.Equals(prior.Confidence, "high", StringComparison.Ordinal)
-                                || prior.RiskFlags.Contains("long_text", StringComparer.Ordinal)
-                                || prior.RiskFlags.Contains("context_required", StringComparer.Ordinal));
+                        bool requiresEscalation = boundExisting
+                            && (!currentRiskMetadata
+                                || sourceRisks.Any(TranslationValidator.IsSensitiveRisk)
+                                || !RuntimeSafeDraftPolicy.IsPreviewEligible(prior!, source, ukEntry?.Value, out _)
+                                || (prior!.Status.Equals("draft", StringComparison.OrdinalIgnoreCase)
+                                    && (prior.NeedsReview
+                                        || !string.Equals(prior.Confidence, "high", StringComparison.Ordinal)
+                                        || prior.RiskFlags.Contains("long_text", StringComparer.Ordinal)
+                                        || prior.RiskFlags.Contains("context_required", StringComparer.Ordinal))));
                         if (!requiresEscalation) continue;
                     }
                     else if (freshExisting)
@@ -258,11 +264,10 @@ namespace InvokersRu.Core.Translations
             {
                 string sourceHash = Hashing.Sha256Text(pending.English);
                 string? hintHash = pending.UkrainianHint == null ? null : Hashing.Sha256Text(pending.UkrainianHint);
-                string[] riskFlags = TranslationValidator.ClassifyRisks(pending.English)
-                    .Concat(pending.Ids.Count > 1 ? new[] { "context_required" } : Array.Empty<string>())
-                    .Distinct(StringComparer.Ordinal)
-                    .OrderBy(value => value, StringComparer.Ordinal)
-                    .ToArray();
+                string[] riskFlags = TranslationValidator.DeriveJobRiskFlags(
+                    pending.English,
+                    pending.UkrainianHint,
+                    pending.Ids.Count > 1).ToArray();
                 var job = new TranslationJob
                 {
                     ContentGuid = english.ContentGuid,
@@ -357,11 +362,10 @@ namespace InvokersRu.Core.Translations
                     errors.Add($"{job.JobId}: protected_tokens does not match the English source.");
                 }
 
-                string[] expectedRisks = TranslationValidator.ClassifyRisks(job.English)
-                    .Concat(job.Ids.Length > 1 ? new[] { "context_required" } : Array.Empty<string>())
-                    .Distinct(StringComparer.Ordinal)
-                    .OrderBy(value => value, StringComparer.Ordinal)
-                    .ToArray();
+                string[] expectedRisks = TranslationValidator.DeriveJobRiskFlags(
+                    job.English,
+                    job.UkrainianHint,
+                    job.Ids.Length > 1).ToArray();
                 if (job.Deduplicated != (job.Ids.Length > 1)
                     || !expectedRisks.SequenceEqual(job.RiskFlags.OrderBy(value => value, StringComparer.Ordinal), StringComparer.Ordinal))
                 {
@@ -448,12 +452,15 @@ namespace InvokersRu.Core.Translations
                         continue;
                     }
 
-                    if (merged.TryGetValue(id, out TranslationRecord? previous)
+                    bool replacingReviewed = merged.TryGetValue(id, out TranslationRecord? previous)
                         && (previous.Status.Equals("reviewed", StringComparison.OrdinalIgnoreCase)
-                            || previous.Status.Equals("approved", StringComparison.OrdinalIgnoreCase))
-                        && Hashing.FixedEqualsHex(previous.SourceSha256, job.SourceSha256)
+                            || previous.Status.Equals("approved", StringComparison.OrdinalIgnoreCase));
+                    bool reviewedBindingCurrent = replacingReviewed
+                        && Hashing.FixedEqualsHex(previous!.SourceSha256, job.SourceSha256)
                         && ((previous.HintSha256 == null && job.HintSha256 == null)
-                            || (previous.HintSha256 != null && job.HintSha256 != null && Hashing.FixedEqualsHex(previous.HintSha256, job.HintSha256))))
+                            || (previous.HintSha256 != null && job.HintSha256 != null && Hashing.FixedEqualsHex(previous.HintSha256, job.HintSha256)));
+                    if (reviewedBindingCurrent
+                        && RuntimeSafeDraftPolicy.IsPreviewEligible(previous!, job.English, job.UkrainianHint, out _))
                     {
                         preservedReviewed++;
                         continue;
@@ -462,7 +469,9 @@ namespace InvokersRu.Core.Translations
                     bool flaggedForReview = result.NeedsReview
                         || !string.Equals(result.Confidence, "high", StringComparison.OrdinalIgnoreCase)
                         || job.RiskFlags.Contains("context_required", StringComparer.Ordinal)
-                        || job.RiskFlags.Contains("long_text", StringComparer.Ordinal);
+                        || job.RiskFlags.Contains("long_text", StringComparer.Ordinal)
+                        || job.RiskFlags.Any(TranslationValidator.IsSensitiveRisk)
+                        || replacingReviewed;
                     if (flaggedForReview)
                     {
                         needsReview++;
