@@ -23,6 +23,8 @@ Windows-first community localization tooling for **Invokers: Titan Legacy**.
 
 Первый POC использует существующий слот `uk_UA`: ключи, locale ID `8` и identity-поля текущего runtime-файла сохраняются, русские значения подставляются по hash-ID. Цель — `%USERPROFILE%\AppData\LocalLow\Hit_Zone\Invokers\i18n\dl_uk_UA.bin`; файлы в каталоге установки игры не изменяются. Непроверенные записи получают официальный английский fallback, а отдельные vendor/server строки могут остаться украинскими. Поэтому в игре нужно выбирать украинский язык, а текущий результат является смешанным RU/EN/UK preview.
 
+Для работы с двух ПК используйте [инструкцию продолжения на другой машине](docs/resume-on-another-machine.md): переводческая машина коммитит только source-free overlay и receipts, а ПК с установленной игрой отдельно получает изменения и выполняет runtime QA.
+
 Протестированный overlay `translations/ru_RU.jsonl` и рабочий полный каталог
 `translations/ru_RU.next.jsonl` хранят только:
 

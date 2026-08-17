@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "kind": "invokers-ru-cross-machine-handoff",
+  "created_utc": "2026-08-17T16:51:28Z",
+  "branch": "codex/full-translation-wave-01",
+  "catalog_file": "translations/ru_RU.next.jsonl",
+  "catalog_sha256": "B209A7FCA0E8D27EE58635D574603E7CD9FC5741678C939113943147C83F07F6",
+  "catalog_records": 2526,
+  "safe_preview_records": 994,
+  "needs_review_records": 1495,
+  "runtime_tested": false,
+  "installation_modified": false,
+  "remaining_work": {
+    "private_queue_sha256": "E9BE23E480358CFFCF4D24DBFCE3F1AEAE872FB9DF2493D6AC255DC14306285F",
+    "deduplicated_jobs": 24467,
+    "source_ids": 38602,
+    "sensitive_english_fallback_ids": 101,
+    "unimported_result_files_in_continuation_queue": 0
+  },
+  "pinned_runtime_sources": {
+    "game_version": "0.60.1239",
+    "english_sha256": "ECC39461923BA6C8DDF339B5EBFE719220FC0B4EC19E5469C1FAE427CD0CA6EA",
+    "ukrainian_sha256": "0EF3FB568835E746FCE88094B5E7B48F13D7E7ABE182FFC47958671391DE5A46"
+  },
+  "translation_inputs": {
+    "prompt_sha256": "DD7566768AE6E2D371EF00296B8481F4B87B8C328CA7DCE17FBA4A784FF9D971",
+    "review_prompt_sha256": "8DA80724ED6F1155AAC2D4C39691DFBD172BD45F6F88B5E45790BB453BABD8B2",
+    "glossary_sha256": "19872841E33475ED0C99007CEB31329EC6D47FE61D777E91347F81916B29501A"
+  },
+  "partition": {
+    "manifest_sha256": "BCC5E3B51CF6AFAAF4A4A8E3C85C0B7A34A5B850C32193EDB3C577A77529E7B2",
+    "lanes": [
+      {
+        "name": "lane-01-short-plain",
+        "jobs_sha256": "B2BEDC948B0ED87E63997795C2C1AECE4AEFB48321C7BA1380F852AAECC0BD57",
+        "job_count": 5072,
+        "source_id_count": 5072,
+        "source_characters": 134327
+      },
+      {
+        "name": "lane-02-short-structured",
+        "jobs_sha256": "61B66CA5E3AE0CFDC2638CA6BFA29BBCE0602736C8000B4BD4379DFC69C2B1B1",
+        "job_count": 6071,
+        "source_id_count": 19409,
+        "source_characters": 395686
+      },
+      {
+        "name": "lane-03-standard",
+        "jobs_sha256": "E0775D906208C38F74725D0D07BA6F67B0735FBCE790347B59EBD3C0E22B17F2",
+        "job_count": 10715,
+        "source_id_count": 11384,
+        "source_characters": 3207581
+      },
+      {
+        "name": "lane-04-long",
+        "jobs_sha256": "F5DEEDFC32911FC553EB90A18A99CBD7E8F3160FEE20D7C58F1A45AA126C798E",
+        "job_count": 2609,
+        "source_id_count": 2737,
+        "source_characters": 1828948
+      }
+    ]
+  },
+  "next_lane": {
+    "name": "lane-01-short-plain",
+    "chunk_manifest_sha256": "D93D6788FFC5574F003D7881FB7CBF6E160B9CBC78A30B248EC517F87A030E53",
+    "chunk_count": 41,
+    "pending_chunks": 41,
+    "next_chunk": "chunk-0001"
+  },
+  "privacy": {
+    "contains_source_text": false,
+    "contains_game_assets": false,
+    "private_jobs_committed": false,
+    "private_results_committed": false
+  }
+}
