@@ -85,10 +85,13 @@ InvokersRu.Cli.exe build --english dl_en_US.bin --base dl_uk_UA.bin --translatio
 
 1. официальный launcher обновляет игру как обычно;
 2. `status` видит новый SHA-256 и возвращает `UnknownBuild`;
-3. maintainer извлекает новый EN/UK, строит diff по ID и source SHA;
-4. неизменённые переводы остаются, изменённые становятся stale, новые уходят в jobs;
-5. после QA и loader-теста добавляется новая подписанная compatibility entry;
-6. пользователь обновляет патчер/каталог и применяет локализацию заново.
+3. maintainer снимает профиль новой сборки: `InvokersRu.Cli.exe cache-profile --output config/runtime-cache-profile.<версия>.json` (или `scripts/new-runtime-cache-profile.ps1`);
+4. maintainer извлекает новый EN/UK, строит diff по ID и source SHA;
+5. неизменённые переводы остаются, изменённые становятся stale, новые уходят в jobs;
+6. после QA и loader-теста добавляется новая подписанная compatibility entry;
+7. пользователь обновляет патчер/каталог и применяет локализацию заново.
+
+`cache-profile` фиксирует только то, что реально лежит на диске: content GUID, версии, ревизии, entry count и SHA-256 всех трёх файлов кортежа. Он всегда выставляет `readiness=blocked` и `certified=false` — сертификация требует ещё и hash каталога переводов и точный hash собранного выходного файла, и остаётся отдельным проверяемым шагом. Слоты `en_US` (locale 1) и `uk_UA` (locale 8) остаются жёстко зашитыми в коде; ревизии и release-номера берутся из профиля, поэтому новая контент-версия больше не требует правки парсера.
 
 Старый backup никогда не накатывается поверх новой официальной сборки.
 

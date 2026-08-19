@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0-dev — 2026-08-19
+
+- added `cache-profile`, which snapshots a local runtime cache tuple into a schema-1 compatibility profile with real hashes, content versions and revisions, always as `readiness=blocked` / `certified=false`;
+- stopped pinning one observed content release inside the profile parser: `en_US` locale 1 and `uk_UA` locale 8 stay fixed game constants, while locale and release revisions now come from the profile, so a newer build no longer requires a parser edit;
+- made the default runtime-cache root cross-platform and resolved once per process; on macOS the per-installation container is discovered by looking for `dl_en_US.bin`, and a missing, unreadable or ambiguous container now fails with the reason and a `--cache-root` hint instead of silently falling back to a directory that holds no cache;
+- added `--cache-root` to the read-only `cache-status`, `cache-plan` and `cache-profile`; the write commands keep deriving their own pinned root;
+- refused a version stamp that is not a bare version string, so a padded or corrupted marker cannot become a profile identity;
+- kept every installation-write gate unchanged: capability stays compile-time disabled in ordinary builds, mutation root and state path stay pinned, the fixed-volume check stays, and apply still requires a certified profile with catalog, output and exact applied-count pins;
+- ran the fixture-free smoke checks, including the negative test that proves an ordinary build rejects all six mutation entrypoints, before the private EN/UK fixtures are required, so that gate is now covered on machines without private game data;
+- added an onboarding regression test that accepts a newer build while rejecting wrong locale slots, zero revisions and a stamp that disagrees with its game version;
+- documented the audited macOS client, including why the signed bundle cannot be edited and where the writable cache actually lives.
+
 ## 0.2.0-preview — 2026-08-15
 
 - completed a coherent 1,820-ID Russian MVP across settings, login, UI, collection, quests, inventory, progression, errors, characters, skills, and combat;

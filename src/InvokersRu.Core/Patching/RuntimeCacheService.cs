@@ -20,11 +20,102 @@ namespace InvokersRu.Core.Patching
             "UnexpectedPreimageDetected", "UnexpectedPreimageRestored", "Completed", "Aborted"
         };
 
+        // Resolved once per process: the mutation guards compare against this value repeatedly and must not
+        // observe a root that changes underneath them while a transaction is in flight.
+        private static readonly Lazy<(string? Root, string? Problem)> DefaultCacheRootValue =
+            new Lazy<(string?, string?)>(ResolveDefaultCacheRoot);
+
         public static string DefaultCacheRoot()
         {
-            return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                "AppData", "LocalLow", "Hit_Zone", "Invokers", "i18n");
+            (string? root, string? problem) = DefaultCacheRootValue.Value;
+            return root ?? throw new InvalidOperationException(problem);
+        }
+
+        public static bool TryDefaultCacheRoot(out string cacheRoot, out string problem)
+        {
+            (string? root, string? issue) = DefaultCacheRootValue.Value;
+            cacheRoot = root ?? string.Empty;
+            problem = issue ?? string.Empty;
+            return root != null;
+        }
+
+        private static (string? Root, string? Problem) ResolveDefaultCacheRoot()
+        {
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!OperatingSystem.IsMacOS())
+            {
+                return (Path.Combine(home, "AppData", "LocalLow", "Hit_Zone", "Invokers", "i18n"), null);
+            }
+
+            // The iOS-on-Mac build stores the same tuple inside a per-installation container whose directory
+            // name is a random UUID, so the only stable way to find it is to look for the English cache file.
+            string containers = Path.Combine(home, "Library", "Containers");
+            List<string> candidates;
+            try
+            {
+                if (!Directory.Exists(containers))
+                {
+                    return (null, $"No application container directory exists at {containers}; pass --cache-root PATH.");
+                }
+
+                candidates = Directory.EnumerateDirectories(containers)
+                    .Select(container => Path.Combine(container, "Data", "Documents", "i18n"))
+                    .Where(candidate => File.Exists(Path.Combine(candidate, EnglishFileName)))
+                    .Take(2)
+                    .ToList();
+            }
+            catch (Exception exception) when (exception is IOException || exception is UnauthorizedAccessException)
+            {
+                return (null, $"Application containers under {containers} could not be read: {exception.Message}; pass --cache-root PATH.");
+            }
+
+            return candidates.Count switch
+            {
+                1 => (candidates[0], null),
+                0 => (null, $"No game localization cache containing {EnglishFileName} was found under {containers}; pass --cache-root PATH."),
+                _ => (null, $"Several containers under {containers} hold {EnglishFileName}; refusing to guess, pass --cache-root PATH.")
+            };
+        }
+
+        public static RuntimeCacheCompatibility DescribeTuple(string englishPath, string basePath, string stampPath, string? id)
+        {
+            Loc1Document english = Loc1Codec.ReadFile(englishPath);
+            Loc1Document baseLocale = Loc1Codec.ReadFile(basePath);
+            Loc1Compatibility.RequireComposableCorpus(english, baseLocale, allowPerLocaleContentVersion: true);
+            byte[] stampBytes = File.ReadAllBytes(stampPath);
+            string stampValue = new UTF8Encoding(false, true).GetString(stampBytes);
+            // The stamp is the game's own version marker and becomes this profile's identity, so a corrupted
+            // or padded file must fail here rather than produce a profile that describes nothing real.
+            if (stampValue.Length is 0 or > 64 || stampValue.Any(character => char.IsControl(character) || char.IsWhiteSpace(character)))
+            {
+                throw new InvalidDataException($"Runtime-cache version stamp is not a bare version string: {stampPath}");
+            }
+            var profile = new RuntimeCacheCompatibility
+            {
+                Id = string.IsNullOrWhiteSpace(id) ? $"runtime-cache-{stampValue}" : id!,
+                GameVersion = stampValue,
+                ContentGuid = english.ContentGuid,
+                EnglishContentVersion = english.ContentVersion,
+                BaseContentVersion = baseLocale.ContentVersion,
+                EnglishSha256 = Hashing.Sha256File(englishPath),
+                BaseSha256 = Hashing.Sha256File(basePath),
+                StampSha256 = Hashing.Sha256Bytes(stampBytes),
+                StampValue = stampValue,
+                EnglishLocaleId = english.LocaleId,
+                EnglishLocaleRevision = english.LocaleRevision,
+                EnglishReleaseRevision = english.ReleaseRevision,
+                BaseLocaleId = baseLocale.LocaleId,
+                BaseLocaleRevision = baseLocale.LocaleRevision,
+                BaseReleaseRevision = baseLocale.ReleaseRevision,
+                EntryCount = english.Entries.Count,
+                MinimumAppliedTranslations = 1,
+                TranslationPolicy = "supervised-safe-drafts",
+                Readiness = "blocked",
+                Certified = false,
+                BlockedReason = "Generated from a local cache tuple; catalog and output pins are not certified yet."
+            };
+            profile.Validate();
+            return profile;
         }
 
         public static string DefaultStatePath()
@@ -483,6 +574,11 @@ namespace InvokersRu.Core.Patching
             byte[] expected = new UTF8Encoding(false, true).GetBytes(profile.StampValue);
             return Hashing.FixedEqualsHex(Hashing.Sha256File(stampPath), profile.StampSha256)
                 && File.ReadAllBytes(stampPath).SequenceEqual(expected);
+        }
+
+        public static (string English, string Target, string Stamp) ResolveTuplePaths(string root)
+        {
+            return ResolveFixedPaths(root);
         }
 
         private static (string English, string Target, string Stamp) ResolveFixedPaths(string root)

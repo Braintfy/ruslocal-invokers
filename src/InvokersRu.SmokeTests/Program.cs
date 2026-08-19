@@ -29,15 +29,23 @@ namespace InvokersRu.SmokeTests
 
                 string englishPath = File.Exists(enCompressed) ? enCompressed : enRawFallback;
                 string ukrainianPath = File.Exists(ukCompressed) ? ukCompressed : ukRawFallback;
+
+                // Fixture-free checks run first so pure-logic regressions surface even on a machine that has
+                // no private EN/UK game data to test against.
+                ValidatorChecks();
+                SafeDraftEligibilityChecks();
+                CompatibilityManifestSafetyChecks();
+                RuntimeCacheProfileParsingCheck();
+                RuntimeCacheProfileOnboardingCheck();
+#if !INVOKERSRU_MUTATION_SMOKES
+                OrdinaryCoreMutationGateCheck();
+#endif
+
                 Require(File.Exists(englishPath) && File.Exists(ukrainianPath), "Private EN/UK fixtures are required.");
 
                 RoundTrip(englishPath, "A76878590A54A9232F7ADA73653171E1E467238DFE0801BD264304541BF2724D", 1, 0xC3CCA66A);
                 RoundTrip(ukrainianPath, "617EDC140A4495B40F51FD5AC07E8FCCDC17A834161AB767FF4BF9AB63BE825F", 8, 0xF7BC8460);
                 MutationRoundTrip(ukrainianPath);
-                ValidatorChecks();
-                SafeDraftEligibilityChecks();
-                CompatibilityManifestSafetyChecks();
-                RuntimeCacheProfileParsingCheck();
                 CompositionCheck(englishPath, ukrainianPath);
                 PerLocaleVersionCompatibilityCheck(englishPath, ukrainianPath);
                 ResultImportCheck(englishPath);
@@ -47,8 +55,6 @@ namespace InvokersRu.SmokeTests
                 RuntimeCacheTransactionalCheck(
                     Path.Combine(runtimeFixtureRoot, "dl_en_US.bin"),
                     Path.Combine(runtimeFixtureRoot, "dl_uk_UA.bin"));
-#else
-                OrdinaryCoreMutationGateCheck();
 #endif
 
                 Console.WriteLine($"PASS: {Passed.Count} smoke tests");
@@ -57,6 +63,7 @@ namespace InvokersRu.SmokeTests
             }
             catch (Exception exception)
             {
+                foreach (string message in Passed) Console.WriteLine($"  PASS {message}");
                 Console.Error.WriteLine($"FAIL: {exception}");
                 return 1;
             }
@@ -113,6 +120,71 @@ namespace InvokersRu.SmokeTests
                 && string.Equals(profile.StampValue, profile.GameVersion, StringComparison.Ordinal),
                 "Runtime-cache profile-under-test lost the fixed EN/UK/stamp identity pins.");
             Passed.Add($"runtime-cache profile parses with fixed EN identity ({profile.Id})");
+        }
+
+        private static string ProfileJson(
+            uint englishLocaleId, uint englishLocaleRevision, uint englishReleaseRevision,
+            uint baseLocaleId, uint baseLocaleRevision, string stampValue, string gameVersion)
+        {
+            const string hash = "ECC39461923BA6C8DDF339B5EBFE719220FC0B4EC19E5469C1FAE427CD0CA6EA";
+            return $$"""
+            {
+              "schema": 1,
+              "id": "runtime-cache-under-test",
+              "game_version": "{{gameVersion}}",
+              "content_guid": "ad875e27-1bf6-4f4a-8ed5-3957d0ed05fa",
+              "english_content_version": "Prod_0.60.0_57",
+              "base_content_version": "Prod_0.60.0_58",
+              "english_sha256": "{{hash}}",
+              "base_sha256": "{{hash}}",
+              "stamp_sha256": "{{hash}}",
+              "stamp_value": "{{stampValue}}",
+              "english_locale_id": {{englishLocaleId}},
+              "english_locale_revision": {{englishLocaleRevision}},
+              "english_release_revision": {{englishReleaseRevision}},
+              "base_locale_id": {{baseLocaleId}},
+              "base_locale_revision": {{baseLocaleRevision}},
+              "base_release_revision": 58,
+              "entry_count": 41290
+            }
+            """;
+        }
+
+        private static bool ProfileRejected(string json)
+        {
+            try
+            {
+                RuntimeCacheCompatibility.Parse(json);
+                return false;
+            }
+            catch (InvalidDataException)
+            {
+                return true;
+            }
+        }
+
+        private static void RuntimeCacheProfileOnboardingCheck()
+        {
+            // A content update moves the locale and release revisions, so onboarding a newer build must be
+            // possible without editing the parser; only the en_US/uk_UA slot ids stay fixed game constants.
+            RuntimeCacheCompatibility updated = RuntimeCacheCompatibility.Parse(
+                ProfileJson(1, 0x0BADF00D, 58, 8, 0x1BCA1660, "0.60.1301", "0.60.1301"));
+            Require(updated.EnglishReleaseRevision == 58 && updated.EnglishLocaleRevision == 0x0BADF00D,
+                "A newer runtime-cache build could not be onboarded.");
+            Require(!updated.Certified && updated.Readiness == "blocked",
+                "A profile without explicit certification must stay blocked.");
+
+            Require(ProfileRejected(ProfileJson(2, 0xF458F128, 57, 8, 0x1BCA1660, "0.60.1239", "0.60.1239")),
+                "A profile targeting a non-en_US source slot was accepted.");
+            Require(ProfileRejected(ProfileJson(1, 0xF458F128, 57, 3, 0x1BCA1660, "0.60.1239", "0.60.1239")),
+                "A profile targeting a slot other than uk_UA was accepted.");
+            Require(ProfileRejected(ProfileJson(1, 0, 57, 8, 0x1BCA1660, "0.60.1239", "0.60.1239")),
+                "A profile with a zero English locale revision was accepted.");
+            Require(ProfileRejected(ProfileJson(1, 0xF458F128, 57, 8, 0, "0.60.1239", "0.60.1239")),
+                "A profile with a zero base locale revision was accepted.");
+            Require(ProfileRejected(ProfileJson(1, 0xF458F128, 57, 8, 0x1BCA1660, "0.60.1239", "0.60.1240")),
+                "A profile whose stamp disagrees with its game version was accepted.");
+            Passed.Add("runtime-cache profile onboards new builds and rejects unsafe slot identities");
         }
 
         private static void ValidatorChecks()

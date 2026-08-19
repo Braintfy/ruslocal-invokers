@@ -105,9 +105,12 @@ namespace InvokersRu.Core.Patching
                 throw new InvalidDataException("Runtime-cache compatibility identity is incomplete or unsafe.");
             }
 
+            // Locale ids are game constants rather than per-build data: 1 is the en_US source slot and 8 is
+            // the uk_UA slot this project overwrites. Locale and release revisions change with every content
+            // drop, so a profile pins them per build instead of the parser fixing them to one observed release.
             if (!string.Equals(StampValue, GameVersion, StringComparison.Ordinal)
-                || EnglishLocaleId != 1 || EnglishLocaleRevision != 0xF458F128 || EnglishReleaseRevision != 57
-                || BaseLocaleId != 8)
+                || EnglishLocaleId != 1 || BaseLocaleId != 8
+                || EnglishLocaleRevision == 0 || BaseLocaleRevision == 0)
             {
                 throw new InvalidDataException("Runtime-cache profile contradicts the fixed EN/UK cache identity.");
             }
