@@ -4,7 +4,7 @@
 
 set -uo pipefail
 
-APP_VERSION="1.2.0"
+APP_VERSION="1.3.0"
 REPO_RAW="https://raw.githubusercontent.com/Braintfy/ruslocal-invokers/main"
 OVERLAY_URL="${REPO_RAW}/translations/ru_RU.jsonl"
 MANIFEST_URL="${REPO_RAW}/config/mac-patcher.json"
@@ -19,6 +19,7 @@ BACKUP_DIR="${SUPPORT_DIR}/backups"
 STATE_FILE="${SUPPORT_DIR}/state.json"
 OVERLAY_CACHE="${SUPPORT_DIR}/ru_RU.jsonl"
 LOG_FILE="${SUPPORT_DIR}/patcher.log"
+RESUME_MARKER="${SUPPORT_DIR}/.resuming"
 
 TARGET_NAME="dl_uk_UA.bin"
 TITLE="Русификатор Invokers"
@@ -85,21 +86,57 @@ open_full_disk_settings() {
         || open "/System/Library/PreferencePanes/Security.prefPane" >/dev/null 2>&1 || true
 }
 
+relaunch_self() {
+    local bundle
+    bundle="$(cd "${HERE}/../.." 2>/dev/null && pwd)"
+    date +%s > "$RESUME_MARKER"
+    if [ -n "$bundle" ] && [ -d "$bundle" ]; then
+        open -n "$bundle" >/dev/null 2>&1 &
+    fi
+    exit 0
+}
+
+# Blocks on a dialog that a background watcher dismisses the moment the grant appears, so the user
+# flips the switch in System Settings and the install simply carries on by itself.
+wait_for_disk_access() {
+    local probe="$1" dialog_pid watcher_pid
+    osascript -e "display dialog \"Ожидание доступа…
+
+Включите переключатель напротив «Русификатор Invokers» в открывшемся окне «Полный доступ к диску».
+
+Как только включите, установка продолжится сама — это окно закроется автоматически. Ничего перезапускать не нужно.\" with title \"$(esc "$TITLE")\" buttons {\"Отмена\"} default button 1 with icon caution giving up after 180" >/dev/null 2>&1 &
+    dialog_pid=$!
+    (
+        while ! can_read_container "$probe"; do sleep 1; done
+        kill "$dialog_pid" 2>/dev/null
+    ) >/dev/null 2>&1 &
+    watcher_pid=$!
+    wait "$dialog_pid" 2>/dev/null
+    kill "$watcher_pid" 2>/dev/null
+    can_read_container "$probe"
+}
+
 require_disk_access() {
-    local probe="$1"
+    local probe="$1" answer
     can_read_container "$probe" && return 0
-    local answer
+
     answer="$(ask "Нужен доступ к данным игры.
 
-macOS не разрешает приложениям читать файлы других программ, пока вы явно это не позволите. Без этого русификатор не сможет ни сделать резервную копию, ни установить перевод.
+macOS не разрешает приложениям читать файлы других программ, пока вы явно это не позволите. Это стандартное требование системы.
 
-Как выдать доступ:
-1. Нажмите «Открыть настройки» — откроется «Конфиденциальность и безопасность» → «Полный доступ к диску».
-2. Включите переключатель напротив «Русификатор Invokers». Если приложения нет в списке, нажмите «+» и выберите его в папке «Программы».
-3. Полностью закройте русификатор и запустите заново.
+Нажмите «Открыть настройки», включите переключатель напротив «Русификатор Invokers» — и установка продолжится сама, возвращаться сюда не придётся." "Выход" "Открыть настройки")"
+    [ "$answer" = "Открыть настройки" ] || exit 0
 
-Это стандартное требование macOS, оно нужно всем подобным программам." "Выход" "Открыть настройки")"
-    [ "$answer" = "Открыть настройки" ] && open_full_disk_settings
+    open_full_disk_settings
+    wait_for_disk_access "$probe" && return 0
+
+    # The grant sometimes only reaches an already-running process after a restart.
+    answer="$(ask "Пока доступа нет.
+
+Если переключатель уже включён, приложение нужно перезапустить — тогда система применит разрешение. Русификатор откроется заново и сразу продолжит с этого места.
+
+Если переключателя нет в списке, нажмите «+» в окне настроек и выберите «Русификатор Invokers» в папке «Программы»." "Выход" "Перезапустить")"
+    [ "$answer" = "Перезапустить" ] && relaunch_self
     exit 0
 }
 
@@ -136,14 +173,29 @@ ${notes}
 
 # Downloads the public overlay. Returns 0 if a usable overlay is at $OVERLAY_CACHE.
 refresh_overlay() {
-    local fresh="${WORK_DIR}/ru_RU.jsonl.new"
+    local fresh="${WORK_DIR}/ru_RU.jsonl.new" fresh_lines cached_lines
     if fetch "$OVERLAY_URL" "$fresh" && [ -s "$fresh" ]; then
-        if [ ! -f "$OVERLAY_CACHE" ] || [ "$(sha256_of "$fresh")" != "$(sha256_of "$OVERLAY_CACHE")" ]; then
+        if [ ! -f "$OVERLAY_CACHE" ]; then
             mv -f "$fresh" "$OVERLAY_CACHE"
-            printf 'overlay updated\n' >>"$LOG_FILE"
-        else
-            rm -f "$fresh"
+            printf 'overlay downloaded\n' >>"$LOG_FILE"
+            return 0
         fi
+        if [ "$(sha256_of "$fresh")" = "$(sha256_of "$OVERLAY_CACHE")" ]; then
+            rm -f "$fresh"
+            return 0
+        fi
+        # A catalog that suddenly lost most of its records means something is wrong upstream, not that
+        # the translation shrank on purpose. Keeping the copy already on disk avoids turning a good
+        # installation back into a mostly-English one without the user asking for it.
+        fresh_lines="$(wc -l < "$fresh" | tr -d ' ')"
+        cached_lines="$(wc -l < "$OVERLAY_CACHE" | tr -d ' ')"
+        if [ "$fresh_lines" -lt $((cached_lines / 2)) ]; then
+            printf 'refusing overlay downgrade: fresh=%s cached=%s\n' "$fresh_lines" "$cached_lines" >>"$LOG_FILE"
+            rm -f "$fresh"
+            return 0
+        fi
+        mv -f "$fresh" "$OVERLAY_CACHE"
+        printf 'overlay updated: %s records\n' "$fresh_lines" >>"$LOG_FILE"
         return 0
     fi
     rm -f "$fresh"
@@ -250,14 +302,25 @@ do_install() {
 }
 JSON
 
-    say_info "Готово. Переведено строк: ${applied}.
+    local next
+    next="$(ask "Готово. Перевод установлен, строк переведено: ${applied}.
 
-ВАЖНО, иначе перевод пропадёт:
-• Не меняйте язык в настройках игры. Клиент при выборе языка заново скачивает файл и стирает перевод.
-• Язык должен остаться украинским — русский текст подставлен именно в него.
-• После обновления игры перевод нужно установить заново.
+ЧТОБЫ ПЕРЕВОД НЕ ПРОПАЛ — одно правило:
+Не открывайте выбор языка в настройках игры. При выборе любого языка клиент заново скачивает языковой файл с сервера и стирает перевод. В настройках должен остаться украинский: русский текст подставлен именно в эту ячейку, потому что она единственная кириллическая.
 
-Оригинал сохранён, вернуть его можно кнопкой «Восстановить оригинал»."
+ЧТО ЕЩЁ ПОЛЕЗНО ЗНАТЬ:
+• Часть текста останется на английском — это строки, которые не прошли проверку, их лучше видеть в оригинале, чем сломанными.
+• Имена персонажей, боссов и локаций намеренно оставлены латиницей.
+• После обновления игры перевод слетит: просто запустите русификатор снова и нажмите «Установить перевод».
+• Если перевод вдруг исчез — почти всегда причина в том, что язык переключали. Установите заново.
+• Вернуть английский или украинский текст можно в любой момент кнопкой «Восстановить оригинал» — оригинал сохранён.
+
+Запустить игру сейчас?" "Закрыть" "Запустить игру")"
+    if [ "$next" = "Запустить игру" ]; then
+        open -b "hitzone.anima.spirit.guardians" >/dev/null 2>&1 \
+            || open -a "Invokers" >/dev/null 2>&1 \
+            || say_info "Не удалось запустить игру автоматически — откройте её вручную."
+    fi
     return 0
 }
 
@@ -310,12 +373,24 @@ describe_state() {
 
 [ -x "$CLI" ] || die "Повреждённая установка: не найден исполняемый файл внутри приложения."
 
-choice="$(ask "Неофициальный любительский русификатор Invokers: Titan Legacy.
+# A relaunch triggered by the Full Disk Access prompt should land the user back where they were,
+# not at the beginning of the same explanation they just read.
+RESUMING=false
+if [ -f "$RESUME_MARKER" ]; then
+    marked="$(cat "$RESUME_MARKER" 2>/dev/null || echo 0)"
+    now="$(date +%s)"
+    [ $((now - marked)) -lt 600 ] 2>/dev/null && RESUMING=true
+    rm -f "$RESUME_MARKER"
+fi
+
+if [ "$RESUMING" = false ]; then
+    choice="$(ask "Неофициальный любительский русификатор Invokers: Titan Legacy.
 
 Приложение не связано с HitZone Inc. Оно изменяет только один файл кэша локализации внутри папки данных игры и не трогает саму игру, её подпись и защиту. Оригинал сохраняется, откат доступен в любой момент.
 
-Перевод неполный: переведена часть интерфейса, остальное останется на английском. Используйте на свой риск." "Выход" "Продолжить")"
-[ "$choice" = "Продолжить" ] || exit 0
+Переведено 40 541 строка из 41 292 — почти весь интерфейс. Перевод машинный и не вычитан человеком. Используйте на свой риск." "Выход" "Продолжить")"
+    [ "$choice" = "Продолжить" ] || exit 0
+fi
 
 check_app_update
 

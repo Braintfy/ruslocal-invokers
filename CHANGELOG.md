@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0-dev — 2026-08-19
+
+- continued the install automatically the moment Full Disk Access is granted: the waiting dialog is dismissed by a watcher that polls for the grant, so the switch in System Settings is the last thing the user touches;
+- offered a self-relaunch when the grant only reaches a restarted process, and skipped the introduction on that second launch so nobody answers the same questions twice;
+- replaced the terse success message with the guidance that actually prevents the common failure: the language picker must not be opened, part of the text stays English on purpose, names stay Latin, and an update means installing again; the same dialog can launch the game;
+- refused an overlay that lost more than half its records, which keeps a working installation from silently reverting to a mostly-English one when the published catalog is stale or truncated.
+
 ## 0.5.0-dev — 2026-08-19
 
 - translated the rest of the corpus: the public overlay now carries 40 541 records against `Prod_0.60.0_68`, so a build applies 40 541 of 41 292 strings and leaves 497 in English plus 254 empty source entries;
