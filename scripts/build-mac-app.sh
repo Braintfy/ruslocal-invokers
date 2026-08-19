@@ -48,7 +48,14 @@ rm -rf "$PUBLISH_DIR"
     -o "$PUBLISH_DIR" --configfile "$PUBLISH_CONFIG" >/dev/null
 
 install -m 755 "${PUBLISH_DIR}/InvokersRu.Cli" "${APP_DIR}/Contents/Resources/InvokersRu.Cli"
-install -m 755 "${REPO_ROOT}/mac/patcher-main.sh" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+install -m 755 "${REPO_ROOT}/mac/patcher-main.sh" "${APP_DIR}/Contents/Resources/patcher.sh"
+
+# The bundle's main executable must be a Mach-O binary. A shell script here cannot hold a Full Disk
+# Access grant: the running process would be /bin/bash, so the switch in System Settings appears
+# enabled while every read of the game container still fails.
+cc -O2 -Wall -Wextra -arch arm64 -mmacosx-version-min=13.0 \
+   -o "${APP_DIR}/Contents/MacOS/${APP_NAME}" "${REPO_ROOT}/mac/launcher.c"
+chmod 755 "${APP_DIR}/Contents/MacOS/${APP_NAME}"
 
 cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

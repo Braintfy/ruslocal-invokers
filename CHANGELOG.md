@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0-macos — 2026-08-19
+
+- made the bundle's main executable a real Mach-O binary (`mac/launcher.c`) that runs the driver script as a child. A bundle whose entry point is a shell script cannot hold a Full Disk Access grant: the running process is `/bin/bash`, a platform binary the grant cannot be pinned to, so the switch in System Settings showed as enabled while every read of the game container still failed with EPERM. Directory listings kept working, which is why the app found the cache root and then could not back it up;
+- explained the stale-grant case, which looks identical from the user's side: macOS binds a grant to the exact application it was created for, so after the app is replaced the old entry keeps an enabled switch and grants nothing until it is removed with «−» and added again with «+».
+
 ## 0.6.0-dev — 2026-08-19
 
 - continued the install automatically the moment Full Disk Access is granted: the waiting dialog is dismissed by a watcher that polls for the grant, so the switch in System Settings is the last thing the user touches;

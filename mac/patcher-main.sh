@@ -4,13 +4,14 @@
 
 set -uo pipefail
 
-APP_VERSION="1.3.0"
+APP_VERSION="2.0.0"
 REPO_RAW="https://raw.githubusercontent.com/Braintfy/ruslocal-invokers/main"
 OVERLAY_URL="${REPO_RAW}/translations/ru_RU.jsonl"
 MANIFEST_URL="${REPO_RAW}/config/mac-patcher.json"
 
+# Runs from Contents/Resources, started by the Mach-O launcher in Contents/MacOS.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESOURCES="$(cd "${HERE}/../Resources" && pwd)"
+RESOURCES="$HERE"
 CLI="${RESOURCES}/InvokersRu.Cli"
 
 SUPPORT_DIR="${HOME}/Library/Application Support/InvokersRu"
@@ -130,12 +131,19 @@ macOS не разрешает приложениям читать файлы д�
     open_full_disk_settings
     wait_for_disk_access "$probe" && return 0
 
-    # The grant sometimes only reaches an already-running process after a restart.
-    answer="$(ask "Пока доступа нет.
+    # A grant is bound to the exact application it was created for. After the app is replaced by a new
+    # version the old entry keeps showing an enabled switch while granting nothing, and only removing
+    # and re-adding it rebuilds the association.
+    answer="$(ask "Доступа всё ещё нет.
 
-Если переключатель уже включён, приложение нужно перезапустить — тогда система применит разрешение. Русификатор откроется заново и сразу продолжит с этого места.
+ЕСЛИ ПЕРЕКЛЮЧАТЕЛЬ УЖЕ ВКЛЮЧЁН — разрешение устарело. Так бывает после обновления русификатора: система помнит старую версию, галка горит, а доступа не даёт.
 
-Если переключателя нет в списке, нажмите «+» в окне настроек и выберите «Русификатор Invokers» в папке «Программы»." "Выход" "Перезапустить")"
+Что сделать:
+1. В окне «Полный доступ к диску» выделите «Русификатор Invokers» и нажмите «−», чтобы удалить строку.
+2. Нажмите «+», откройте папку «Программы» и выберите «Русификатор Invokers» заново.
+3. Убедитесь, что переключатель включён.
+
+Затем нажмите «Перезапустить» — русификатор откроется и сразу продолжит с этого места." "Выход" "Перезапустить")"
     [ "$answer" = "Перезапустить" ] && relaunch_self
     exit 0
 }
