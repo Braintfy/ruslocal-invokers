@@ -4,7 +4,7 @@
 
 set -uo pipefail
 
-APP_VERSION="1.0.0"
+APP_VERSION="1.1.0"
 REPO_RAW="https://raw.githubusercontent.com/Braintfy/ruslocal-invokers/main"
 OVERLAY_URL="${REPO_RAW}/translations/ru_RU.jsonl"
 MANIFEST_URL="${REPO_RAW}/config/mac-patcher.json"
@@ -75,6 +75,33 @@ find_cache_root() {
 }
 
 game_running() { pgrep -f "Invokers.app/Invokers" >/dev/null 2>&1; }
+
+# macOS blocks one app from reading another app's container until the user grants Full Disk Access.
+# An app launched from Finder therefore sees "Operation not permitted" where a terminal would not.
+can_read_container() { [ -r "$1" ] && head -c 1 "$1" >/dev/null 2>&1; }
+
+open_full_disk_settings() {
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles" >/dev/null 2>&1 \
+        || open "/System/Library/PreferencePanes/Security.prefPane" >/dev/null 2>&1 || true
+}
+
+require_disk_access() {
+    local probe="$1"
+    can_read_container "$probe" && return 0
+    local answer
+    answer="$(ask "Нужен доступ к данным игры.
+
+macOS не разрешает приложениям читать файлы других программ, пока вы явно это не позволите. Без этого русификатор не сможет ни сделать резервную копию, ни установить перевод.
+
+Как выдать доступ:
+1. Нажмите «Открыть настройки» — откроется «Конфиденциальность и безопасность» → «Полный доступ к диску».
+2. Включите переключатель напротив «Русификатор Invokers». Если приложения нет в списке, нажмите «+» и выберите его в папке «Программы».
+3. Полностью закройте русификатор и запустите заново.
+
+Это стандартное требование macOS, оно нужно всем подобным программам." "Выход" "Открыть настройки")"
+    [ "$answer" = "Открыть настройки" ] && open_full_disk_settings
+    exit 0
+}
 
 atomic_install() {
     local source="$1" target="$2" directory temp
@@ -289,11 +316,19 @@ check_app_update
 
 CACHE_ROOT="$(find_cache_root || true)"
 if [ -z "$CACHE_ROOT" ]; then
+    # Without Full Disk Access the container is invisible rather than absent, so tell those two apart
+    # before blaming the installation.
+    if [ -d "${HOME}/Library/Containers" ] && ! ls "${HOME}/Library/Containers" >/dev/null 2>&1; then
+        require_disk_access "${HOME}/Library/Containers"
+    fi
     die "Не удалось найти данные игры Invokers.
 
-Убедитесь, что игра установлена из App Store и была запущена хотя бы один раз."
+Убедитесь, что игра установлена из App Store и была запущена хотя бы один раз.
+
+Если игра точно установлена, скорее всего не выдан полный доступ к диску: «Системные настройки» → «Конфиденциальность и безопасность» → «Полный доступ к диску» → включить «Русификатор Invokers»."
 fi
 printf 'cache root: %s\n' "$CACHE_ROOT" >>"$LOG_FILE"
+require_disk_access "${CACHE_ROOT}/dl_en_US.bin"
 
 while true; do
     if game_running; then
