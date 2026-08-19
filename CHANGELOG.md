@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.3.0-macos — 2026-08-19
+
+- restored the Latin stat abbreviations the model had transliterated: `ATK` was written as Cyrillic `АТК` in 866 places, which is most damage formulas in the game, plus `AoE` as `АоЕ`/`АоЭ` in five hints. The replacement only applies where the English source actually contains the abbreviation;
+- settled 89 terms that had drifted into two spellings each and applied the choice to 123 records, leaving zero terms with more than one rendering. `BACK` was showing as «СПИСОК» in one place and is now «НАЗАД» everywhere; `Fusion Limit` lost its stray capital, `Bio` became «Биография»;
+- unglued five internal keys the bulk pass had translated into run-together CamelCase — «ДебаффОтклоненаЗащита» now reads «Дебафф: игнорирование защиты», matching the sibling key that was already correct;
+- shipped all of this as a driver update, so it reaches players without a new disk image: the bundle version stays 2.2.0 and only the script and the overlay move.
+
 ## 2.2.0-macos — 2026-08-19
 
 - made the patcher update itself from the repository, so the application no longer has to be reinstalled for every fix. macOS pins a Full Disk Access grant to the bundle's code signature, and re-signing after touching any sealed file changes the cdhash and silently revokes the grant — verified directly: editing a resource reports «a sealed resource is missing or invalid», and re-signing moved the cdhash from 58b93a5b to e0484b8c;

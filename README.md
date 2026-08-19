@@ -6,12 +6,12 @@
 
 ## Скачать
 
-| Платформа | Версия | Ссылка |
-| --- | --- | --- |
-| macOS (Apple Silicon) | 2.2.0 | [Rusifikator-Invokers-2.2.0.dmg](https://github.com/Braintfy/ruslocal-invokers/releases/latest) |
-| Windows | в работе | — |
+| Платформа | Ссылка |
+| --- | --- |
+| macOS (Apple Silicon) | **[Скачать последнюю версию](https://github.com/Braintfy/ruslocal-invokers/releases/latest)** |
+| Windows | в работе |
 
-Windows-версия существует как консольная утилита и требует ручной сборки. Готового установщика пока нет.
+Скачивать нужно один раз: дальше русификатор обновляется сам. Windows-версия существует как консольная утилита и требует ручной сборки, готового установщика пока нет.
 
 ## Установка на macOS
 

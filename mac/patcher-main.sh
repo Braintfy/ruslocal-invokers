@@ -5,7 +5,7 @@
 set -uo pipefail
 
 # Version of this script. It updates itself from the repository; the bundle around it stays frozen.
-APP_VERSION="2.2.0"
+APP_VERSION="2.3.0"
 # Version of the application bundle, which only changes when the launcher or the CLI has to change.
 BUNDLE_VERSION="2.2.0"
 
