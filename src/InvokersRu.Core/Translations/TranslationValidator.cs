@@ -96,7 +96,12 @@ namespace InvokersRu.Core.Translations
                 if (!Hashing.FixedEqualsHex(record.SourceSha256, Hashing.Sha256Text(source)))
                 {
                     report.StaleRecords++;
-                    report.Issues.Add(new TranslationIssue(record.Id, "stale-source", ValidationSeverity.Error, "English source changed; this translation must be reviewed again."));
+                    // A stale record is never composed: TryGetUsable refuses it and the official English text
+                    // is kept instead. That is a defect for a release, but a preview should still assemble the
+                    // records that did survive the content update.
+                    report.Issues.Add(new TranslationIssue(record.Id, "stale-source",
+                        profile == ValidationProfile.Release ? ValidationSeverity.Error : ValidationSeverity.Warning,
+                        "English source changed; this translation must be reviewed again."));
                     continue;
                 }
 
@@ -107,7 +112,9 @@ namespace InvokersRu.Core.Translations
                     if ((record.HintSha256 == null) != (currentHintHash == null)
                         || (record.HintSha256 != null && currentHintHash != null && !Hashing.FixedEqualsHex(record.HintSha256, currentHintHash)))
                     {
-                        report.Issues.Add(new TranslationIssue(record.Id, "stale-hint", ValidationSeverity.Error, "Ukrainian context hint changed; review this translation again."));
+                        report.Issues.Add(new TranslationIssue(record.Id, "stale-hint",
+                            profile == ValidationProfile.Release ? ValidationSeverity.Error : ValidationSeverity.Warning,
+                            "Ukrainian context hint changed; review this translation again."));
                         continue;
                     }
                 }

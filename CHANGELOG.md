@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1-dev — 2026-08-19
+
+- treated a stale source or stale Ukrainian hint as a preview warning instead of a blocking error, so a preview still assembles the records that survived a content update while a release keeps refusing them; a stale record is never composed either way, because the official English text is kept for it;
+- added `scripts/mac-preview-patch.sh` with `status`, `apply` and `restore`: it refuses to run while the game is open, keeps a verified content-addressed backup of the original `dl_uk_UA.bin`, replaces the file atomically inside the writable container, re-verifies the result, and is idempotent in both directions;
+- documented the locale slot table and why `uk_UA` stays the right target, together with the concrete glyph risk to look for on first launch.
+
 ## 0.3.0-dev — 2026-08-19
 
 - added `cache-profile`, which snapshots a local runtime cache tuple into a schema-1 compatibility profile with real hashes, content versions and revisions, always as `readiness=blocked` / `certified=false`;
