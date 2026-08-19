@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "minimum_supported_game_version": "0.60.1247",
+  "notes": "Русификатор обновляется сам из репозитория: приложение переустанавливать и доступ к диску выдавать заново не нужно.",
+  "download_url": "https://github.com/Braintfy/ruslocal-invokers/releases",
+  "bundle_notes": "Изменился сам launcher или встроенный обработчик файлов игры, поэтому нужна новая сборка приложения.",
+  "patcher_version": "2.2.0",
+  "patcher_sha256": "26AA6A8DA7723CB2F87FB156395E6DFA8DF2870D320E9E707B0F95E9FEA32556",
+  "minimum_bundle_version": "2.2.0"
+}

@@ -48,6 +48,7 @@ namespace InvokersRu.Cli
                     case "plan": return Status(options, plan: true);
                     case "trusted-manifest-info": return TrustedManifestInfo(options);
                     case "trusted-runtime-cache-info": return TrustedRuntimeCacheInfo(options);
+                    case "cache-profile": return RuntimeCacheProfile(options);
                     case "cache-status": return RuntimeCacheStatus(options, plan: false);
                     case "cache-plan": return RuntimeCacheStatus(options, plan: true);
                     case "cache-apply": return RuntimeCacheApply(options);
@@ -526,13 +527,64 @@ namespace InvokersRu.Cli
             return 0;
         }
 
+        private static bool TryResolveCacheRoot(ArgumentBag options, out string cacheRoot)
+        {
+            if (options.Has("cache-root"))
+            {
+                cacheRoot = options.Required("cache-root");
+                return true;
+            }
+
+            if (RuntimeCacheService.TryDefaultCacheRoot(out cacheRoot, out string problem))
+            {
+                return true;
+            }
+
+            Console.Error.WriteLine($"ERROR: {problem}");
+            return false;
+        }
+
+        private static int RuntimeCacheProfile(ArgumentBag options)
+        {
+            options.RequireNoExtraPositionals(0);
+            string outputPath = options.Required("output");
+            ArgumentBag.RequireSafeNewOutput(outputPath);
+            if (!TryResolveCacheRoot(options, out string cacheRoot)) return 5;
+            (string defaultEnglish, string defaultBase, string defaultStamp) = RuntimeCacheService.ResolveTuplePaths(cacheRoot);
+            string englishPath = options.Optional("english", defaultEnglish);
+            string basePath = options.Optional("base", defaultBase);
+            string stampPath = options.Optional("stamp", defaultStamp);
+            foreach ((string label, string path) in new[]
+            {
+                ("dl_en_US.bin", englishPath), ("dl_uk_UA.bin", basePath), ("dl_uk_UA.bin.ver", stampPath)
+            })
+            {
+                if (!File.Exists(path))
+                {
+                    throw new IOException($"Runtime-cache tuple member {label} is missing: {path}");
+                }
+            }
+
+            RuntimeCacheCompatibility profile = RuntimeCacheService.DescribeTuple(
+                englishPath, basePath, stampPath, options.Optional("id", string.Empty));
+            var serializerOptions = new JsonSerializerOptions { WriteIndented = true };
+            File.WriteAllText(outputPath, JsonSerializer.Serialize(profile, serializerOptions) + Environment.NewLine);
+            Console.WriteLine($"Runtime-cache profile written: {Path.GetFullPath(outputPath)}");
+            Console.WriteLine($"Game version: {profile.GameVersion}; entries: {profile.EntryCount:N0}");
+            Console.WriteLine($"English: {profile.EnglishContentVersion} (release {profile.EnglishReleaseRevision}); base: {profile.BaseContentVersion} (release {profile.BaseReleaseRevision})");
+            Console.WriteLine($"English SHA-256: {profile.EnglishSha256}");
+            Console.WriteLine($"Base SHA-256: {profile.BaseSha256}");
+            Console.WriteLine("Readiness is blocked and certified is false: pin the catalog and built output before any supervised write build.");
+            return 0;
+        }
+
         private static int RuntimeCacheStatus(ArgumentBag options, bool plan)
         {
             options.RequireNoExtraPositionals(0);
             RuntimeCacheCompatibility profile = plan && InstallationWritesEnabled
                 ? LoadTrustedRuntimeCacheCompatibility()
                 : RuntimeCacheCompatibility.OfficialObserved0601239();
-            string cacheRoot = RuntimeCacheService.DefaultCacheRoot();
+            if (!TryResolveCacheRoot(options, out string cacheRoot)) return 5;
             string statePath = RuntimeCacheService.DefaultStatePath();
             RuntimeCacheInspection inspection = RuntimeCacheService.Inspect(cacheRoot, profile, statePath);
             Console.WriteLine($"Status: {inspection.Status}");
@@ -788,7 +840,8 @@ namespace InvokersRu.Cli
                 "status" or "plan" => (new[] { "compat", "game-root", "state" }, Array.Empty<string>()),
                 "trusted-manifest-info" => (Array.Empty<string>(), Array.Empty<string>()),
                 "trusted-runtime-cache-info" => (Array.Empty<string>(), Array.Empty<string>()),
-                "cache-status" or "cache-plan" => (Array.Empty<string>(), Array.Empty<string>()),
+                "cache-status" or "cache-plan" => (new[] { "cache-root" }, Array.Empty<string>()),
+                "cache-profile" => (new[] { "output", "cache-root", "english", "base", "stamp", "id" }, Array.Empty<string>()),
                 "cache-apply" => (new[] { "translations", "acknowledge-risk", "include-draft" }, new[] { "include-draft" }),
                 "cache-restore" or "cache-recover" => (new[] { "acknowledge-risk" }, Array.Empty<string>()),
                 "apply" => (new[] { "translations", "compat", "game-root", "state", "include-draft", "acknowledge-risk" }, new[] { "include-draft" }),
@@ -809,14 +862,15 @@ namespace InvokersRu.Cli
             Console.WriteLine("  plan [--game-root PATH]    Explain apply/refuse decision");
             Console.WriteLine("  trusted-manifest-info      Print embedded manifest hash/metadata (supervised build)");
             Console.WriteLine("  trusted-runtime-cache-info Print embedded raw-cache profile pins (supervised build)");
-            Console.WriteLine("  cache-status               Inspect the exact LocalLow raw localization cache tuple");
-            Console.WriteLine("  cache-plan                 Explain cache apply/refuse decision");
+            Console.WriteLine("  cache-status [--cache-root PATH]  Inspect the exact raw localization cache tuple");
+            Console.WriteLine("  cache-plan   [--cache-root PATH]  Explain cache apply/refuse decision");
             Console.WriteLine("  validate --english FILE --translations FILE [--ukrainian FILE] [--per-locale-content-version] [--profile preview|release]");
             Console.WriteLine("  diff --english FILE --translations FILE");
             Console.WriteLine();
             Console.WriteLine("Workspace output only:");
             Console.WriteLine("  jobs --english FILE [--ukrainian FILE] --output PRIVATE.jsonl [--per-id] [--review-queue]");
             Console.WriteLine("  import-results --english FILE --jobs PRIVATE.jsonl --results FILE --output ru_RU.jsonl [--allow-partial]");
+            Console.WriteLine("  cache-profile --output PROFILE.json [--cache-root PATH] [--english FILE] [--base FILE] [--stamp FILE] [--id NAME]");
             Console.WriteLine("  build --english FILE --base FILE --translations FILE --output FILE [--raw] [--per-locale-content-version] [--report FILE] [--include-draft] [--exclude-needs-review] [--release]");
             Console.WriteLine();
             Console.WriteLine("Installation changes:");
