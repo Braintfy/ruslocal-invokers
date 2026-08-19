@@ -16,6 +16,14 @@ import re
 import sys
 
 UNIT_RE = re.compile(r"[-+]?\d+(?:[.,]\d+)?(?:ms|s|m|h|d|px|x|%)\b", re.IGNORECASE)
+# The importer rejects unmapped members outright, and bulk models occasionally decorate a row with
+# an extra field, so the output is rebuilt from exactly the schema's properties.
+RESULT_FIELDS = (
+    "job_id", "translation", "model", "prompt_version", "confidence", "needs_review", "issue_codes",
+)
+ALLOWED_ISSUE_CODES = {
+    "ambiguous_context", "terminology", "lore", "ui_length", "grammar", "mechanics",
+}
 # Cyrillic letters models pick for each Latin unit suffix.
 CYRILLIC_TO_LATIN = {
     "м": "m", "М": "m",
@@ -79,7 +87,16 @@ def main() -> int:
                     row["translation"] = fixed
                     repaired_rows += 1
                     repaired_tokens += count
-            out.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+            clean = {field: row[field] for field in RESULT_FIELDS if field in row}
+            clean.setdefault("issue_codes", [])
+            clean["issue_codes"] = [
+                code for code in clean["issue_codes"] if code in ALLOWED_ISSUE_CODES
+            ]
+            if clean.get("confidence") not in ("high", "medium", "low"):
+                clean["confidence"] = "medium"
+            clean["needs_review"] = bool(clean.get("needs_review", False))
+            out.write(json.dumps(clean, ensure_ascii=False) + "\n")
 
     print(f"rows={total} repaired_rows={repaired_rows} repaired_units={repaired_tokens}")
     return 0

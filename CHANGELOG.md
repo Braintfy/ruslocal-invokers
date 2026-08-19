@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0-dev — 2026-08-19
+
+- translated the rest of the corpus: the public overlay now carries 40 541 records against `Prod_0.60.0_68`, so a build applies 40 541 of 41 292 strings and leaves 497 in English plus 254 empty source entries;
+- ran the bulk pass as 158 batches on a small model at low reasoning effort, then filtered the output through the real importer, which refused 331 jobs on placeholder, number or unit mismatches; those stay English rather than shipping broken text;
+- added `scripts/normalize-model-results.py`, which restores compact mechanic units the model transliterated (`6м` back to `6m`) and rebuilds each row from exactly the schema's fields; a unit is only ever restored when the English source actually contains it;
+- stopped excluding needs-review records when the macOS app builds: two thirds of the catalog carries that flag only because identical English appears on several screens, and excluding it applied 576 strings instead of 40 541;
+- fixed the terms the main menu shows every session and pinned them in the glossary: Fusion is Слияние, plus Index, Market and Event;
+- requested the overlay with transfer compression, since it is now tens of megabytes of JSONL.
+
 ## 0.4.0-dev — 2026-08-19
 
 - added a macOS application bundle so the preview installs by downloading one file and pressing a button: `mac/patcher-main.sh` drives native dialogs, `scripts/build-mac-app.sh` assembles the signed-ad-hoc `.app` and a `.dmg` around a self-contained `osx-arm64` build of the CLI;

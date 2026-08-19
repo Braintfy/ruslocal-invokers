@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "app_version": "1.1.0",
+  "app_version": "1.2.0",
   "minimum_supported_game_version": "0.60.1247",
-  "notes": "Исправлен доступ к данным игры: приложение подсказывает, как выдать полный доступ к диску, без которого не создавалась резервная копия.",
+  "notes": "Полный перевод: 40 541 строка из 41 292 (98%). Исправлен доступ к данным игры на macOS.",
   "download_url": "https://github.com/Braintfy/ruslocal-invokers/releases"
 }

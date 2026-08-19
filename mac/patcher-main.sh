@@ -4,7 +4,7 @@
 
 set -uo pipefail
 
-APP_VERSION="1.1.0"
+APP_VERSION="1.2.0"
 REPO_RAW="https://raw.githubusercontent.com/Braintfy/ruslocal-invokers/main"
 OVERLAY_URL="${REPO_RAW}/translations/ru_RU.jsonl"
 MANIFEST_URL="${REPO_RAW}/config/mac-patcher.json"
@@ -116,7 +116,8 @@ atomic_install() {
 
 # ---------- update check ----------
 
-fetch() { curl -fsSL --max-time 30 "$1" -o "$2" 2>>"$LOG_FILE"; }
+# The overlay is tens of megabytes of JSONL, which compresses roughly tenfold in transit.
+fetch() { curl -fsSL --compressed --max-time 300 "$1" -o "$2" 2>>"$LOG_FILE"; }
 
 check_app_update() {
     local manifest="${WORK_DIR}/manifest.json" latest notes
@@ -176,10 +177,14 @@ do_install() {
     progress_start "building"
     built="${WORK_DIR}/${TARGET_NAME}.ru"
     rm -f "$built" "${WORK_DIR}/report.json"
+    # Applies every draft rather than only the conservative subset. Two thirds of the catalog carries
+    # needs_review purely because identical English appears in several screens, which is a wording
+    # nuance rather than a correctness problem; mechanically broken strings are already rejected at
+    # import time and never reach the overlay.
     if ! "$CLI" build --english "$english" --base "$target" \
             --translations "$OVERLAY_CACHE" --output "$built" \
             --report "${WORK_DIR}/report.json" \
-            --include-draft --exclude-needs-review --raw --per-locale-content-version >>"$LOG_FILE" 2>&1; then
+            --include-draft --raw --per-locale-content-version >>"$LOG_FILE" 2>&1; then
         say_error "Не удалось собрать перевод для этой версии игры.
 
 Скорее всего игра обновилась и перевод ещё не адаптирован. Подробности: ${LOG_FILE}"

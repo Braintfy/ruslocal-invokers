@@ -92,7 +92,11 @@
     { "source": "Language", "target": "Язык" },
     { "source": "Graphics", "target": "Графика" },
     { "source": "Account", "target": "Учетная запись" },
-    { "source": "Free", "target": "Бесплатно" }
+    { "source": "Free", "target": "Бесплатно" },
+    { "source": "Fusion", "target": "Слияние", "forms": "system name; not сплав" },
+    { "source": "Index", "target": "Индекс" },
+    { "source": "Market", "target": "Рынок" },
+    { "source": "Event", "target": "событие", "forms": "События as a standalone UI heading" }
   ],
   "do_not_translate": [
     "Invokers",
