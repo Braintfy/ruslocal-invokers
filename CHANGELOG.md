@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0-dev — 2026-08-19
+
+- added a macOS application bundle so the preview installs by downloading one file and pressing a button: `mac/patcher-main.sh` drives native dialogs, `scripts/build-mac-app.sh` assembles the signed-ad-hoc `.app` and a `.dmg` around a self-contained `osx-arm64` build of the CLI;
+- shipped no game data in the bundle: the Russian file is composed on the user's own machine from their installed game plus the public source-free overlay, which the app downloads from the repository at install time, so a new translation needs no new download of the app;
+- checked `config/mac-patcher.json` for a newer app version on launch and degraded silently when offline or when the manifest is absent;
+- warned explicitly about the behaviour that silently undoes the patch: the client re-downloads the localization file whenever a language is selected in the game, so the language must stay Ukrainian after installing;
+- kept the same safety properties as the shell script: refuses to run while the game is open, verifies a content-addressed backup before and after, replaces atomically, re-verifies the installed hash and rolls back if it disagrees.
+
 ## 0.3.1-dev — 2026-08-19
 
 - treated a stale source or stale Ukrainian hint as a preview warning instead of a blocking error, so a preview still assembles the records that survived a content update while a release keeps refusing them; a stale record is never composed either way, because the official English text is kept for it;

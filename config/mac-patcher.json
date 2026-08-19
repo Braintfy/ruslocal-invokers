@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "app_version": "1.0.0",
+  "minimum_supported_game_version": "0.60.1247",
+  "notes": "Первая публичная сборка русификатора для macOS. Перевод неполный: 576 проверенных строк интерфейса.",
+  "download_url": "https://github.com/Braintfy/ruslocal-invokers/releases"
+}
