@@ -4,7 +4,7 @@
 
 set -uo pipefail
 
-APP_VERSION="2.0.0"
+APP_VERSION="2.1.0"
 REPO_RAW="https://raw.githubusercontent.com/Braintfy/ruslocal-invokers/main"
 OVERLAY_URL="${REPO_RAW}/translations/ru_RU.jsonl"
 MANIFEST_URL="${REPO_RAW}/config/mac-patcher.json"

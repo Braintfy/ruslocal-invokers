@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "locale": "ru-RU",
-  "revision": "mvp-2026-08-15.1",
+  "revision": "full-2026-08-19.1",
   "style": {
     "tone": "clear concise fantasy action RPG",
     "address": "polite plural: вы; imperative plural in player-facing instructions",
@@ -15,96 +15,508 @@
     "buttons": "use a short infinitive and preserve source capitalization pattern"
   },
   "terms": [
-    { "source": "Invoker", "target": "инвокер", "forms": "Инвокер only at sentence start or in an ALL CAPS label; Invokers brand remains Latin" },
-    { "source": "Titan", "target": "титан", "forms": "generic gameplay entity; Titan Legacy title remains Latin" },
-    { "source": "Collection", "target": "коллекция" },
-    { "source": "Inventory", "target": "инвентарь" },
-    { "source": "Skill", "target": "навык" },
-    { "source": "Relic", "target": "реликвия" },
-    { "source": "Gear", "target": "снаряжение" },
-    { "source": "Soul Sign", "target": "знак души", "forms": "capitalize only as a standalone UI heading" },
-    { "source": "Shard", "target": "осколок", "forms": "named elemental variants: Огненный осколок, Ледяной осколок" },
-    { "source": "Titanheart", "target": "сердце титана" },
-    { "source": "Ultimate Mana", "target": "ультимативная мана", "forms": "do not shorten to ульт. мана in new translations" },
-    { "source": "Titan Mana", "target": "мана титана" },
-    { "source": "Mana Gen", "target": "генерация маны" },
-    { "source": "Manashock", "target": "Манашок", "forms": "mechanic name; one word" },
-    { "source": "Manashock Corruption", "target": "Скверна Манашока" },
-    { "source": "Corruption", "target": "Скверна", "forms": "named mechanic; X Corruption = Скверна X in names, lowercase only for a generic lore meaning" },
-    { "source": "Tolerance", "target": "устойчивость", "forms": "X Tolerance = устойчивость к X; Tolerance Stat = показатель устойчивости" },
-    { "source": "Ascend", "target": "возвысить" },
-    { "source": "Ascension", "target": "Возвышение", "forms": "system name; lowercase in generic running text when grammar requires" },
-    { "source": "Awaken", "target": "пробудить" },
-    { "source": "Awakening", "target": "Пробуждение" },
-    { "source": "Empower", "target": "усилить" },
-    { "source": "Empowerment", "target": "Усиление" },
-    { "source": "Level Up", "target": "повысить уровень", "forms": "verb/action" },
-    { "source": "Upgrade", "target": "улучшить", "forms": "verb; Upgrade noun = улучшение" },
-    { "source": "Summon", "target": "призвать", "forms": "verb; Summon noun/system = призыв" },
-    { "source": "Dismiss", "target": "отпустить", "forms": "for an invoker or titan; for a relic/item use удалить unless screenshot context proves dismantling" },
-    { "source": "Equip", "target": "надеть" },
-    { "source": "Unequip", "target": "снять" },
-    { "source": "Claim", "target": "получить" },
-    { "source": "Quest", "target": "задание" },
-    { "source": "Mission", "target": "миссия" },
-    { "source": "Reward", "target": "награда" },
-    { "source": "Battle", "target": "бой" },
-    { "source": "Buff", "target": "бафф", "forms": "compact established combat term" },
-    { "source": "Debuff", "target": "дебафф", "forms": "compact established combat term" },
-    { "source": "Stack", "target": "заряд", "forms": "mechanical status stack; translate stack verb according to grammar" },
-    { "source": "Damage over Time", "target": "периодический урон" },
-    { "source": "Tick", "target": "срабатывание", "forms": "periodic effect occurrence" },
-    { "source": "Shield", "target": "щит" },
-    { "source": "Deflection", "target": "перенаправление урона" },
-    { "source": "Accuracy", "target": "точность" },
-    { "source": "Damage", "target": "урон" },
-    { "source": "Heal", "target": "исцелить", "forms": "Healing noun = исцеление" },
-    { "source": "HP", "target": "HP", "forms": "preserve source stat abbreviation until screenshot/width QA" },
-    { "source": "MAX HP", "target": "MAX HP", "forms": "preserve source stat abbreviation until screenshot/width QA" },
-    { "source": "ATK", "target": "ATK", "forms": "preserve source stat abbreviation until screenshot/width QA" },
-    { "source": "DEF", "target": "DEF", "forms": "preserve source stat abbreviation until screenshot/width QA" },
-    { "source": "RES", "target": "RES", "forms": "separate stat from Tolerance; preserve source abbreviation" },
-    { "source": "Move SPD", "target": "скорость передвижения", "forms": "СКОР. ДВИЖ. only in a compact stat label" },
-    { "source": "Common", "target": "обычный" },
-    { "source": "Uncommon", "target": "необычный" },
-    { "source": "Rare", "target": "редкий" },
-    { "source": "Epic", "target": "эпический" },
-    { "source": "Legendary", "target": "легендарный" },
-    { "source": "Mythical", "target": "мифический" },
-    { "source": "Fire", "target": "Огонь", "forms": "element name" },
-    { "source": "Water", "target": "Вода", "forms": "element name" },
-    { "source": "Wind", "target": "Ветер", "forms": "element name" },
-    { "source": "Earth", "target": "Земля", "forms": "element name" },
-    { "source": "Light", "target": "Свет", "forms": "element name" },
-    { "source": "Dark", "target": "Тьма", "forms": "element name" },
-    { "source": "Continue", "target": "Продолжить" },
-    { "source": "Cancel", "target": "Отмена" },
-    { "source": "Confirm", "target": "Подтвердить" },
-    { "source": "Back", "target": "Назад" },
-    { "source": "Close", "target": "Закрыть" },
-    { "source": "Exit", "target": "Выйти" },
-    { "source": "Save", "target": "Сохранить" },
-    { "source": "Apply", "target": "Применить" },
-    { "source": "Retry", "target": "Повторить" },
-    { "source": "Skip", "target": "Пропустить" },
-    { "source": "Play", "target": "Играть" },
-    { "source": "Settings", "target": "Настройки" },
-    { "source": "Language", "target": "Язык" },
-    { "source": "Graphics", "target": "Графика" },
-    { "source": "Account", "target": "Учетная запись" },
-    { "source": "Free", "target": "Бесплатно" },
-    { "source": "Fusion", "target": "Слияние", "forms": "system name; not сплав" },
-    { "source": "Index", "target": "Индекс" },
-    { "source": "Market", "target": "Рынок" },
-    { "source": "Event", "target": "событие", "forms": "События as a standalone UI heading" }
+    {
+      "source": "Invoker",
+      "target": "инвокер",
+      "forms": "Инвокер only at sentence start or in an ALL CAPS label; Invokers brand remains Latin"
+    },
+    {
+      "source": "Titan",
+      "target": "титан",
+      "forms": "generic gameplay entity; Titan Legacy title remains Latin"
+    },
+    {
+      "source": "Collection",
+      "target": "коллекция"
+    },
+    {
+      "source": "Inventory",
+      "target": "инвентарь"
+    },
+    {
+      "source": "Skill",
+      "target": "навык"
+    },
+    {
+      "source": "Relic",
+      "target": "реликвия"
+    },
+    {
+      "source": "Gear",
+      "target": "снаряжение"
+    },
+    {
+      "source": "Soul Sign",
+      "target": "знак души",
+      "forms": "capitalize only as a standalone UI heading"
+    },
+    {
+      "source": "Shard",
+      "target": "осколок",
+      "forms": "named elemental variants: Огненный осколок, Ледяной осколок"
+    },
+    {
+      "source": "Titanheart",
+      "target": "сердце титана"
+    },
+    {
+      "source": "Ultimate Mana",
+      "target": "ультимативная мана",
+      "forms": "do not shorten to ульт. мана in new translations"
+    },
+    {
+      "source": "Titan Mana",
+      "target": "мана титана"
+    },
+    {
+      "source": "Mana Gen",
+      "target": "генерация маны"
+    },
+    {
+      "source": "Manashock",
+      "target": "Манашок",
+      "forms": "mechanic name; one word"
+    },
+    {
+      "source": "Manashock Corruption",
+      "target": "Скверна Манашока"
+    },
+    {
+      "source": "Corruption",
+      "target": "Скверна",
+      "forms": "named mechanic; X Corruption = Скверна X in names, lowercase only for a generic lore meaning"
+    },
+    {
+      "source": "Tolerance",
+      "target": "устойчивость",
+      "forms": "X Tolerance = устойчивость к X; Tolerance Stat = показатель устойчивости"
+    },
+    {
+      "source": "Ascend",
+      "target": "возвысить"
+    },
+    {
+      "source": "Ascension",
+      "target": "Возвышение",
+      "forms": "system name; lowercase in generic running text when grammar requires"
+    },
+    {
+      "source": "Awaken",
+      "target": "пробудить"
+    },
+    {
+      "source": "Awakening",
+      "target": "Пробуждение"
+    },
+    {
+      "source": "Empower",
+      "target": "усилить"
+    },
+    {
+      "source": "Empowerment",
+      "target": "Усиление"
+    },
+    {
+      "source": "Level Up",
+      "target": "повысить уровень",
+      "forms": "verb/action"
+    },
+    {
+      "source": "Upgrade",
+      "target": "улучшить",
+      "forms": "verb; Upgrade noun = улучшение"
+    },
+    {
+      "source": "Summon",
+      "target": "призвать",
+      "forms": "verb; Summon noun/system = призыв"
+    },
+    {
+      "source": "Dismiss",
+      "target": "отпустить",
+      "forms": "for an invoker or titan; for a relic/item use удалить unless screenshot context proves dismantling"
+    },
+    {
+      "source": "Equip",
+      "target": "надеть"
+    },
+    {
+      "source": "Unequip",
+      "target": "снять"
+    },
+    {
+      "source": "Claim",
+      "target": "получить"
+    },
+    {
+      "source": "Quest",
+      "target": "задание"
+    },
+    {
+      "source": "Mission",
+      "target": "миссия"
+    },
+    {
+      "source": "Reward",
+      "target": "награда"
+    },
+    {
+      "source": "Battle",
+      "target": "бой"
+    },
+    {
+      "source": "Buff",
+      "target": "бафф",
+      "forms": "compact established combat term"
+    },
+    {
+      "source": "Debuff",
+      "target": "дебафф",
+      "forms": "compact established combat term"
+    },
+    {
+      "source": "Stack",
+      "target": "заряд",
+      "forms": "mechanical status stack; translate stack verb according to grammar"
+    },
+    {
+      "source": "Damage over Time",
+      "target": "периодический урон"
+    },
+    {
+      "source": "Tick",
+      "target": "срабатывание",
+      "forms": "periodic effect occurrence"
+    },
+    {
+      "source": "Shield",
+      "target": "щит"
+    },
+    {
+      "source": "Deflection",
+      "target": "перенаправление урона"
+    },
+    {
+      "source": "Accuracy",
+      "target": "точность"
+    },
+    {
+      "source": "Damage",
+      "target": "урон"
+    },
+    {
+      "source": "Heal",
+      "target": "исцелить",
+      "forms": "Healing noun = исцеление"
+    },
+    {
+      "source": "HP",
+      "target": "HP",
+      "forms": "preserve source stat abbreviation until screenshot/width QA"
+    },
+    {
+      "source": "MAX HP",
+      "target": "MAX HP",
+      "forms": "preserve source stat abbreviation until screenshot/width QA"
+    },
+    {
+      "source": "ATK",
+      "target": "ATK",
+      "forms": "preserve source stat abbreviation until screenshot/width QA"
+    },
+    {
+      "source": "DEF",
+      "target": "DEF",
+      "forms": "preserve source stat abbreviation until screenshot/width QA"
+    },
+    {
+      "source": "RES",
+      "target": "RES",
+      "forms": "separate stat from Tolerance; preserve source abbreviation"
+    },
+    {
+      "source": "Move SPD",
+      "target": "скорость передвижения",
+      "forms": "СКОР. ДВИЖ. only in a compact stat label"
+    },
+    {
+      "source": "Common",
+      "target": "обычный"
+    },
+    {
+      "source": "Uncommon",
+      "target": "необычный"
+    },
+    {
+      "source": "Rare",
+      "target": "редкий"
+    },
+    {
+      "source": "Epic",
+      "target": "эпический"
+    },
+    {
+      "source": "Legendary",
+      "target": "легендарный"
+    },
+    {
+      "source": "Mythical",
+      "target": "мифический"
+    },
+    {
+      "source": "Fire",
+      "target": "Огонь",
+      "forms": "element name"
+    },
+    {
+      "source": "Water",
+      "target": "Вода",
+      "forms": "element name"
+    },
+    {
+      "source": "Wind",
+      "target": "Ветер",
+      "forms": "element name"
+    },
+    {
+      "source": "Earth",
+      "target": "Земля",
+      "forms": "element name"
+    },
+    {
+      "source": "Light",
+      "target": "Свет",
+      "forms": "element name"
+    },
+    {
+      "source": "Dark",
+      "target": "Тьма",
+      "forms": "element name"
+    },
+    {
+      "source": "Continue",
+      "target": "Продолжить"
+    },
+    {
+      "source": "Cancel",
+      "target": "Отмена"
+    },
+    {
+      "source": "Confirm",
+      "target": "Подтвердить"
+    },
+    {
+      "source": "Back",
+      "target": "Назад"
+    },
+    {
+      "source": "Close",
+      "target": "Закрыть"
+    },
+    {
+      "source": "Exit",
+      "target": "Выйти"
+    },
+    {
+      "source": "Save",
+      "target": "Сохранить"
+    },
+    {
+      "source": "Apply",
+      "target": "Применить"
+    },
+    {
+      "source": "Retry",
+      "target": "Повторить"
+    },
+    {
+      "source": "Skip",
+      "target": "Пропустить"
+    },
+    {
+      "source": "Play",
+      "target": "Играть"
+    },
+    {
+      "source": "Settings",
+      "target": "Настройки"
+    },
+    {
+      "source": "Language",
+      "target": "Язык"
+    },
+    {
+      "source": "Graphics",
+      "target": "Графика"
+    },
+    {
+      "source": "Account",
+      "target": "Учетная запись"
+    },
+    {
+      "source": "Free",
+      "target": "Бесплатно"
+    },
+    {
+      "source": "Fusion",
+      "target": "Слияние",
+      "forms": "system name; not сплав"
+    },
+    {
+      "source": "Index",
+      "target": "Индекс"
+    },
+    {
+      "source": "Market",
+      "target": "Рынок"
+    },
+    {
+      "source": "Event",
+      "target": "событие",
+      "forms": "События as a standalone UI heading"
+    },
+    {
+      "source": "Ultimate Skill",
+      "target": "ультимативный навык"
+    },
+    {
+      "source": "Active Skill",
+      "target": "активный навык"
+    },
+    {
+      "source": "Passive Skill",
+      "target": "пассивный навык"
+    },
+    {
+      "source": "Cooldown",
+      "target": "перезарядка"
+    },
+    {
+      "source": "Crowd Control",
+      "target": "контроль",
+      "forms": "дебаффы контроля; сокращение CC не использовать"
+    },
+    {
+      "source": "Stun",
+      "target": "Оглушение",
+      "forms": "название дебаффа, в тексте в скобках: [Оглушение]"
+    },
+    {
+      "source": "Weaken",
+      "target": "Ослабление",
+      "forms": "[Ослабление X%]; знак + или − перед числом не добавлять"
+    },
+    {
+      "source": "ATK Up",
+      "target": "Усиление ATK",
+      "forms": "[Усиление ATK X%]"
+    },
+    {
+      "source": "Crit DMG Up",
+      "target": "Усиление крит. урона",
+      "forms": "[Усиление крит. урона X%]"
+    },
+    {
+      "source": "ACC Down",
+      "target": "Снижение ACC",
+      "forms": "[Снижение ACC X%]"
+    },
+    {
+      "source": "DEF Down",
+      "target": "Снижение DEF",
+      "forms": "[Снижение DEF X%]"
+    },
+    {
+      "source": "Immunity",
+      "target": "Иммунитет"
+    },
+    {
+      "source": "Silence",
+      "target": "Немота"
+    },
+    {
+      "source": "Freeze",
+      "target": "Заморозка"
+    },
+    {
+      "source": "Burn",
+      "target": "Горение"
+    },
+    {
+      "source": "Bleed",
+      "target": "Кровотечение"
+    },
+    {
+      "source": "Poison",
+      "target": "Отравление"
+    },
+    {
+      "source": "Provoke",
+      "target": "Провокация"
+    },
+    {
+      "source": "Revive",
+      "target": "Воскрешение"
+    },
+    {
+      "source": "Invincibility",
+      "target": "Неуязвимость"
+    },
+    {
+      "source": "Campaign",
+      "target": "кампания"
+    },
+    {
+      "source": "Tower",
+      "target": "башня"
+    },
+    {
+      "source": "Wave",
+      "target": "волна"
+    },
+    {
+      "source": "Stage",
+      "target": "этап"
+    },
+    {
+      "source": "Instinct",
+      "target": "инстинкт"
+    },
+    {
+      "source": "Resistance",
+      "target": "сопротивление",
+      "forms": "стат RES сокращение не переводить"
+    },
+    {
+      "source": "Charges",
+      "target": "Совершает рывок к",
+      "forms": "о навыке: Charges 1 enemy = Совершает рывок к 1 врагу"
+    },
+    {
+      "source": "Steals",
+      "target": "похищает",
+      "forms": "о баффах: Steals N random buffs = похищает N случайных баффов"
+    }
   ],
   "do_not_translate": [
     "Invokers",
     "Titan Legacy"
   ],
   "open_questions": [
-    "Verify glyph coverage for ы, э, ъ and ё in the Ukrainian locale font during the supervised client test.",
-    "Create an approved onomasticon before transliterating character, boss, place and skill proper names.",
-    "Confirm community preference for Возвышение, Усиление and ультимативная мана after screenshot QA."
-  ]
+    "Единицы измерения (12x8m, 5s) остаются латиницей: этого требует проверка совместимости, локализованные варианты отбраковываются.",
+    "Знак + или − перед числом добавлять нельзя: числовая проверка сверяет токены с оригиналом побайтово.",
+    "Терминология сверена с invokersdb.app и ggnoluck.com в августе 2026 года."
+  ],
+  "skill_phrasing": {
+    "Attacks 1 enemy, dealing X damage": "Атакует 1 врага, нанося X урона",
+    "Attacks 1 enemy N times, dealing X damage per hit": "Атакует 1 врага N раза, нанося X урона за удар",
+    "Casts a [X] buff on TARGET, lasting Ns": "Накладывает бафф [X] на TARGET на Ns",
+    "Casts a [X] debuff on each target hit, lasting Ns": "Накладывает дебафф [X] на каждую поражённую цель на Ns",
+    "Then,": "Затем",
+    "gains N Titan Mana": "получает N маны титана",
+    "gains N Ultimate Mana": "получает N ультимативной маны",
+    "Requires Accuracy for:": "Требуется точность для:",
+    "if the target is immune to Crowd Control debuffs": "если цель невосприимчива к дебаффам контроля",
+    "Launches the target, knocking them Nm away": "Подбрасывает цель, отбрасывая её на Nm"
+  }
 }

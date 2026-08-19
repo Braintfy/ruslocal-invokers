@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0-macos — 2026-08-19
+
+- reworked 8 484 unique strings with a stronger model after screenshots showed half-English skill descriptions in game. The bulk pass had left 9 227 records partly or wholly untranslated: on long strings dense with placeholders and rich-text tags it preserved the markup and translated only isolated words, producing text like «This Инвокер is at the maximum Level … Ascend them к 6 … к keep Levelling Up»;
+- measured the result the same way it was detected: partly-English records fell from 5 507 to 2 and wholly-English ones from 3 720 to 662, with the validator reporting zero errors across all 40 541 records;
+- pinned skill phrasing and buff names in the glossary against the terminology published on invokersdb.app and ggnoluck.com, so «Casts a [X] debuff on each target hit, lasting Ns» now reads «Накладывает дебафф [X] на каждую поражённую цель на Ns» everywhere, and bracketed effects are translated consistently: [Stun] as [Оглушение], [X% ATK Up] as [Усиление ATK X%];
+- kept a plus or minus sign out of translated effect names, because the numeric check compares tokens against the source byte for byte and «+40%» would be refused where the source says «40%».
+
 ## 1.0.0-macos — 2026-08-19
 
 - made the bundle's main executable a real Mach-O binary (`mac/launcher.c`) that runs the driver script as a child. A bundle whose entry point is a shell script cannot hold a Full Disk Access grant: the running process is `/bin/bash`, a platform binary the grant cannot be pinned to, so the switch in System Settings showed as enabled while every read of the game container still failed with EPERM. Directory listings kept working, which is why the app found the cache root and then could not back it up;
