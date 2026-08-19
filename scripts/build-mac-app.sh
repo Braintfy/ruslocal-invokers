@@ -17,8 +17,27 @@ RID="osx-arm64"
 DOTNET="${DOTNET:-$(command -v dotnet || echo "${HOME}/.dotnet/dotnet")}"
 [ -x "$DOTNET" ] || { echo "ERROR: dotnet SDK not found; set DOTNET=/path/to/dotnet" >&2; exit 1; }
 
-APP_VERSION="$(/usr/bin/sed -n 's/.*"app_version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${REPO_ROOT}/config/mac-patcher.json" | head -1)"
-[ -n "$APP_VERSION" ] || { echo "ERROR: app_version missing from config/mac-patcher.json" >&2; exit 1; }
+APP_VERSION="$(/usr/bin/sed -n 's/^BUNDLE_VERSION="\(.*\)"$/\1/p' "${REPO_ROOT}/mac/patcher-main.sh" | head -1)"
+[ -n "$APP_VERSION" ] || { echo "ERROR: BUNDLE_VERSION missing from mac/patcher-main.sh" >&2; exit 1; }
+
+# The published manifest must carry the checksum of the exact script clients will download, otherwise
+# self-update refuses it. Keeping this in the build removes the chance of publishing a stale hash.
+PATCHER_VERSION="$(/usr/bin/sed -n 's/^APP_VERSION="\(.*\)"$/\1/p' "${REPO_ROOT}/mac/patcher-main.sh" | head -1)"
+PATCHER_SHA="$(shasum -a 256 "${REPO_ROOT}/mac/patcher-main.sh" | awk '{print toupper($1)}')"
+/usr/bin/python3 - "$REPO_ROOT" "$PATCHER_VERSION" "$PATCHER_SHA" "$APP_VERSION" <<'PY'
+import json, sys
+repo, version, digest, bundle = sys.argv[1:5]
+path = f"{repo}/config/mac-patcher.json"
+with open(path, encoding="utf-8") as handle:
+    manifest = json.load(handle)
+manifest["patcher_version"] = version
+manifest["patcher_sha256"] = digest
+manifest["minimum_bundle_version"] = bundle
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(manifest, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+PY
+echo "Manifest pinned: patcher ${PATCHER_VERSION} (${PATCHER_SHA:0:16}…), bundle ${APP_VERSION}"
 
 echo "Building ${APP_NAME}.app v${APP_VERSION} for ${RID}"
 rm -rf "$APP_DIR"
@@ -116,6 +135,8 @@ rm -rf "$ICONSET"
 # Developer ID signature, so Gatekeeper still needs the documented right-click Open on first run.
 codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || echo "warning: ad-hoc codesign failed; the app still runs after right-click Open" >&2
 
+# Only the current image should ever be present, so nobody hands out a superseded build.
+find "$OUT_DIR" -maxdepth 1 -name 'Rusifikator-Invokers-*.dmg' -delete 2>/dev/null || true
 DMG_PATH="${OUT_DIR}/Rusifikator-Invokers-${APP_VERSION}.dmg"
 rm -f "$DMG_PATH"
 STAGE="${OUT_DIR}/dmg-stage"

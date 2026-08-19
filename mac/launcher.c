@@ -42,16 +42,43 @@ int main(int argc, char *argv[]) {
     snprintf(contents_copy, sizeof(contents_copy), "%s", macos_dir);
     char *contents_dir = dirname(contents_copy);
 
-    char script[PATH_MAX];
-    int written = snprintf(script, sizeof(script), "%s/Resources/patcher.sh", contents_dir);
-    if (written < 0 || (size_t)written >= sizeof(script)) {
+    char bundled[PATH_MAX];
+    int written = snprintf(bundled, sizeof(bundled), "%s/Resources/patcher.sh", contents_dir);
+    if (written < 0 || (size_t)written >= sizeof(bundled)) {
         fprintf(stderr, "launcher: script path does not fit in PATH_MAX\n");
         return 1;
+    }
+
+    // The updated driver lives outside the bundle on purpose. macOS binds a Full Disk Access grant to
+    // the bundle's code signature, and re-signing after touching any sealed file changes the cdhash,
+    // which silently revokes the grant. Keeping the bundle byte-identical for its whole life means the
+    // permission survives every update; only this script is replaced, from the project repository.
+    char script[PATH_MAX];
+    const char *home = getenv("HOME");
+    if (home != NULL) {
+        char updated[PATH_MAX];
+        written = snprintf(updated, sizeof(updated),
+                           "%s/Library/Application Support/InvokersRu/runtime/patcher.sh", home);
+        if (written > 0 && (size_t)written < sizeof(updated) && access(updated, R_OK) == 0) {
+            snprintf(script, sizeof(script), "%s", updated);
+        } else {
+            snprintf(script, sizeof(script), "%s", bundled);
+        }
+    } else {
+        snprintf(script, sizeof(script), "%s", bundled);
     }
 
     if (access(script, R_OK) != 0) {
         fprintf(stderr, "launcher: cannot read %s: %s\n", script, strerror(errno));
         return 1;
+    }
+
+    // The driver may be running from outside the bundle, so it cannot locate the bundled CLI relative
+    // to itself.
+    char resources[PATH_MAX];
+    written = snprintf(resources, sizeof(resources), "%s/Resources", contents_dir);
+    if (written > 0 && (size_t)written < sizeof(resources)) {
+        setenv("INVOKERSRU_RESOURCES", resources, 1);
     }
 
     char **child_argv = calloc((size_t)argc + 2, sizeof(char *));

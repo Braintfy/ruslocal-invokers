@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.2.0-macos — 2026-08-19
+
+- made the patcher update itself from the repository, so the application no longer has to be reinstalled for every fix. macOS pins a Full Disk Access grant to the bundle's code signature, and re-signing after touching any sealed file changes the cdhash and silently revokes the grant — verified directly: editing a resource reports «a sealed resource is missing or invalid», and re-signing moved the cdhash from 58b93a5b to e0484b8c;
+- moved the driver out of the bundle to `~/Library/Application Support/InvokersRu/runtime/` and had the launcher prefer it, leaving the bundle byte-identical for its whole life so the grant survives every update. The launcher passes the bundle's Resources path in the environment, because the driver can no longer locate the CLI relative to itself;
+- accepted a downloaded driver only when its SHA-256 matches the manifest and it passes a syntax check, and let anyone opt out with `~/Library/Application Support/InvokersRu/no-self-update`;
+- split the version in two: the driver version changes freely, while `minimum_bundle_version` marks the rare release that genuinely needs a new download, and that dialog now explains the grant has to be recreated;
+- had the build compute the driver checksum, write it into the manifest and delete superseded disk images, so a stale hash or an old build cannot be published by accident;
+- rewrote the README and the in-image instructions around what a player actually does, with download links per platform.
+
 ## 1.1.0-macos — 2026-08-19
 
 - reworked 8 484 unique strings with a stronger model after screenshots showed half-English skill descriptions in game. The bulk pass had left 9 227 records partly or wholly untranslated: on long strings dense with placeholders and rich-text tags it preserved the markup and translated only isolated words, producing text like «This Инвокер is at the maximum Level … Ascend them к 6 … к keep Levelling Up»;

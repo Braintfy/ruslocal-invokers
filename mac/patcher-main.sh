@@ -4,19 +4,25 @@
 
 set -uo pipefail
 
-APP_VERSION="2.1.0"
+# Version of this script. It updates itself from the repository; the bundle around it stays frozen.
+APP_VERSION="2.2.0"
+# Version of the application bundle, which only changes when the launcher or the CLI has to change.
+BUNDLE_VERSION="2.2.0"
+
 REPO_RAW="https://raw.githubusercontent.com/Braintfy/ruslocal-invokers/main"
 OVERLAY_URL="${REPO_RAW}/translations/ru_RU.jsonl"
 MANIFEST_URL="${REPO_RAW}/config/mac-patcher.json"
+PATCHER_URL="${REPO_RAW}/mac/patcher-main.sh"
 
-# Runs from Contents/Resources, started by the Mach-O launcher in Contents/MacOS.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESOURCES="$HERE"
+# Set by the launcher, because this script may be running from the updatable copy outside the bundle.
+RESOURCES="${INVOKERSRU_RESOURCES:-$HERE}"
 CLI="${RESOURCES}/InvokersRu.Cli"
 
 SUPPORT_DIR="${HOME}/Library/Application Support/InvokersRu"
 WORK_DIR="${SUPPORT_DIR}/work"
 BACKUP_DIR="${SUPPORT_DIR}/backups"
+RUNTIME_DIR="${SUPPORT_DIR}/runtime"
 STATE_FILE="${SUPPORT_DIR}/state.json"
 OVERLAY_CACHE="${SUPPORT_DIR}/ru_RU.jsonl"
 LOG_FILE="${SUPPORT_DIR}/patcher.log"
@@ -25,7 +31,7 @@ RESUME_MARKER="${SUPPORT_DIR}/.resuming"
 TARGET_NAME="dl_uk_UA.bin"
 TITLE="Русификатор Invokers"
 
-mkdir -p "$SUPPORT_DIR" "$WORK_DIR" "$BACKUP_DIR"
+mkdir -p "$SUPPORT_DIR" "$WORK_DIR" "$BACKUP_DIR" "$RUNTIME_DIR"
 exec 2>>"$LOG_FILE"
 printf '\n===== %s | v%s =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$APP_VERSION" >>"$LOG_FILE"
 
@@ -89,7 +95,8 @@ open_full_disk_settings() {
 
 relaunch_self() {
     local bundle
-    bundle="$(cd "${HERE}/../.." 2>/dev/null && pwd)"
+    # Resolved from the bundle's Resources, because this script may live outside the bundle.
+    bundle="$(cd "${RESOURCES}/../.." 2>/dev/null && pwd)"
     date +%s > "$RESUME_MARKER"
     if [ -n "$bundle" ] && [ -d "$bundle" ]; then
         open -n "$bundle" >/dev/null 2>&1 &
@@ -164,18 +171,59 @@ atomic_install() {
 # The overlay is tens of megabytes of JSONL, which compresses roughly tenfold in transit.
 fetch() { curl -fsSL --compressed --max-time 300 "$1" -o "$2" 2>>"$LOG_FILE"; }
 
-check_app_update() {
-    local manifest="${WORK_DIR}/manifest.json" latest notes
+# Replaces this script from the repository without touching the application bundle, so the Full Disk
+# Access grant — which macOS pins to the bundle's code signature — keeps working. The download is
+# accepted only when its SHA-256 matches the value published in the manifest.
+self_update() {
+    [ -z "${INVOKERSRU_UPDATED:-}" ] || return 0
+    [ ! -f "${SUPPORT_DIR}/no-self-update" ] || return 0
+
+    local manifest="${WORK_DIR}/manifest.json" published expected fresh
     fetch "$MANIFEST_URL" "$manifest" || return 0
-    latest="$(json_field "$manifest" app_version || true)"
-    [ -n "$latest" ] || return 0
-    if [ "$latest" != "$APP_VERSION" ]; then
-        notes="$(json_field "$manifest" notes || true)"
-        say_info "Доступна новая версия русификатора: ${latest} (у вас ${APP_VERSION}).
+    published="$(json_field "$manifest" patcher_version || true)"
+    expected="$(json_field "$manifest" patcher_sha256 || true)"
+    [ -n "$published" ] && [ -n "$expected" ] || return 0
+    [ "$published" != "$APP_VERSION" ] || return 0
+
+    fresh="${WORK_DIR}/patcher.sh.new"
+    fetch "$PATCHER_URL" "$fresh" || { rm -f "$fresh"; return 0; }
+    if [ "$(sha256_of "$fresh")" != "$(printf '%s' "$expected" | tr '[:lower:]' '[:upper:]')" ]; then
+        printf 'self-update refused: checksum mismatch\n' >>"$LOG_FILE"
+        rm -f "$fresh"
+        return 0
+    fi
+    if ! /bin/bash -n "$fresh" 2>>"$LOG_FILE"; then
+        printf 'self-update refused: syntax check failed\n' >>"$LOG_FILE"
+        rm -f "$fresh"
+        return 0
+    fi
+
+    mkdir -p "$RUNTIME_DIR"
+    chmod 755 "$fresh"
+    mv -f "$fresh" "${RUNTIME_DIR}/patcher.sh"
+    printf 'self-update applied: %s -> %s\n' "$APP_VERSION" "$published" >>"$LOG_FILE"
+    say_info "Русификатор обновлён: ${APP_VERSION} → ${published}.
+
+$(json_field "$manifest" notes || true)
+
+Переустанавливать приложение и заново выдавать доступ к диску не нужно."
+    INVOKERSRU_UPDATED=1 exec /bin/bash "${RUNTIME_DIR}/patcher.sh" "$@"
+}
+
+check_app_update() {
+    local manifest="${WORK_DIR}/manifest.json" required notes
+    [ -f "$manifest" ] || fetch "$MANIFEST_URL" "$manifest" || return 0
+    required="$(json_field "$manifest" minimum_bundle_version || true)"
+    [ -n "$required" ] || return 0
+    if [ "$required" != "$BUNDLE_VERSION" ]; then
+        notes="$(json_field "$manifest" bundle_notes || true)"
+        say_info "Вышла новая сборка приложения: ${required} (у вас ${BUNDLE_VERSION}).
 
 ${notes}
 
-Скачать можно со страницы проекта на GitHub."
+Обычные обновления ставятся сами, но эту версию нужно скачать заново со страницы проекта на GitHub.
+
+После замены приложения система попросит выдать доступ к диску заново — она привязывает его к конкретной сборке. В списке «Полный доступ к диску» выделите «Русификатор Invokers», нажмите «−», затем «+» и выберите приложение в папке «Программы»."
     fi
 }
 
@@ -390,6 +438,8 @@ if [ -f "$RESUME_MARKER" ]; then
     [ $((now - marked)) -lt 600 ] 2>/dev/null && RESUMING=true
     rm -f "$RESUME_MARKER"
 fi
+
+self_update "$@"
 
 if [ "$RESUMING" = false ]; then
     choice="$(ask "Неофициальный любительский русификатор Invokers: Titan Legacy.
