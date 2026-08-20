@@ -210,6 +210,14 @@ function RemoteSha([string]$path) {
     return ($out.Trim() -split '\s+')[0].ToLower()
 }
 
+# The target is deleted first on purpose. Copying over an existing file keeps the game's ownership,
+# and ownership is the only thing that tells a pristine file from one a tool wrote: without a fresh
+# shell-owned file, a run that has lost its saved original would record a patched file as the
+# original and the real Ukrainian text would be gone for good.
+function InstallFile([string]$source) {
+    Sh "rm -f '$GameDir/$Target' && cp -f '$source' '$GameDir/$Target' && chmod 660 '$GameDir/$Target'" | Out-Null
+}
+
 function OwnerOf([string]$path) {
     $out = Sh "ls -l '$path' 2>/dev/null"
     if (-not $out) { return '' }
@@ -325,11 +333,10 @@ function DoApply {
 
     Say "Ставлю перевод в игру…"
     $built = RemoteSha "$Bridge/out/$Target"
-    Sh "cp -f '$Bridge/out/$Target' '$GameDir/$Target'" | Out-Null
-    Sh "chmod 660 '$GameDir/$Target'" | Out-Null
+    InstallFile "$Bridge/out/$Target"
 
     if ((RemoteSha "$GameDir/$Target") -ne $built) {
-        Sh "cp -f '$PhoneBackup' '$GameDir/$Target'" | Out-Null
+        InstallFile $PhoneBackup
         Die "Файл записался неверно, оригинал возвращён."
     }
 
@@ -354,8 +361,7 @@ function DoRestore {
     }
     Head "Возврат оригинала"
     Sh "am force-stop $PkgGame" | Out-Null
-    Sh "cp -f '$PhoneBackup' '$GameDir/$Target'" | Out-Null
-    Sh "chmod 660 '$GameDir/$Target'" | Out-Null
+    InstallFile $PhoneBackup
     if ((RemoteSha "$GameDir/$Target") -ne $original) { Die "Файл записался неверно." }
     StatePut $original ''
     Say "Оригинальный украинский текст на месте."

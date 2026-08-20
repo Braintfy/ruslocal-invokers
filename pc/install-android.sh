@@ -209,6 +209,14 @@ ensure_app() {
 }
 
 remote_sha() { sh_ "sha256sum '$1' 2>/dev/null" | awk '{print tolower($1)}'; }
+
+# The target is deleted first on purpose. Copying over an existing file keeps the game's ownership,
+# and ownership is the only thing that tells a pristine file from one a tool wrote: without a fresh
+# shell-owned file, a run that has lost its saved original would record a patched file as the
+# original and the real Ukrainian text would be gone for good.
+install_file() {
+    sh_ "rm -f '${GAME_DIR}/${TARGET}' && cp -f '$1' '${GAME_DIR}/${TARGET}' && chmod 660 '${GAME_DIR}/${TARGET}'" >/dev/null
+}
 owner_of() { sh_ "ls -l '$1' 2>/dev/null" | awk '{print $3}'; }
 
 init_phone_paths() {
@@ -321,12 +329,11 @@ do_apply() {
 
     say "Ставлю перевод в игру…"
     local built; built="$(remote_sha "${BRIDGE}/out/${TARGET}")"
-    sh_ "cp -f '${BRIDGE}/out/${TARGET}' '${GAME_DIR}/${TARGET}'" >/dev/null
-    sh_ "chmod 660 '${GAME_DIR}/${TARGET}'" >/dev/null
+    install_file "${BRIDGE}/out/${TARGET}"
 
     local installed; installed="$(remote_sha "${GAME_DIR}/${TARGET}")"
     if [ "$installed" != "$built" ]; then
-        sh_ "cp -f '$PHONE_BACKUP' '${GAME_DIR}/${TARGET}'" >/dev/null
+        install_file "$PHONE_BACKUP"
         die "Файл записался неверно, оригинал возвращён."
     fi
 
@@ -351,8 +358,7 @@ do_restore() {
 
     head1 "Возврат оригинала"
     sh_ "am force-stop ${PKG_GAME}" >/dev/null
-    sh_ "cp -f '$PHONE_BACKUP' '${GAME_DIR}/${TARGET}'" >/dev/null
-    sh_ "chmod 660 '${GAME_DIR}/${TARGET}'" >/dev/null
+    install_file "$PHONE_BACKUP"
     [ "$(remote_sha "${GAME_DIR}/${TARGET}")" = "$original" ] || die "Файл записался неверно."
     state_put "$original" ""
     say "Оригинальный украинский текст на месте."
