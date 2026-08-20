@@ -1,5 +1,15 @@
 # Changelog
 
+## ПК 1.0.0 — 2026-08-20
+
+- added a tool that translates the PC build of the game: unzip, run, pick install. The CLI already knew how to compose the file and the game's own two language files are right there on the machine, so nothing was missing except a driver to put them together. `scripts/build-pc-game-tool.sh` cross-builds the win-x64 binary from macOS and packs it with the catalog;
+- shipped the catalog inside the archive instead of downloading it each run. It is 35 MB, and that transfer turned out to be the least reliable step in the whole flow — `Invoke-WebRequest` aborted at 22 KB with "the response ended prematurely" in every test. A newer catalog is still fetched when the network allows, so the bundled copy is the floor rather than the ceiling, and the tool works offline on the first try;
+- found the game by content rather than by path. The folder is located by looking for `dl_en_US.bin` under LocalLow, two levels down, so renaming the studio or the product in a future build does not break it; zero, one and several matches each get their own message, and several is refused rather than guessed;
+- kept the original outside the archive, under `%LOCALAPPDATA%\InvokersRu`, addressed by its hash. Deleting the archive or unpacking it elsewhere no longer strands anyone with a patched file and no way home, and a reinstall over an already-translated file will not overwrite the saved original with a patched one;
+- verified the result against the macOS driver rather than by eye: from the same untouched Ukrainian file both compose a byte-identical output, `4E3AC2FB…`. Restore returns the exact original. Two independent implementations agreeing to the byte is a stronger check than any assertion about the contents;
+- fixed the one defect the tests caught: the CLI refuses to overwrite its report file, and the driver deleted only the built file before a build, so a second run in a row failed with nothing on screen to explain it;
+- wrote down what could not be checked without a Windows machine that has the game — the real data path, whether the PC build's files match the Mac ones, and Windows PowerShell 5.1 — with the commands to settle each, in `docs/pc-client.md`.
+
 ## macOS 2.3.0 — 2026-08-20
 
 - built the bundle universal. Both slices were arm64 only, so on an Intel Mac the app did not fail — it never started: Finder drew a prohibitory badge on the icon and there was nowhere for a message to appear. Rosetta does not help here, it translates the other direction. The launcher is now compiled for both architectures and the CLI is two publishes joined with `lipo`, which is why the image grew from 29 MB to 60 MB;
