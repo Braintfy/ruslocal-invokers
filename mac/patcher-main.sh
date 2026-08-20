@@ -5,7 +5,7 @@
 set -uo pipefail
 
 # Version of this script. It updates itself from the repository; the bundle around it stays frozen.
-APP_VERSION="2.5.0"
+APP_VERSION="2.6.0"
 # Version of the application bundle, which only changes when the launcher or the CLI has to change.
 BUNDLE_VERSION="2.3.0"
 # Oldest bundle that still works. Kept apart from BUNDLE_VERSION so rebuilding the image does not tell
@@ -293,6 +293,17 @@ self_update() {
     expected="$(json_field "$manifest" patcher_sha256 || true)"
     [ -n "$published" ] && [ -n "$expected" ] || return 0
     [ "$published" != "$APP_VERSION" ] || return 0
+
+    # A published version older than the one already running means the repository has not caught up
+    # with a release yet. Following it downgrades a working driver to an obsolete one — which is what a
+    # freshly released image does on its very first launch, silently undoing everything the release was
+    # for. Rolling back stays possible, but it has to be stated in the manifest instead of happening by
+    # accident.
+    if version_older "$published" "$APP_VERSION" \
+       && [ "$(json_field "$manifest" allow_downgrade || true)" != "yes" ]; then
+        printf 'self-update refused: published %s is older than %s\n' "$published" "$APP_VERSION" >>"$LOG_FILE"
+        return 0
+    fi
 
     fresh="${WORK_DIR}/patcher.sh.new"
     fetch "$PATCHER_URL" "$fresh" || { rm -f "$fresh"; return 0; }

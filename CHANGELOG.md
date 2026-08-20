@@ -7,7 +7,8 @@
 - moved the Android check ahead of the Mac data check. A computer that cannot run the game itself can still build the file and carry it to a connected phone, and dying on the missing Mac data first hid that from exactly the users with no other route;
 - separated the bundle being built from the oldest bundle that still works. They were the same value, so every rebuild told every existing user to download the image again; the nag now also compares dotted numbers instead of strings, which had reported a newer bundle as outdated;
 - fixed `find_cache_root` returning failure after succeeding. It piped into `head`, which closes the pipe early, and under `pipefail` that became a non-zero exit — masked at the only call site by `|| true`, and wrong for anyone else who checked;
-- lowered the minimum to macOS 12 and refreshed the counts, which still advertised 40 541 strings from before the screenshot QA pass.
+- lowered the minimum to macOS 12 and refreshed the counts, which still advertised 40 541 strings from before the screenshot QA pass;
+- stopped self-update from walking backwards. It replaced the driver whenever the published version merely *differed* from the running one, so a freshly released image whose changes had not reached `main` yet would downgrade itself to the older script on its very first launch and quietly undo the release. It now refuses to move to an older version unless the manifest says `allow_downgrade`, which keeps a deliberate rollback possible without letting an accidental one through.
 
 ## Android 2.0.0 — 2026-08-20
 
