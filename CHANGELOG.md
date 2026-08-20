@@ -1,5 +1,13 @@
 # Changelog
 
+## Разведка Android — 2026-08-20
+
+- проверено на Samsung Galaxy S25 (Android 16) с игрой 0.60.1247: рантайм-кэш лежит во внешнем каталоге `/sdcard/Android/data/hitzone.anima.spirit.guardians/files/i18n/`, и `dl_en_US.bin` с `dl_uk_UA.bin` **побайтово равны** снятым с macOS той же версии, так что собранный для macOS русский файл встал на Android без пересборки: 41 037 строк применено, 1 английский fallback;
+- подтверждено, что доступ через ADB реально работает: у `shell` есть группы `ext_data_rw`/`ext_obb_rw`, проверены push, чтение, `mv` и `rm` — включая переименование, которое на части свежих прошивок ломается;
+- зафиксировано, что приложением на самом телефоне обойтись нельзя: с Android 11 чужой `Android/data` закрыт и для SAF, и для `MANAGE_EXTERNAL_STORAGE`, внутренний каталог закрыт изоляцией по UID, а `run-as` на релизной сборке отказывает — проверено;
+- разгадана хэш-функция ключей LOC1: это FNV-1a 64-bit от UTF-8 строкового ключа. Сопоставление ключей из IL2CPP-метаданных со значениями корпуса сходится смыслом (`ui-multibattle-exit-popup-title` → «Stop Multi-Battle?»), что снимает главное белое пятно формата и даёт контекст экрана по префиксу ключа;
+- отмечено, что в сборке 0.59.1005 тот же каталог использовал другой контейнер `cache.dat2` с магией `AMNA` и текстовыми ключами; в 0.60.1247 игра перешла на общий для платформ LOC1, поэтому отдельный парсер под него не нужен.
+
 ## 2.3.0-macos — 2026-08-19
 
 - restored the Latin stat abbreviations the model had transliterated: `ATK` was written as Cyrillic `АТК` in 866 places, which is most damage formulas in the game, plus `AoE` as `АоЕ`/`АоЭ` in five hints. The replacement only applies where the English source actually contains the abbreviation;
