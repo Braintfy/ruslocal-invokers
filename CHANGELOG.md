@@ -1,5 +1,13 @@
 # Changelog
 
+## Эмуляторы и скобки — 2026-08-20
+
+- added the emulator route to the Android helper. An emulator runs on the same computer, so there is no cable, no driver, no pairing code and no prompt on someone else's screen to accept — it is the shortest path of the four. The helper scans the local adb ports the common emulators ship with and, on Windows, reads the port of every BlueStacks instance out of `bluestacks.conf` instead of guessing;
+- fixed what actually stopped emulators from working: the readiness check demanded the shell belong to the `ext_data_rw` group. That group arrived with scoped storage, and emulators usually run an older Android where it does not exist — so a device was turned away at the door while its shell could write to the game directory perfectly well. The check now creates and removes a probe file instead, which is the true question on every Android and still catches the corporate policies and Secure Folder clones the group check was meant for;
+- caught a class of defect the validator could not see. Fourteen quest strings carried doubled braces — `{{0}}` where the game wanted `{0}` — and the protected-token regex refuses to look inside braces, so `{{0}}` and `{0}` both extracted as the same token and the multiset matched. The game printed the braces literally. Counting brace characters is what separates the two, and that is now an error;
+- repaired those fourteen strings, and their wording along with the braces: «Победите Fire Garuda этап {0}» read as an instruction to defeat a stage;
+- rebuilt the macOS image with the SDK the repository pins, and the helper archive so the emulator route and its instructions actually reach players.
+
 ## Перевод — 2026-08-20
 
 - shortened the stat labels that were covering their own numbers. The stats panel draws the label and the value in fixed columns, and «СКОРОСТЬ ДВИЖЕНИЯ» at 17 characters simply ran under the figure; «КРИТ. ШАНС» at 10 sits clear, so that is the width the panel actually has. Combo, Skill and Move speed, Mana Gen and Skill Recovery now fit, the worst case dropping from 17 to 12;

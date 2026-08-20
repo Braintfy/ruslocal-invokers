@@ -265,6 +265,16 @@ namespace InvokersRu.Core.Translations
                 issues.Add(new TranslationIssue(id, "protected-token-mismatch", ValidationSeverity.Error, "Placeholders, rich-text tags, or escaped line breaks do not match the source."));
             }
 
+            // The protected-token regex deliberately refuses to look inside braces, so a doubled brace
+            // yields the very same token as the source: {{0}} and {0} both extract as {0}. The multiset
+            // then matches while the game prints the braces literally. Counting the characters is what
+            // separates the two, and a translation has no business adding or dropping a brace.
+            if (source.Count(character => character == '{') != translation.Count(character => character == '{')
+                || source.Count(character => character == '}') != translation.Count(character => character == '}'))
+            {
+                issues.Add(new TranslationIssue(id, "brace-count-mismatch", ValidationSeverity.Error, "Curly braces do not match the source; a placeholder is doubled or lost."));
+            }
+
             string[] sourceNumbers = NumericTokenRegex.Matches(source).Cast<Match>().Select(match => match.Value).OrderBy(value => value, StringComparer.Ordinal).ToArray();
             string[] targetNumbers = NumericTokenRegex.Matches(translation).Cast<Match>().Select(match => match.Value).OrderBy(value => value, StringComparer.Ordinal).ToArray();
             if (!sourceNumbers.SequenceEqual(targetNumbers, StringComparer.Ordinal))

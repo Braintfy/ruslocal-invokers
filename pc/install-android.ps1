@@ -87,8 +87,10 @@ function EnsureAdb {
     Say "Готово."
 }
 
-function WaitForDevice {
-    for ($i = 0; $i -lt 60; $i++) {
+# The limit is a parameter because the emulator probe should give up in seconds and move on to asking
+# for the port, while a cable or Wi-Fi connection deserves the full two minutes.
+function WaitForDevice([int]$Limit = 60) {
+    for ($i = 0; $i -lt $Limit; $i++) {
         $lines = (AdbRaw devices) -split "`n" | ForEach-Object { ($_ -replace "`r", '').Trim() } |
                  Where-Object { $_ -and $_ -notmatch '^List of devices' }
         if ($lines -match 'unauthorized') {
@@ -106,12 +108,66 @@ function WaitForDevice {
     return $false
 }
 
+# Android emulators run on this very computer and expose adb on a local port, so there is no cable, no
+# pairing code and no prompt on a phone screen to accept. These are the defaults the common emulators
+# ship with; BlueStacks assigns one per instance and prints it in its own settings.
+$EmulatorPorts = @(5555, 5556, 5565, 5575, 5585, 5595, 62001, 62025, 21503, 5554)
+
+# BlueStacks writes the port of every instance into its shared config, which beats guessing.
+function BlueStacksPorts {
+    $found = @()
+    foreach ($conf in @("$env:ProgramData\BlueStacks_nxt\bluestacks.conf",
+                        "$env:ProgramData\BlueStacks\bluestacks.conf")) {
+        if (-not (Test-Path -LiteralPath $conf)) { continue }
+        foreach ($line in (Get-Content -LiteralPath $conf -ErrorAction SilentlyContinue)) {
+            if ($line -match 'adb_port\s*=\s*"?(\d+)"?') { $found += [int]$Matches[1] }
+        }
+    }
+    return ($found | Select-Object -Unique)
+}
+
+function ConnectEmulator {
+    Say ""
+    Say "Ищу эмулятор на этом компьютере…"
+    $ports = @(BlueStacksPorts) + $EmulatorPorts | Select-Object -Unique
+    foreach ($port in $ports) {
+        $out = (AdbRaw connect "127.0.0.1:$port") -join ' '
+        if ($out -match 'connected to') { Say "Отозвался порт $port." }
+    }
+    if (WaitForDevice 6) { return $true }
+
+    Say ""
+    Say "Сам не нашёл. Порт видно в настройках эмулятора:"
+    Say "  BlueStacks: «Настройки» → «Дополнительно» → «Android Debug Bridge» — строка вида 127.0.0.1:5555."
+    Say "  Если ADB там выключен, включите его и нажмите «Сохранить»."
+    Say ""
+    $manual = Ask 'Введите порт (или адрес вида 127.0.0.1:5555), пусто — пропустить'
+    if (-not $manual) { return $false }
+    if ($manual -notmatch ':') { $manual = "127.0.0.1:$manual" }
+    AdbRaw connect $manual | Out-Null
+    return (WaitForDevice 6)
+}
+
 function Connect {
     Head "Как подключён телефон"
     Say "  1 — кабелем USB"
     Say "  2 — по Wi-Fi, без проводов (на Windows это надёжнее: не нужны драйверы)"
+    Say "  3 — это эмулятор на этом компьютере (BlueStacks, LDPlayer, Nox, MEmu)"
     Say ""
-    $choice = Ask 'Введите 1 или 2 и нажмите Enter'
+    $choice = Ask 'Введите 1, 2 или 3 и нажмите Enter'
+
+    if ($choice -eq '3') {
+        if (-not (ConnectEmulator)) {
+            Die @"
+Эмулятор так и не отозвался.
+Проверьте, что он запущен, а в его настройках включён Android Debug Bridge.
+В BlueStacks это «Настройки» → «Дополнительно» → «Android Debug Bridge».
+"@
+        }
+        Say ""
+        Say "Эмулятор на связи: $Device"
+        return
+    }
 
     if ($choice -eq '2') {
         Say ""
@@ -158,14 +214,26 @@ function Connect {
 }
 
 function RequireReady {
-    if ((Sh 'id') -notmatch 'ext_data_rw') {
-        Die "На этом телефоне adb не имеет доступа к данным приложений. Такое бывает на рабочих и корпоративных устройствах, а также в защищённой папке и клонах приложений."
-    }
     if ((Sh 'pm list packages') -notmatch [regex]::Escape("package:$PkgGame")) {
-        Die "Игра Invokers: Titan Legacy на этом телефоне не найдена."
+        Die "Игра Invokers: Titan Legacy здесь не найдена."
     }
     if ((Sh "[ -d '$GameDir' ] && echo yes") -notmatch 'yes') {
         Die "Папка с текстами игры не найдена. Запустите игру хотя бы один раз."
+    }
+    # This used to gate on the shell belonging to the ext_data_rw group. That is the wrong question:
+    # the group only exists on the Android versions that introduced scoped storage, so an emulator
+    # running an older release was turned away while its shell could write to the directory perfectly
+    # well. Ask the directory itself instead — it answers for every Android, and for the corporate
+    # policies and Secure Folder clones the group check was actually meant to catch.
+    $probe = "$GameDir/.invokersru-probe"
+    $ok = Sh "rm -f '$probe' 2>/dev/null; : > '$probe' 2>/dev/null && echo yes; rm -f '$probe' 2>/dev/null"
+    if ($ok -notmatch 'yes') {
+        Die @"
+Нет доступа на запись в папку с текстами игры.
+
+На телефоне так бывает на рабочих и корпоративных устройствах, в защищённой папке
+и в клонах приложений. В эмуляторе — если он запущен от другого пользователя.
+"@
     }
 }
 

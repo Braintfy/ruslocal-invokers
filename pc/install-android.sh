@@ -90,8 +90,10 @@ ensure_adb() {
     say "Готово."
 }
 
+# The limit is a parameter because the emulator probe should give up in seconds and move on to asking
+# for the port, while a cable or Wi-Fi connection deserves the full two minutes.
 wait_for_device() {
-    local tries=0
+    local tries=0 limit="${1:-60}"
     while :; do
         local list; list="$(adb_raw devices 2>/dev/null | tr -d '\r' | awk 'NR>1 && NF>=2')"
         if [ "${list#*unauthorized}" != "$list" ]; then
@@ -102,18 +104,59 @@ wait_for_device() {
         DEVICE="$(printf '%s\n' "$list" | awk '$2=="device"{print $1}' | head -1)"
         [ -n "$DEVICE" ] && return 0
         tries=$((tries + 1))
-        [ "$tries" -gt 60 ] && return 1
+        [ "$tries" -gt "$limit" ] && return 1
         sleep 2
         [ $((tries % 5)) -eq 0 ] && say "Жду телефон…"
     done
+}
+
+# Android emulators run on this very computer and expose adb on a local port, so there is no cable,
+# no pairing code and no prompt on a phone screen to accept. The ports below are the defaults the
+# common emulators ship with; BlueStacks assigns one per instance and shows it in its own settings.
+EMULATOR_PORTS="5555 5556 5565 5575 5585 5595 62001 62025 21503 5554"
+
+connect_emulator() {
+    say ""
+    say "Ищу эмулятор на этом компьютере…"
+    local port
+    for port in $EMULATOR_PORTS; do
+        if adb_raw connect "127.0.0.1:${port}" 2>&1 | grep -qi 'connected to'; then
+            say "Отозвался порт ${port}."
+        fi
+    done
+    if wait_for_device 6; then return 0; fi
+
+    say ""
+    say "Сам не нашёл. Порт видно в настройках эмулятора:"
+    say "  BlueStacks: «Настройки» → «Дополнительно» → «Android Debug Bridge» — там строка вида 127.0.0.1:5555."
+    say "  Если ADB там выключен, включите и нажмите «Сохранить»."
+    say ""
+    local manual; manual="$(ask 'Введите порт (или адрес вида 127.0.0.1:5555), пусто — пропустить: ')"
+    [ -n "$manual" ] || return 1
+    case "$manual" in
+        *:*) : ;;
+        *) manual="127.0.0.1:${manual}" ;;
+    esac
+    adb_raw connect "$manual" || true
+    wait_for_device 6
 }
 
 connect() {
     head1 "Как подключён телефон"
     say "  1 — кабелем USB"
     say "  2 — по Wi-Fi, без проводов"
+    say "  3 — это эмулятор на этом компьютере (BlueStacks, LDPlayer, Nox, MEmu)"
     say ""
-    local choice; choice="$(ask 'Введите 1 или 2 и нажмите Enter: ')"
+    local choice; choice="$(ask 'Введите 1, 2 или 3 и нажмите Enter: ')"
+
+    if [ "$choice" = "3" ]; then
+        connect_emulator || die "Эмулятор так и не отозвался.
+Проверьте, что он запущен, а в его настройках включён Android Debug Bridge.
+В BlueStacks это «Настройки» → «Дополнительно» → «Android Debug Bridge»."
+        say ""
+        say "Эмулятор на связи: ${DEVICE}"
+        return 0
+    fi
 
     if [ "$choice" = "2" ]; then
         say ""
@@ -161,18 +204,24 @@ connect() {
 # ---------- checks ----------
 
 require_ready() {
-    local groups; groups="$(sh_ id)"
-    case "$groups" in
-        *ext_data_rw*) : ;;
-        *) die "На этом телефоне adb не имеет доступа к данным приложений. Такое бывает на рабочих
-и корпоративных устройствах, а также в защищённой папке и клонах приложений." ;;
-    esac
-
     has_line "$(sh_ 'pm list packages')" "package:${PKG_GAME}" \
-        || die "Игра Invokers: Titan Legacy на этом телефоне не найдена."
+        || die "Игра Invokers: Titan Legacy здесь не найдена."
 
     remote_exists "$GAME_DIR" \
         || die "Папка с текстами игры не найдена. Запустите игру хотя бы один раз."
+
+    # This used to gate on the shell belonging to the ext_data_rw group. That is the wrong question:
+    # the group only exists on the Android versions that introduced scoped storage, so an emulator
+    # running an older release was turned away while its shell could write to the directory perfectly
+    # well. Ask the directory itself instead — it answers for every Android, and for the corporate
+    # policies and Secure Folder clones the group check was actually meant to catch.
+    local probe="${GAME_DIR}/.invokersru-probe"
+    if [ "$(sh_ "rm -f '$probe' 2>/dev/null; : > '$probe' 2>/dev/null && echo yes; rm -f '$probe' 2>/dev/null")" != "yes" ]; then
+        die "Нет доступа на запись в папку с текстами игры.
+
+На телефоне так бывает на рабочих и корпоративных устройствах, в защищённой папке
+и в клонах приложений. В эмуляторе — если он запущен от другого пользователя."
+    fi
 }
 
 require_language() {
