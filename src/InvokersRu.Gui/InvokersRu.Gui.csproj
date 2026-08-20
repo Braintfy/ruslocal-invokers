@@ -8,9 +8,11 @@
     <LangVersion>14.0</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AssemblyName>InvokersRu.Gui</AssemblyName>
-    <Version>0.2.0-preview</Version>
+    <Version>3.0.1-preview</Version>
     <Company>Invokers Russian Community</Company>
     <Product>InvokersRu localization patcher</Product>
-    <Description>Safe graphical wrapper for the Invokers: Titan Legacy Russian localization patcher.</Description>
+    <Description>Graphical wrapper for the Invokers: Titan Legacy Russian localization patcher.</Description>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\InvokersRu.ico</ApplicationIcon>
   </PropertyGroup>
 </Project>

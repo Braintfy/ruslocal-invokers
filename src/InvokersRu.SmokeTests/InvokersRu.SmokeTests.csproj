@@ -14,7 +14,11 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\InvokersRu.Core\InvokersRu.Core.csproj" />
+    <ProjectReference Include="..\InvokersRu.Cli\InvokersRu.Cli.csproj" />
+    <Compile Include="..\InvokersRu.Gui\CliPlanResult.cs" Link="GuiContract\CliPlanResult.cs" />
+    <Compile Include="..\InvokersRu.Gui\CliRunner.cs" Link="GuiContract\CliRunner.cs" />
     <Content Include="$(RuntimeCacheProfileUnderTest)" Link="runtime-cache-profile-under-test.json" CopyToOutputDirectory="Always" />
+    <Content Include="..\..\config\runtime-cache-profile.0.60.1247.json" Link="runtime-cache-profile.0.60.1247.json" CopyToOutputDirectory="Always" />
   </ItemGroup>
   <Target Name="ValidateRuntimeCacheProfileUnderTest" BeforeTargets="CoreCompile">
     <Error Condition="!Exists('$(RuntimeCacheProfileUnderTest)')" Text="RuntimeCacheProfileUnderTest does not exist: $(RuntimeCacheProfileUnderTest)" />

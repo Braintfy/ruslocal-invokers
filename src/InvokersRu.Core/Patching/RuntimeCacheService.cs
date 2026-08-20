@@ -165,6 +165,7 @@ namespace InvokersRu.Core.Patching
             result.EnglishSha256 = Hashing.Sha256File(english);
             result.BaseSha256 = Hashing.Sha256File(target);
             result.StampSha256 = Hashing.Sha256File(stamp);
+            result.StampValue = ReadObservedStampValue(stamp);
             bool staticPinsMatch = Hashing.FixedEqualsHex(result.EnglishSha256, profile.EnglishSha256)
                 && StampMatches(stamp, profile);
             try
@@ -184,10 +185,21 @@ namespace InvokersRu.Core.Patching
 
             if (staticPinsMatch && Hashing.FixedEqualsHex(result.BaseSha256, profile.BaseSha256))
             {
-                result.Status = state == null ? InstallationStatus.CompatibleOriginal : InstallationStatus.InconsistentState;
-                result.Message = state == null
-                    ? $"Exact official runtime cache {profile.Id}."
-                    : "The official runtime-cache target has stale patch state; refusing mutation until it is resolved.";
+                if (state == null)
+                {
+                    result.Status = InstallationStatus.CompatibleOriginal;
+                    result.Message = $"Exact official runtime cache {profile.Id}.";
+                }
+                else if (TryValidateSupersededState(root, target, statePath, state, out string supersededProblem))
+                {
+                    result.Status = InstallationStatus.PatchSupersededByOfficialUpdate;
+                    result.Message = $"The game update replaced the previous patch with exact official cache {profile.Id}; the previous backup will be preserved.";
+                }
+                else
+                {
+                    result.Status = InstallationStatus.InconsistentState;
+                    result.Message = $"The official runtime-cache target has unsafe stale patch state: {supersededProblem}";
+                }
                 return result;
             }
 
@@ -217,7 +229,8 @@ namespace InvokersRu.Core.Patching
                 throw new InvalidDataException("Runtime-cache inspection root is not the internally derived mutation root.");
             MutationPolicy.BindTestRuntimePaths(cacheRoot, statePath);
             MutationPolicy.RequireRuntimeBinding(cacheRoot, statePath);
-            if (inspection.Status != InstallationStatus.CompatibleOriginal)
+            bool supersededByOfficialUpdate = inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate;
+            if (inspection.Status != InstallationStatus.CompatibleOriginal && !supersededByOfficialUpdate)
             {
                 throw new InvalidOperationException("Runtime-cache patching requires the exact compatible original tuple.");
             }
@@ -240,7 +253,11 @@ namespace InvokersRu.Core.Patching
             {
                 throw new InvalidOperationException("An interrupted transaction requires recovery before runtime-cache apply.");
             }
-            if (File.Exists(statePath))
+            if (supersededByOfficialUpdate)
+            {
+                ArchiveSupersededStateUnderLock(cacheRoot, targetPath, statePath, profile);
+            }
+            else if (File.Exists(statePath))
             {
                 throw new InvalidOperationException("Runtime-cache patch state appeared after inspection; refusing to overwrite it.");
             }
@@ -258,9 +275,11 @@ namespace InvokersRu.Core.Patching
             Loc1Document english = Loc1Codec.ReadFile(englishPath);
             Loc1Document baseLocale = Loc1Codec.ReadFile(targetPath);
             bool supervisedSafeDrafts = profile.TranslationPolicy == "supervised-safe-drafts";
+            bool communityPreview = profile.TranslationPolicy == "community-preview-all-drafts";
+            bool includeDraft = supervisedSafeDrafts || communityPreview;
             ValidationReport validation = TranslationValidator.Validate(
-                english, catalog, includeDraft: supervisedSafeDrafts, baseLocale,
-                supervisedSafeDrafts ? ValidationProfile.Preview : ValidationProfile.Release,
+                english, catalog, includeDraft, baseLocale,
+                includeDraft ? ValidationProfile.Preview : ValidationProfile.Release,
                 allowPerLocaleContentVersion: true);
             if (validation.ErrorCount > 0)
             {
@@ -269,8 +288,8 @@ namespace InvokersRu.Core.Patching
 
             CompositionSummary composition = TranslationComposer.Apply(
                 english, baseLocale, catalog,
-                includeDraft: supervisedSafeDrafts,
-                approvedOnly: !supervisedSafeDrafts,
+                includeDraft,
+                approvedOnly: !includeDraft,
                 excludeNeedsReview: supervisedSafeDrafts,
                 allowPerLocaleContentVersion: true,
                 eligibility: supervisedSafeDrafts
@@ -283,6 +302,18 @@ namespace InvokersRu.Core.Patching
             if (composition.AppliedTranslations != profile.ExpectedAppliedTranslations)
             {
                 throw new InvalidDataException($"Runtime-cache output applies {composition.AppliedTranslations} translations; exact pin is {profile.ExpectedAppliedTranslations}.");
+            }
+            if (profile.ExpectedEnglishFallbacks >= 0 && composition.EnglishFallbacks != profile.ExpectedEnglishFallbacks)
+            {
+                throw new InvalidDataException($"Runtime-cache output has {composition.EnglishFallbacks} English fallbacks; exact pin is {profile.ExpectedEnglishFallbacks}.");
+            }
+            if (profile.ExpectedBaseFallbacks >= 0 && composition.BaseFallbacks != profile.ExpectedBaseFallbacks)
+            {
+                throw new InvalidDataException($"Runtime-cache output has {composition.BaseFallbacks} base fallbacks; exact pin is {profile.ExpectedBaseFallbacks}.");
+            }
+            if (profile.ExpectedNeedsReviewFallbacks >= 0 && composition.NeedsReviewFallbacks != profile.ExpectedNeedsReviewFallbacks)
+            {
+                throw new InvalidDataException($"Runtime-cache output has {composition.NeedsReviewFallbacks} review fallbacks; exact pin is {profile.ExpectedNeedsReviewFallbacks}.");
             }
 
             byte[] patchedRaw = Loc1Codec.BuildRaw(baseLocale);
@@ -514,6 +545,82 @@ namespace InvokersRu.Core.Patching
             VerifyDocuments(english, target, profile);
         }
 
+        private static bool TryValidateSupersededState(
+            string cacheRoot,
+            string targetPath,
+            string statePath,
+            PatchState state,
+            out string problem)
+        {
+            problem = string.Empty;
+            try
+            {
+                string fixedRoot = MutationPolicy.IsTestWriteBuild ? Path.GetFullPath(cacheRoot) : DefaultCacheRoot();
+                if (!PathEquals(cacheRoot, fixedRoot) || !PathEquals(state.GameRoot, fixedRoot))
+                    throw new InvalidDataException("recorded cache root differs from the fixed runtime cache");
+                (string _, string fixedTarget, string _) = ResolveFixedPaths(fixedRoot);
+                if (!PathEquals(targetPath, fixedTarget) || !PathEquals(state.TargetPath, fixedTarget))
+                    throw new InvalidDataException("recorded target differs from the fixed Ukrainian cache file");
+                if (string.IsNullOrWhiteSpace(state.BuildId) || state.BuildId.Length > 128
+                    || state.BuildId.Any(character => !char.IsAsciiLetterOrDigit(character) && character is not '-' and not '_' and not '.'))
+                    throw new InvalidDataException("recorded build id is unsafe");
+                ValidateRecordedHash(state.OriginalSha256, "recorded original hash");
+                ValidateRecordedHash(state.PatchedSha256, "recorded patched hash");
+                ValidateRecordedHash(state.TranslationsSha256, "recorded catalog hash");
+                if (state.AppliedTranslations <= 0 || state.AppliedTranslations > 100000)
+                    throw new InvalidDataException("recorded translation count is invalid");
+
+                string stateRoot = Path.GetDirectoryName(Path.GetFullPath(statePath))
+                    ?? throw new InvalidDataException("runtime state has no parent directory");
+                string backupRoot = Path.Combine(stateRoot, "backups");
+                string backupPath = Path.GetFullPath(state.BackupPath);
+                string backupPrefix = Path.GetFullPath(backupRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                if (!backupPath.StartsWith(backupPrefix, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("recorded backup is outside the dedicated backup store");
+                PatchService.RejectExistingReparseComponents(backupPath, "superseded runtime-cache backup");
+                if (!File.Exists(backupPath) || !Hashing.FixedEqualsHex(Hashing.Sha256File(backupPath), state.OriginalSha256))
+                    throw new InvalidDataException("recorded immutable backup is missing or invalid");
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException || exception is UnauthorizedAccessException
+                || exception is InvalidDataException || exception is InvalidOperationException)
+            {
+                problem = exception.Message;
+                return false;
+            }
+        }
+
+        private static void ArchiveSupersededStateUnderLock(
+            string cacheRoot,
+            string targetPath,
+            string statePath,
+            RuntimeCacheCompatibility profile)
+        {
+            VerifyExactTuple(cacheRoot, profile);
+            PatchState state = PatchPlanner.TryLoadState(statePath)
+                ?? throw new InvalidDataException("Superseded runtime-cache state disappeared or became unreadable after locking.");
+            if (!TryValidateSupersededState(cacheRoot, targetPath, statePath, state, out string problem))
+                throw new InvalidDataException($"Superseded runtime-cache state is not safe to archive: {problem}");
+
+            string stateRoot = Path.GetDirectoryName(Path.GetFullPath(statePath))
+                ?? throw new InvalidDataException("Runtime-cache state has no parent directory.");
+            string historyRoot = Path.Combine(stateRoot, "history", "superseded");
+            PatchService.RejectExistingReparseComponents(historyRoot, "superseded runtime-cache state history");
+            Directory.CreateDirectory(historyRoot);
+            PatchService.RejectExistingReparseComponents(historyRoot, "superseded runtime-cache state history");
+            string historyName = $"{state.AppliedAt.UtcDateTime:yyyyMMddTHHmmssZ}-{SafeProfileId(state.BuildId)}-{Guid.NewGuid():N}.json";
+            string historyPath = Path.Combine(historyRoot, historyName);
+            File.Move(statePath, historyPath);
+            if (!File.Exists(historyPath))
+                throw new IOException("Superseded runtime-cache state was not preserved in history.");
+        }
+
+        private static void ValidateRecordedHash(string value, string label)
+        {
+            if (value.Length != 64 || value.Any(character => !Uri.IsHexDigit(character)))
+                throw new InvalidDataException($"{label} is not SHA-256.");
+        }
+
         private static void VerifyStaticTuple(string root, RuntimeCacheCompatibility profile)
         {
             (string englishPath, _, string stampPath) = ResolveFixedPaths(root);
@@ -574,6 +681,25 @@ namespace InvokersRu.Core.Patching
             byte[] expected = new UTF8Encoding(false, true).GetBytes(profile.StampValue);
             return Hashing.FixedEqualsHex(Hashing.Sha256File(stampPath), profile.StampSha256)
                 && File.ReadAllBytes(stampPath).SequenceEqual(expected);
+        }
+
+        private static string? ReadObservedStampValue(string stampPath)
+        {
+            long length = new FileInfo(stampPath).Length;
+            if (length is < 1 or > 64) return null;
+            byte[] bytes = File.ReadAllBytes(stampPath);
+            try
+            {
+                string value = new UTF8Encoding(false, true).GetString(bytes);
+                return value.All(character => char.IsAsciiLetterOrDigit(character)
+                    || character is '.' or '-' or '_')
+                    ? value
+                    : null;
+            }
+            catch (DecoderFallbackException)
+            {
+                return null;
+            }
         }
 
         public static (string English, string Target, string Stamp) ResolveTuplePaths(string root)

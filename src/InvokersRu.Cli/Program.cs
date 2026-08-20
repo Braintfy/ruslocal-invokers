@@ -581,12 +581,96 @@ namespace InvokersRu.Cli
         private static int RuntimeCacheStatus(ArgumentBag options, bool plan)
         {
             options.RequireNoExtraPositionals(0);
-            RuntimeCacheCompatibility profile = plan && InstallationWritesEnabled
-                ? LoadTrustedRuntimeCacheCompatibility()
-                : RuntimeCacheCompatibility.OfficialObserved0601239();
+            RuntimeCacheCompatibility profile;
+            if (InstallationWritesEnabled)
+            {
+                if (options.Has("profile"))
+                    throw new InvalidOperationException("A write-enabled patcher uses only its embedded runtime-cache profile; --profile is not accepted.");
+                profile = LoadTrustedRuntimeCacheCompatibility();
+            }
+            else
+            {
+                string profilePath = options.Optional("profile", string.Empty);
+                profile = string.IsNullOrWhiteSpace(profilePath)
+                    ? RuntimeCacheCompatibility.OfficialObserved0601239()
+                    : RuntimeCacheCompatibility.Parse(File.ReadAllText(profilePath));
+            }
             if (!TryResolveCacheRoot(options, out string cacheRoot)) return 5;
             string statePath = RuntimeCacheService.DefaultStatePath();
             RuntimeCacheInspection inspection = RuntimeCacheService.Inspect(cacheRoot, profile, statePath);
+            RuntimeCatalogPlanInfo catalog = InspectBundledRuntimeCatalog(profile);
+            IReadOnlyList<string> conflicts = plan
+                ? PatchService.FindRuntimeCacheProcessConflicts()
+                : Array.Empty<string>();
+            string action = GetRuntimeCachePlanAction(inspection.Status, conflicts.Count, profile, catalog.ExactMatch);
+            if (options.Has("json"))
+            {
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    schema = 1,
+                    patcher_version = GetPatcherVersion(),
+                    installation_writes_enabled = InstallationWritesEnabled,
+                    status = inspection.Status.ToString(),
+                    message = inspection.Message,
+                    cache_root = inspection.CacheRoot,
+                    observed = new
+                    {
+                        english_sha256 = inspection.EnglishSha256,
+                        base_sha256 = inspection.BaseSha256,
+                        stamp_sha256 = inspection.StampSha256,
+                        game_version = inspection.StampValue,
+                        english_content = inspection.EnglishContentVersion,
+                        base_content = inspection.BaseContentVersion
+                    },
+                    catalog = new
+                    {
+                        present = catalog.Present,
+                        regular_file = catalog.RegularFile,
+                        sha256 = catalog.Sha256,
+                        exact_match = catalog.ExactMatch
+                    },
+                    profile = new
+                    {
+                        id = profile.Id,
+                        game_version = profile.GameVersion,
+                        readiness = profile.Readiness,
+                        certified = profile.Certified,
+                        translation_policy = profile.TranslationPolicy,
+                        catalog_sha256 = profile.TranslationCatalogSha256,
+                        expected_output_sha256 = profile.ExpectedOutputSha256,
+                        entry_count = profile.EntryCount,
+                        applied_translations = profile.ExpectedAppliedTranslations,
+                        english_fallbacks = profile.ExpectedEnglishFallbacks,
+                        base_fallbacks = profile.ExpectedBaseFallbacks,
+                        needs_review_fallbacks = profile.ExpectedNeedsReviewFallbacks
+                    },
+                    state = inspection.State == null ? null : new
+                    {
+                        build_id = inspection.State.BuildId,
+                        applied_translations = inspection.State.AppliedTranslations,
+                        applied_at = inspection.State.AppliedAt,
+                        patched_sha256 = inspection.State.PatchedSha256,
+                        original_sha256 = inspection.State.OriginalSha256
+                    },
+                    journal = inspection.Journal == null ? null : new
+                    {
+                        operation = inspection.Journal.Operation,
+                        phase = inspection.Journal.Phase,
+                        transaction_id = inspection.Journal.TransactionId
+                    },
+                    process_conflicts = conflicts,
+                    plan = plan ? action : null,
+                    can_apply = plan && (inspection.Status == InstallationStatus.CompatibleOriginal
+                        || inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate)
+                        && conflicts.Count == 0 && InstallationWritesEnabled && profile.Certified
+                        && catalog.ExactMatch,
+                    can_restore = plan && inspection.Status == InstallationStatus.PatchedByThisTool
+                        && conflicts.Count == 0 && InstallationWritesEnabled,
+                    can_recover = plan && inspection.Status == InstallationStatus.RecoveryRequired
+                        && conflicts.Count == 0 && InstallationWritesEnabled
+                }, new JsonSerializerOptions { WriteIndented = true }));
+                return RuntimeCacheStatusExitCode(inspection.Status);
+            }
             Console.WriteLine($"Status: {inspection.Status}");
             Console.WriteLine(inspection.Message);
             Console.WriteLine($"Cache root: {inspection.CacheRoot}");
@@ -601,23 +685,70 @@ namespace InvokersRu.Cli
                 Console.WriteLine($"Interrupted transaction: {inspection.Journal.Operation} / {inspection.Journal.Phase} / {inspection.Journal.TransactionId}");
             if (plan)
             {
-                IReadOnlyList<string> conflicts = inspection.Status == InstallationStatus.CompatibleOriginal
-                    || inspection.Status == InstallationStatus.PatchedByThisTool
-                    ? PatchService.FindRuntimeCacheProcessConflicts()
-                    : Array.Empty<string>();
                 Console.WriteLine($"Process conflicts: {(conflicts.Count == 0 ? "none" : conflicts.Count.ToString(CultureInfo.InvariantCulture))}");
-                string action = inspection.Status switch
-                {
-                    InstallationStatus.CompatibleOriginal when conflicts.Count > 0 => "REFUSE_CLOSE_GAME_AND_LAUNCHER",
-                    InstallationStatus.CompatibleOriginal when !InstallationWritesEnabled => "REFUSE_DEV_WRITES_DISABLED",
-                    InstallationStatus.CompatibleOriginal when !profile.Certified => "REFUSE_NO_TRUSTED_CACHE_RELEASE_PROFILE",
-                    InstallationStatus.CompatibleOriginal => "READY_TO_APPLY",
-                    InstallationStatus.PatchedByThisTool => "NOOP_OR_RESTORE",
-                    _ => "REFUSE_UNKNOWN_OR_INCONSISTENT"
-                };
+                Console.WriteLine($"Bundled catalog: {(catalog.ExactMatch ? "exact" : catalog.Present ? "mismatch" : "missing")}");
                 Console.WriteLine($"Plan: {action}");
             }
-            return inspection.Status is InstallationStatus.UnknownBuild or InstallationStatus.InconsistentState
+            return RuntimeCacheStatusExitCode(inspection.Status);
+        }
+
+        private static RuntimeCatalogPlanInfo InspectBundledRuntimeCatalog(RuntimeCacheCompatibility profile)
+        {
+            string root = Path.GetFullPath(AppContext.BaseDirectory);
+            string[] candidates =
+            {
+                Path.Combine(root, "translations", "ru_RU.jsonl"),
+                Path.Combine(root, "ru_RU.jsonl")
+            };
+            foreach (string candidate in candidates)
+            {
+                if (!File.Exists(candidate)) continue;
+                FileAttributes attributes = File.GetAttributes(candidate);
+                bool regular = (attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0;
+                if (!regular) return new RuntimeCatalogPlanInfo(true, false, null, false);
+                string sha256 = Hashing.Sha256File(candidate);
+                bool exact = !string.IsNullOrWhiteSpace(profile.TranslationCatalogSha256)
+                    && Hashing.FixedEqualsHex(sha256, profile.TranslationCatalogSha256);
+                return new RuntimeCatalogPlanInfo(true, true, sha256, exact);
+            }
+
+            return new RuntimeCatalogPlanInfo(false, false, null, false);
+        }
+
+        private sealed record RuntimeCatalogPlanInfo(bool Present, bool RegularFile, string? Sha256, bool ExactMatch);
+
+        private static string GetPatcherVersion()
+        {
+            Version? version = typeof(Program).Assembly.GetName().Version;
+            return version == null || version.Build < 0
+                ? "0.0.0"
+                : $"{version.Major}.{version.Minor}.{version.Build}";
+        }
+
+        private static string GetRuntimeCachePlanAction(
+            InstallationStatus status,
+            int processConflictCount,
+            RuntimeCacheCompatibility profile,
+            bool catalogExactMatch)
+        {
+            bool installable = status is InstallationStatus.CompatibleOriginal
+                or InstallationStatus.PatchSupersededByOfficialUpdate;
+            if (installable && processConflictCount > 0) return "REFUSE_CLOSE_GAME_AND_LAUNCHER";
+            if (installable && !InstallationWritesEnabled) return "REFUSE_DEV_WRITES_DISABLED";
+            if (installable && !profile.Certified) return "REFUSE_NO_TRUSTED_CACHE_RELEASE_PROFILE";
+            if (installable && !catalogExactMatch) return "REFUSE_MISSING_OR_MISMATCHED_CATALOG";
+            if (status == InstallationStatus.PatchSupersededByOfficialUpdate) return "READY_TO_REAPPLY_AFTER_GAME_UPDATE";
+            if (status == InstallationStatus.CompatibleOriginal) return "READY_TO_APPLY";
+            if (status == InstallationStatus.PatchedByThisTool && processConflictCount > 0) return "REFUSE_CLOSE_GAME_AND_LAUNCHER";
+            if (status == InstallationStatus.PatchedByThisTool) return InstallationWritesEnabled ? "NOOP_OR_RESTORE" : "REFUSE_DEV_WRITES_DISABLED";
+            if (status == InstallationStatus.RecoveryRequired && processConflictCount > 0) return "REFUSE_CLOSE_GAME_AND_LAUNCHER";
+            if (status == InstallationStatus.RecoveryRequired) return InstallationWritesEnabled ? "RECOVERY_REQUIRED" : "REFUSE_DEV_WRITES_DISABLED";
+            return "REFUSE_UNKNOWN_OR_INCONSISTENT";
+        }
+
+        private static int RuntimeCacheStatusExitCode(InstallationStatus status)
+        {
+            return status is InstallationStatus.UnknownBuild or InstallationStatus.InconsistentState
                 or InstallationStatus.MissingFiles or InstallationStatus.RecoveryRequired ? 5 : 0;
         }
 
@@ -659,9 +790,12 @@ namespace InvokersRu.Cli
                     certified = profile.Certified,
                     translation_policy = profile.TranslationPolicy,
                     translation_catalog_sha256 = profile.TranslationCatalogSha256,
-                    expected_output_sha256 = profile.ExpectedOutputSha256,
-                    minimum_applied_translations = profile.MinimumAppliedTranslations,
-                    expected_applied_translations = profile.ExpectedAppliedTranslations
+                        expected_output_sha256 = profile.ExpectedOutputSha256,
+                        minimum_applied_translations = profile.MinimumAppliedTranslations,
+                        expected_applied_translations = profile.ExpectedAppliedTranslations,
+                        expected_english_fallbacks = profile.ExpectedEnglishFallbacks,
+                        expected_base_fallbacks = profile.ExpectedBaseFallbacks,
+                        expected_needs_review_fallbacks = profile.ExpectedNeedsReviewFallbacks
                 }
             }, new JsonSerializerOptions { WriteIndented = true }));
             return 0;
@@ -840,7 +974,7 @@ namespace InvokersRu.Cli
                 "status" or "plan" => (new[] { "compat", "game-root", "state" }, Array.Empty<string>()),
                 "trusted-manifest-info" => (Array.Empty<string>(), Array.Empty<string>()),
                 "trusted-runtime-cache-info" => (Array.Empty<string>(), Array.Empty<string>()),
-                "cache-status" or "cache-plan" => (new[] { "cache-root" }, Array.Empty<string>()),
+                "cache-status" or "cache-plan" => (new[] { "cache-root", "profile", "json" }, new[] { "json" }),
                 "cache-profile" => (new[] { "output", "cache-root", "english", "base", "stamp", "id" }, Array.Empty<string>()),
                 "cache-apply" => (new[] { "translations", "acknowledge-risk", "include-draft" }, new[] { "include-draft" }),
                 "cache-restore" or "cache-recover" => (new[] { "acknowledge-risk" }, Array.Empty<string>()),

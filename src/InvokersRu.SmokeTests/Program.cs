@@ -19,8 +19,10 @@ namespace InvokersRu.SmokeTests
         {
             try
             {
-                string fixtureDirectory = args.Length > 0
-                    ? Path.GetFullPath(args[0])
+                bool fixtureFreeOnly = args.Any(argument => string.Equals(argument, "--fixture-free-only", StringComparison.Ordinal));
+                string? fixtureArgument = args.FirstOrDefault(argument => !string.Equals(argument, "--fixture-free-only", StringComparison.Ordinal));
+                string fixtureDirectory = fixtureArgument != null
+                    ? Path.GetFullPath(fixtureArgument)
                     : Path.GetFullPath(Path.Combine("work", "private-fixtures", "Prod_0.60.0_26"));
                 string enCompressed = Path.Combine(fixtureDirectory, "en_US.bin.br");
                 string ukCompressed = Path.Combine(fixtureDirectory, "uk_UA.bin.br");
@@ -37,9 +39,16 @@ namespace InvokersRu.SmokeTests
                 CompatibilityManifestSafetyChecks();
                 RuntimeCacheProfileParsingCheck();
                 RuntimeCacheProfileOnboardingCheck();
+                FixtureFreeRuntimeCacheSmokeTests.Run(Passed.Add);
+                GuiContractSmokeTests.Run(Passed.Add);
 #if !INVOKERSRU_MUTATION_SMOKES
                 OrdinaryCoreMutationGateCheck();
 #endif
+
+                if (fixtureFreeOnly)
+                {
+                    return ReportSuccess();
+                }
 
                 Require(File.Exists(englishPath) && File.Exists(ukrainianPath), "Private EN/UK fixtures are required.");
 
@@ -57,9 +66,7 @@ namespace InvokersRu.SmokeTests
                     Path.Combine(runtimeFixtureRoot, "dl_uk_UA.bin"));
 #endif
 
-                Console.WriteLine($"PASS: {Passed.Count} smoke tests");
-                foreach (string message in Passed) Console.WriteLine($"  {message}");
-                return 0;
+                return ReportSuccess();
             }
             catch (Exception exception)
             {
@@ -67,6 +74,13 @@ namespace InvokersRu.SmokeTests
                 Console.Error.WriteLine($"FAIL: {exception}");
                 return 1;
             }
+        }
+
+        private static int ReportSuccess()
+        {
+            Console.WriteLine($"PASS: {Passed.Count} smoke tests");
+            foreach (string message in Passed) Console.WriteLine($"  {message}");
+            return 0;
         }
 
         private static void RoundTrip(string path, string expectedRawHash, uint expectedLocale, uint expectedLocaleRevision)

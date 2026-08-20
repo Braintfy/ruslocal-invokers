@@ -80,6 +80,15 @@ namespace InvokersRu.Core.Patching
         [JsonPropertyName("expected_applied_translations")]
         public int ExpectedAppliedTranslations { get; set; }
 
+        [JsonPropertyName("expected_english_fallbacks")]
+        public int ExpectedEnglishFallbacks { get; set; } = -1;
+
+        [JsonPropertyName("expected_base_fallbacks")]
+        public int ExpectedBaseFallbacks { get; set; } = -1;
+
+        [JsonPropertyName("expected_needs_review_fallbacks")]
+        public int ExpectedNeedsReviewFallbacks { get; set; } = -1;
+
         [JsonPropertyName("translation_policy")]
         public string TranslationPolicy { get; set; } = "release-approved";
 
@@ -133,9 +142,11 @@ namespace InvokersRu.Core.Patching
                 throw new InvalidDataException("A certified runtime-cache profile must be ready.");
             }
 
-            if (TranslationPolicy != "release-approved" && TranslationPolicy != "supervised-safe-drafts")
+            if (TranslationPolicy != "release-approved"
+                && TranslationPolicy != "supervised-safe-drafts"
+                && TranslationPolicy != "community-preview-all-drafts")
             {
-                throw new InvalidDataException("Runtime-cache translation_policy must be release-approved or supervised-safe-drafts.");
+                throw new InvalidDataException("Runtime-cache translation_policy must be release-approved, supervised-safe-drafts, or community-preview-all-drafts.");
             }
 
             if (Certified && (string.IsNullOrWhiteSpace(TranslationCatalogSha256) || string.IsNullOrWhiteSpace(ExpectedOutputSha256)))
@@ -146,6 +157,17 @@ namespace InvokersRu.Core.Patching
             if (Certified && (ExpectedAppliedTranslations < MinimumAppliedTranslations || ExpectedAppliedTranslations > EntryCount))
             {
                 throw new InvalidDataException("A certified runtime-cache profile must pin an exact valid applied translation count.");
+            }
+
+            if (ExpectedEnglishFallbacks < -1 || ExpectedBaseFallbacks < -1 || ExpectedNeedsReviewFallbacks < -1)
+            {
+                throw new InvalidDataException("Runtime-cache fallback pins must be non-negative or omitted.");
+            }
+
+            if (Certified && ExpectedEnglishFallbacks >= 0 && ExpectedBaseFallbacks >= 0
+                && ExpectedAppliedTranslations + ExpectedEnglishFallbacks + ExpectedBaseFallbacks != EntryCount)
+            {
+                throw new InvalidDataException("Certified runtime-cache composition pins must add up to entry_count.");
             }
 
             if (!string.IsNullOrWhiteSpace(TranslationCatalogSha256)) ValidateHash(TranslationCatalogSha256, nameof(TranslationCatalogSha256));
@@ -210,6 +232,7 @@ namespace InvokersRu.Core.Patching
         public string? EnglishSha256 { get; set; }
         public string? BaseSha256 { get; set; }
         public string? StampSha256 { get; set; }
+        public string? StampValue { get; set; }
         public string? EnglishContentVersion { get; set; }
         public string? BaseContentVersion { get; set; }
         public RuntimeCacheCompatibility Profile { get; set; } = new RuntimeCacheCompatibility();

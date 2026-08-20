@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace InvokersRu.Gui;
@@ -10,12 +11,26 @@ namespace InvokersRu.Gui;
 internal sealed class CliRunner
 {
     internal const string CliFileName = "InvokersRu.Cli.exe";
+    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan TerminationTimeout = TimeSpan.FromSeconds(10);
 
     private readonly string _baseDirectory;
+    private readonly TimeSpan _timeout;
 
     public CliRunner()
+        : this(AppContext.BaseDirectory, DefaultTimeout)
     {
-        _baseDirectory = Path.GetFullPath(AppContext.BaseDirectory);
+    }
+
+    internal CliRunner(string baseDirectory, TimeSpan timeout)
+    {
+        if (string.IsNullOrWhiteSpace(baseDirectory))
+            throw new ArgumentException("Рабочий каталог проверяющего модуля не задан.", nameof(baseDirectory));
+        if (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromMinutes(30))
+            throw new ArgumentOutOfRangeException(nameof(timeout), "Тайм-аут проверяющего модуля должен быть больше нуля и не превышать 30 минут.");
+
+        _baseDirectory = Path.GetFullPath(baseDirectory);
+        _timeout = timeout;
         CliPath = ResolveFixedCompanion(CliFileName);
     }
 
@@ -55,10 +70,68 @@ internal sealed class CliRunner
 
         Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
         Task<string> stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync().ConfigureAwait(false);
+        using var timeout = new CancellationTokenSource(_timeout);
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            await TerminateOwnChildAsync(process).ConfigureAwait(false);
+            await DrainTerminatedOutputAsync(stdoutTask, stderrTask).ConfigureAwait(false);
+            throw new InvalidOperationException(
+                $"Проверяющий модуль не завершил операцию за {_timeout.TotalSeconds:N0} с. Его собственный процесс был остановлен; повторите проверку.");
+        }
+
         string stdout = await stdoutTask.ConfigureAwait(false);
         string stderr = await stderrTask.ConfigureAwait(false);
         return new CliCommandResult(process.ExitCode, stdout, stderr);
+    }
+
+    private static async Task TerminateOwnChildAsync(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                // This Process instance is the exact companion started above. Never search by name and never
+                // terminate game, launcher, updater, or a second unrelated patcher process.
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (InvalidOperationException) when (process.HasExited)
+        {
+            return;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException || exception is System.ComponentModel.Win32Exception)
+        {
+            throw new InvalidOperationException(
+                "Проверяющий модуль превысил время ожидания, но его собственный процесс не удалось остановить.", exception);
+        }
+
+        using var termination = new CancellationTokenSource(TerminationTimeout);
+        try
+        {
+            await process.WaitForExitAsync(termination.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception)
+        {
+            throw new InvalidOperationException(
+                "Проверяющий модуль превысил время ожидания и не завершился после команды остановки.", exception);
+        }
+    }
+
+    private static async Task DrainTerminatedOutputAsync(Task<string> stdoutTask, Task<string> stderrTask)
+    {
+        try
+        {
+            await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException || exception is ObjectDisposedException)
+        {
+            // The timed-out child is already terminated. Broken redirected pipes contain no trustworthy result,
+            // so the caller receives the timeout message instead of a secondary stream exception.
+        }
     }
 
     private string ResolveFixedCompanion(string fileName)

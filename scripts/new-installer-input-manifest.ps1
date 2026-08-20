@@ -11,98 +11,59 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Set-StrictMode -Version Latest
+Set-StrictMode -Version 3.0
 
-$allowedFiles = @(
-    'InvokersRu.Gui.exe',
-    'InvokersRu.Cli.exe',
-    'ru_RU.mvp.jsonl',
-    'GUI-PUBLISH.json',
-    'TRUSTED-COMPATIBILITY.json',
-    'PREVIEW-BUILD-REPORT.json',
-    'TRANSLATION-AUDIT.json',
-    'SUPERVISED-PUBLISH.json',
-    'README.md',
-    'TEST-INSTRUCTIONS.md',
-    'LICENSE.txt',
-    'glossary.ru.json',
-    'style-guide.ru.md'
-)
+$repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$workRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot 'work'))
+. (Join-Path $PSScriptRoot 'path-safety.ps1')
+. (Join-Path $PSScriptRoot 'windows-payload-policy.ps1')
 
 function Get-AbsolutePath {
     param([Parameter(Mandatory = $true)][string]$Path)
-    return [System.IO.Path]::GetFullPath(
+    return [IO.Path]::GetFullPath(
         $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path))
 }
 
-function Assert-UnderDirectory {
+function Get-RelativePayloadPath {
     param(
-        [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$Root,
-        [Parameter(Mandatory = $true)][string]$Label
+        [Parameter(Mandatory = $true)][string]$Path
     )
 
+    $rootPrefix = (Get-AbsolutePath -Path $Root).TrimEnd('\') + '\'
     $fullPath = Get-AbsolutePath -Path $Path
-    $fullRoot = (Get-AbsolutePath -Path $Root).TrimEnd('\')
-    $prefix = $fullRoot + '\'
-    if (-not $fullPath.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "$Label must stay below '$fullRoot': $fullPath"
+    if (-not $fullPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Payload entry escaped the input root: $fullPath"
     }
-    return $fullPath
+    return $fullPath.Substring($rootPrefix.Length).Replace('\', '/')
 }
 
-function Assert-NoExistingReparseComponents {
+function Assert-NoReparseTree {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    Assert-NoReparsePath -Path $Root -Label 'Installer payload root'
+    foreach ($item in @(Get-ChildItem -LiteralPath $Root -Force -Recurse)) {
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Installer payload contains a reparse point: $($item.FullName)"
+        }
+    }
+}
+
+function Write-NewUtf8Text {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$StopAt,
-        [Parameter(Mandatory = $true)][string]$Label
+        [Parameter(Mandatory = $true)][string]$Text
     )
 
-    $current = Get-AbsolutePath -Path $Path
-    $stop = (Get-AbsolutePath -Path $StopAt).TrimEnd('\')
-    while ($current.StartsWith($stop, [System.StringComparison]::OrdinalIgnoreCase)) {
-        if (Test-Path -LiteralPath $current) {
-            $item = Get-Item -LiteralPath $current -Force
-            if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-                throw "$Label contains an existing reparse component: $current"
-            }
-        }
-
-        if ([string]::Equals($current.TrimEnd('\'), $stop, [System.StringComparison]::OrdinalIgnoreCase)) {
-            break
-        }
-        $parent = Split-Path -Parent $current
-        if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $current) {
-            break
-        }
-        $current = $parent
+    $encoding = New-Object Text.UTF8Encoding($false)
+    $stream = New-Object IO.FileStream($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $bytes = $encoding.GetBytes($Text)
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
     }
-}
-
-function Assert-ExactPayload {
-    param([Parameter(Mandatory = $true)][string]$Directory)
-
-    Assert-NoExistingReparseComponents -Path $Directory -StopAt $script:repoRoot -Label 'Input directory'
-    $items = @(Get-ChildItem -LiteralPath $Directory -Force)
-    $directories = @($items | Where-Object { $_.PSIsContainer })
-    if ($directories.Count -ne 0) {
-        throw "Input directory must not contain subdirectories: $($directories.Name -join ', ')"
-    }
-
-    $actual = @($items | ForEach-Object { $_.Name })
-    $difference = @(Compare-Object -ReferenceObject $allowedFiles -DifferenceObject $actual -CaseSensitive)
-    if ($difference.Count -ne 0) {
-        $details = $difference | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" }
-        throw "Payload does not match the fixed allowlist: $($details -join '; ')"
-    }
-
-    foreach ($name in $allowedFiles) {
-        $path = Join-Path $Directory $name
-        Assert-NoExistingReparseComponents -Path $path -StopAt $script:repoRoot -Label "Payload file '$name'"
-        $item = Get-Item -LiteralPath $path -Force
-        if ($item.Length -le 0) {
-            throw "Payload file must not be empty: $name"
-        }
+    finally {
+        $stream.Dispose()
     }
 }
 
@@ -110,66 +71,77 @@ if ($AppVersion -notmatch '^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(-[A-Za-z0-9][A-Za
     throw "AppVersion is not an accepted semantic version: $AppVersion"
 }
 
-$repoRoot = Get-AbsolutePath -Path (Join-Path $PSScriptRoot '..')
-$workRoot = Join-Path $repoRoot 'work'
-$inputFull = Assert-UnderDirectory -Path $InputDirectory -Root $repoRoot -Label 'Input directory'
+$inputFull = Get-AbsolutePath -Path $InputDirectory
+$manifestFull = Get-AbsolutePath -Path $ManifestPath
+if (-not (Test-CanonicalPathWithin -Path $inputFull -Directory $workRoot)) {
+    throw "Input directory must stay below the repository work directory: $inputFull"
+}
+if (-not (Test-CanonicalPathWithin -Path $manifestFull -Directory $inputFull) -or
+    [IO.Path]::GetFileName($manifestFull) -cne 'PAYLOAD-SHA256.json') {
+    throw "Manifest must be the new PAYLOAD-SHA256.json at the payload root: $manifestFull"
+}
 if (-not (Test-Path -LiteralPath $inputFull -PathType Container)) {
     throw "Input directory does not exist: $inputFull"
 }
-
-$manifestFull = Assert-UnderDirectory -Path $ManifestPath -Root $workRoot -Label 'Manifest path'
 if (Test-Path -LiteralPath $manifestFull) {
     throw "Manifest already exists; refusing to overwrite it: $manifestFull"
 }
 
-$manifestParent = Split-Path -Parent $manifestFull
-Assert-NoExistingReparseComponents -Path $manifestParent -StopAt $repoRoot -Label 'Manifest parent directory'
-[System.IO.Directory]::CreateDirectory($manifestParent) | Out-Null
-Assert-NoExistingReparseComponents -Path $manifestParent -StopAt $repoRoot -Label 'Manifest parent directory'
+Assert-NoReparseTree -Root $inputFull
+Assert-OutsideProtectedRuntime -Path $inputFull -Label 'Installer payload root'
 
-Assert-ExactPayload -Directory $inputFull
+$files = @(Get-ChildItem -LiteralPath $inputFull -Force -File -Recurse)
+if ($files.Count -lt 12 -or $files.Count -gt 512) {
+    throw "Self-contained multi-file payload must contain 12-512 files; found $($files.Count)."
+}
 
-$files = foreach ($name in $allowedFiles) {
-    $path = Join-Path $inputFull $name
-    $item = Get-Item -LiteralPath $path -Force
-    [ordered]@{
-        path = $name
-        length = [long]$item.Length
-        sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToUpperInvariant()
+$records = New-Object Collections.Generic.List[object]
+$seen = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+$totalBytes = [long]0
+foreach ($file in @($files | Sort-Object FullName)) {
+    if ($file.Length -le 0 -or $file.Length -gt 268435456) {
+        throw "Payload files must be 1 byte through 256 MiB: $($file.FullName)"
+    }
+    $relative = Get-RelativePayloadPath -Root $inputFull -Path $file.FullName
+    Assert-WindowsPayloadRelativePath -RelativePath $relative
+    if (-not $seen.Add($relative)) {
+        throw "Payload contains a case-insensitive duplicate path: $relative"
+    }
+    $totalBytes += [long]$file.Length
+    if ($totalBytes -gt 1073741824) {
+        throw 'Player payload exceeds the 1 GiB build limit.'
+    }
+    $records.Add([ordered]@{
+        path = $relative
+        length = [long]$file.Length
+        sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToUpperInvariant()
+    })
+}
+
+$requiredPaths = @(Get-WindowsPayloadRequiredPaths)
+foreach ($required in $requiredPaths) {
+    if (-not $seen.Contains($required)) {
+        throw "Player payload is missing required file: $required"
     }
 }
 
 $manifest = [ordered]@{
-    schema_version = 1
+    schema_version = 2
+    kind = 'invokers-ru-windows-player-payload'
     app_version = $AppVersion
-    files = @($files)
+    runtime_identifier = 'win-x64'
+    self_contained = $true
+    publish_single_file = $false
+    file_count = $records.Count
+    total_bytes = $totalBytes
+    files = $records.ToArray()
 }
+Write-NewUtf8Text -Path $manifestFull -Text (($manifest | ConvertTo-Json -Depth 6) + "`r`n")
 
-$json = $manifest | ConvertTo-Json -Depth 5
-$encoding = New-Object System.Text.UTF8Encoding($false)
-$stream = [System.IO.File]::Open(
-    $manifestFull,
-    [System.IO.FileMode]::CreateNew,
-    [System.IO.FileAccess]::Write,
-    [System.IO.FileShare]::None)
-try {
-    $writer = New-Object System.IO.StreamWriter($stream, $encoding)
-    try {
-        $writer.Write($json)
-    }
-    finally {
-        $writer.Dispose()
-    }
-}
-finally {
-    if ($null -ne $stream) {
-        $stream.Dispose()
-    }
-}
-
-[PSCustomObject]@{
+[ordered]@{
     status = 'created'
     manifest = $manifestFull
     app_version = $AppVersion
-    file_count = $allowedFiles.Count
-} | ConvertTo-Json
+    file_count = $records.Count
+    total_bytes = $totalBytes
+} | ConvertTo-Json -Depth 4

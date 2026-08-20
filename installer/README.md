@@ -1,107 +1,133 @@
-# InvokersRu installer
+# InvokersRu 3.0 Preview — Windows package
 
-This directory contains the reproducible, per-user installer definition for the
-future GUI patcher. The installer only deploys the pre-verified patcher payload.
-It does not launch the patcher, discover or modify the game, contact the network,
-or require administrator privileges.
+The Windows release is a per-user Inno Setup package around a self-contained,
+multi-file `win-x64` publish. The installed player payload contains the GUI, the
+supervised CLI, the exact `0.60.1247` runtime-cache profile and its pinned
+translation catalog. It contains no PowerShell, command files, updater
+executables, services or injected game components.
 
-The current installer sources are **Legacy / Diagnostic WIP**. A later
-runtime-cache CLI test successfully made the game load a Russian preview from
-`LocalLow`, but the GUI and installer payload have not yet been migrated to that
-flow. The GUI apply action must remain disabled and no binary produced from the
-current installer scripts may be presented as an operational localization.
+The installer itself only copies files to the fixed directory
+`%LOCALAPPDATA%\Programs\InvokersRu`, creates one Start Menu shortcut and
+registers a per-user uninstaller. It does not request elevation, launch the
+patcher, close the game, contact GitHub or modify the game. The destination page
+and previous-directory reuse are disabled; a pre-install guard rejects `/DIR`
+overrides, known Invokers game/cache roots, and existing junction/symlink path
+components, including during silent installs.
 
-## Why Inno Setup 6
+## Prerequisites
 
-Inno Setup provides a mature Windows wizard, Start Menu integration and a normal
-uninstaller while supporting installation below `%LOCALAPPDATA%` with
-`PrivilegesRequired=lowest`. It is a simpler fit than MSI/MSIX for this portable,
-per-user community utility.
+- Windows 10 x64 version 1809 or later;
+- .NET 10 SDK for building (the resulting player does not need a system .NET);
+- official Inno Setup 6.3 or newer only when compiling the installer;
+- for a public release: an Authenticode code-signing identity and an RFC 3161
+  timestamp service.
 
-On 2026-08-15 the local machine was checked for Inno Setup (`ISCC.exe`), WiX,
-NSIS and Windows MSIX packaging tools. No compiler was present. The only external
-preparation needed on a build machine is installing the official Inno Setup 6
-compiler. The repository scripts do not download anything.
+The scripts do not download Inno Setup, certificates or signing tools. During
+`dotnet restore`, the publish script uses the official NuGet v3 feed only to
+obtain the matching Microsoft `win-x64` runtime packs when they are not already
+available. `-NoRestore` makes an already-restored build fully offline.
 
-## Fixed payload
+## 1. Publish the verified player payload
 
-The build accepts exactly these thirteen top-level files and rejects directories,
-reparse points, missing files and extra files:
-
-1. `InvokersRu.Gui.exe`
-2. `InvokersRu.Cli.exe`
-3. `ru_RU.mvp.jsonl`
-4. `GUI-PUBLISH.json`
-5. `TRUSTED-COMPATIBILITY.json`
-6. `PREVIEW-BUILD-REPORT.json`
-7. `TRANSLATION-AUDIT.json`
-8. `SUPERVISED-PUBLISH.json`
-9. `README.md`
-10. `TEST-INSTRUCTIONS.md`
-11. `LICENSE.txt`
-12. `glossary.ru.json`
-13. `style-guide.ru.md`
-
-No game asset, original localization container, private translation job or
-updater credential can pass this allowlist. The generated `PAYLOAD-SHA256.json`
-is installed beside the applications for independent verification.
-
-## Build flow
-
-For a diagnostic build, stage the final GUI publish together with the audited
-support package. This step requires `GUI-PUBLISH.json` to say
-`mode=diagnostic-preview`, `gui_apply_enabled=false` and
-`runtime_loader_validated=false`, then verifies all receipt hashes:
+Run from the repository root:
 
 ```powershell
-.\scripts\stage-installer-payload.ps1 `
-  -GuiPublishDirectory .\work\publish\gui-diagnostic `
-  -SupportPackageDirectory .\work\package\supervised-preview `
-  -OutputDirectory .\work\installer-input `
-  -HashManifestPath .\work\installer-input.sha256.json `
-  -AppVersion 0.2.0-diagnostic-preview
+powershell -ExecutionPolicy Bypass -File .\scripts\publish-windows-preview.ps1 `
+  -OutputDirectory .\work\publish\windows-3.0.1-preview `
+  -AppVersion 3.0.1-preview
 ```
 
-For a deliberately assembled payload, create its immutable hash manifest
-directly:
+If `dotnet` on `PATH` is older than .NET 10, add
+`-DotNetPath C:\path\to\dotnet-10\dotnet.exe`. The script checks the selected SDK
+before restoring or compiling anything.
+
+The script performs these checks before creating the final directory:
+
+- the catalog SHA-256 equals the certified `0.60.1247` profile pin;
+- the CLI is compiled with supervised mutation capability and embeds that exact
+  runtime-cache profile;
+- GUI and CLI are self-contained, multi-file `win-x64` publishes with trimming,
+  ReadyToRun and single-file compression disabled;
+- the WindowsDesktop self-contained runtime is kept as one coherent superset;
+  only the five exact supervised-CLI application files are merged into it, then
+  the packaged CLI is executed to prove that it loads that runtime and its
+  embedded profile;
+- exactly `InvokersRu.Gui.exe` and `InvokersRu.Cli.exe` are present;
+- the optional .NET `createdump.exe` helper is removed before hashing so the
+  installed package has no third executable surface;
+- scripts, shortcuts, archives and nested installers are rejected;
+- every final relative path, length and SHA-256 is recorded in
+  `PAYLOAD-SHA256.json`.
+
+The output path must be new, below `work`, outside the game and free of reparse
+points. The script never writes to the installed game.
+
+An unsigned local publish is allowed for testing and prints a prominent warning.
+To sign the project entry points before the payload hashes are sealed:
 
 ```powershell
-.\scripts\new-installer-input-manifest.ps1 `
-  -InputDirectory .\work\installer-input `
-  -ManifestPath .\work\installer-input.sha256.json `
-  -AppVersion 0.3.0-preview
+powershell -ExecutionPolicy Bypass -File .\scripts\publish-windows-preview.ps1 `
+  -OutputDirectory .\work\publish\windows-3.0.1-preview-signed `
+  -AppVersion 3.0.1-preview `
+  -SignToolPath "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe" `
+  -CertificateThumbprint 0123456789ABCDEF0123456789ABCDEF01234567 `
+  -TimestampUrl https://your-rfc3161-provider.example
 ```
 
-Verify it without requiring Inno Setup:
+Use a real thumbprint and the timestamp URL supplied by the certificate or
+Trusted Signing provider. Secrets are not stored in the repository.
+
+## 2. Verify without compiling an installer
 
 ```powershell
-.\scripts\build-installer.ps1 `
-  -InputDirectory .\work\installer-input `
-  -HashManifest .\work\installer-input.sha256.json `
-  -AppVersion 0.3.0-preview `
+powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 `
+  -InputDirectory .\work\publish\windows-3.0.1-preview `
+  -AppVersion 3.0.1-preview `
   -VerifyOnly
 ```
 
-After Inno Setup 6 is available, build into `work`:
+Verification rejects any extra, missing, changed or linked file. The manifest is
+schema 2 and acts as the exact path/hash allowlist for the multi-file .NET
+runtime payload. `-VerifyOnly` never validates an Inno Sign Tool and never claims
+that an installer was signed. To verify an already signed player payload, add
+`-ExpectedSignerThumbprint` without `-InnoSignToolName`.
+
+## 3. Compile an unsigned local installer
 
 ```powershell
-.\scripts\build-installer.ps1 `
-  -InputDirectory .\work\installer-input `
-  -HashManifest .\work\installer-input.sha256.json `
-  -AppVersion 0.3.0-preview `
+powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 `
+  -InputDirectory .\work\publish\windows-3.0.1-preview `
+  -AppVersion 3.0.1-preview `
   -OutputDirectory .\work\installer-output
 ```
 
-The build script re-verifies every length and SHA-256, copies the payload into a
-fresh staging directory, verifies the staged copy, compiles from that stage and
-checks the stage again after compilation. It writes a SHA-256 sidecar for the
-resulting installer. Existing installer outputs are never overwritten.
+The output is named `InvokersRu-3.0-Preview-3.0.1-preview-win-x64.exe` and gets a
+`.sha256` sidecar. The unsigned build is for local testing only; Windows may show
+“Unknown publisher” or SmartScreen until a trusted certificate and reputation
+are available.
 
-Installation target:
+## 4. Compile a signed release installer
 
-```text
-%LOCALAPPDATA%\Programs\InvokersRu
+In Inno Setup, configure a named Sign Tool that invokes `signtool.exe` (or the
+provider's Authenticode client) with SHA-256 and RFC 3161 timestamping. Then pass
+only that configured name:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 `
+  -InputDirectory .\work\publish\windows-3.0.1-preview-signed `
+  -AppVersion 3.0.1-preview `
+  -OutputDirectory .\work\installer-output-signed `
+  -InnoSignToolName InvokersRuRelease `
+  -ExpectedSignerThumbprint 0123456789ABCDEF0123456789ABCDEF01234567
 ```
 
-The installer creates one Start Menu shortcut and registers a normal per-user
-uninstaller. There is intentionally no installer `[Run]` action.
+`InvokersRu.iss` applies the named hook to Setup and the generated uninstaller.
+Before invoking Inno, the build independently verifies the five project binaries
+and `BUILD-RECEIPT.json` against the expected thumbprint. It then fails unless
+the final installer has a valid signature from that same signer. Merely passing
+a configured or fake Sign Tool name is never treated as signature evidence.
+
+Code signing materially reduces warnings, but no project can promise that every
+antivirus product will always accept every new binary. Avoiding obfuscation,
+packers, script launchers, elevation, injection and self-updating executables
+keeps the package transparent and easier to verify.

@@ -6,6 +6,7 @@ namespace InvokersRu.Core.Patching
     public enum InstallationStatus
     {
         CompatibleOriginal,
+        PatchSupersededByOfficialUpdate,
         PatchedByThisTool,
         UnknownBuild,
         MissingFiles,

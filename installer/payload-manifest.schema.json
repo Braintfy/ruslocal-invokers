@@ -1,26 +1,54 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://invokersru.local/schema/installer-payload-v1.json",
-  "title": "InvokersRu verified installer payload",
+  "$id": "https://github.com/Braintfy/ruslocal-invokers/schema/windows-player-payload-v2.json",
+  "title": "InvokersRu Windows self-contained player payload",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
+    "kind",
     "app_version",
+    "runtime_identifier",
+    "self_contained",
+    "publish_single_file",
+    "file_count",
+    "total_bytes",
     "files"
   ],
   "properties": {
     "schema_version": {
-      "const": 1
+      "const": 2
+    },
+    "kind": {
+      "const": "invokers-ru-windows-player-payload"
     },
     "app_version": {
       "type": "string",
       "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,4}(?:-[A-Za-z0-9](?:[A-Za-z0-9.-]{0,31})?)?$"
     },
+    "runtime_identifier": {
+      "const": "win-x64"
+    },
+    "self_contained": {
+      "const": true
+    },
+    "publish_single_file": {
+      "const": false
+    },
+    "file_count": {
+      "type": "integer",
+      "minimum": 12,
+      "maximum": 512
+    },
+    "total_bytes": {
+      "type": "integer",
+      "minimum": 12,
+      "maximum": 1073741824
+    },
     "files": {
       "type": "array",
-      "minItems": 13,
-      "maxItems": 13,
+      "minItems": 12,
+      "maxItems": 512,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -31,29 +59,47 @@
         ],
         "properties": {
           "path": {
-            "enum": [
-              "InvokersRu.Gui.exe",
-              "InvokersRu.Cli.exe",
-              "ru_RU.mvp.jsonl",
-              "GUI-PUBLISH.json",
-              "TRUSTED-COMPATIBILITY.json",
-              "PREVIEW-BUILD-REPORT.json",
-              "TRANSLATION-AUDIT.json",
-              "SUPERVISED-PUBLISH.json",
-              "README.md",
-              "TEST-INSTRUCTIONS.md",
-              "LICENSE.txt",
-              "glossary.ru.json",
-              "style-guide.ru.md"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "allOf": [
+              {
+                "pattern": "^(?!/)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*[ .](?:/|$))[^\\u0000-\\u001F\\\\<>:\"|?*]+$"
+              },
+              {
+                "not": {
+                  "pattern": "(?:^|/)(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.[^/]*)?(?:/|$)"
+                }
+              }
+            ],
+            "oneOf": [
+              {
+                "enum": [
+                  "InvokersRu.Gui.exe",
+                  "InvokersRu.Cli.exe",
+                  "translations/ru_RU.jsonl",
+                  "profiles/runtime-cache-profile.0.60.1247.json",
+                  "BUILD-RECEIPT.json",
+                  "LICENSE.txt",
+                  "README.txt"
+                ]
+              },
+              {
+                "pattern": "^(?:[^/]+/)*[^/]+\\.dll$"
+              },
+              {
+                "pattern": "^[^/]+\\.(?:deps|runtimeconfig)\\.json$"
+              }
             ]
           },
           "length": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 268435456
           },
           "sha256": {
             "type": "string",
-            "pattern": "^[A-Fa-f0-9]{64}$"
+            "pattern": "^[A-F0-9]{64}$"
           }
         }
       }
