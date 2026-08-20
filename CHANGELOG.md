@@ -1,5 +1,20 @@
 # Changelog
 
+## Android APK 1.0.0 — 2026-08-20
+
+- added an Android APK that installs the translation on the phone itself where root is available, and otherwise explains exactly what to do. It composes the Russian file on the device: the LOC1 container and the catalog reader are reimplemented in Java, because the .NET tool cannot run there;
+- kept the app honest about the limit rather than failing mysteriously. Since Android 11 an ordinary app cannot read or write another package's Android/data — the Storage Access Framework refuses that path and MANAGE_EXTERNAL_STORAGE does not cover it — so without root the app states this, walks through enabling developer mode including the seven taps on the build number that reveal it, and opens both the settings screen and the guide;
+- built the APK without Gradle, driving aapt2, javac, d8 and apksigner directly, so nothing is pulled from Maven and the package contains no third-party code;
+- kept the signing key outside the repository and reused it across builds. The first build generated a fresh key every time, which Android rejects as an incompatible update and would have stranded anyone who had already installed the app.
+
+## Разведка Android — 2026-08-20
+
+- проверено на Samsung Galaxy S25 (Android 16) с игрой 0.60.1247: рантайм-кэш лежит во внешнем каталоге `/sdcard/Android/data/hitzone.anima.spirit.guardians/files/i18n/`, и `dl_en_US.bin` с `dl_uk_UA.bin` **побайтово равны** снятым с macOS той же версии, так что собранный для macOS русский файл встал на Android без пересборки: 41 037 строк применено, 1 английский fallback;
+- подтверждено, что доступ через ADB реально работает: у `shell` есть группы `ext_data_rw`/`ext_obb_rw`, проверены push, чтение, `mv` и `rm` — включая переименование, которое на части свежих прошивок ломается;
+- зафиксировано, что приложением на самом телефоне обойтись нельзя: с Android 11 чужой `Android/data` закрыт и для SAF, и для `MANAGE_EXTERNAL_STORAGE`, внутренний каталог закрыт изоляцией по UID, а `run-as` на релизной сборке отказывает — проверено;
+- разгадана хэш-функция ключей LOC1: это FNV-1a 64-bit от UTF-8 строкового ключа. Сопоставление ключей из IL2CPP-метаданных со значениями корпуса сходится смыслом (`ui-multibattle-exit-popup-title` → «Stop Multi-Battle?»), что снимает главное белое пятно формата и даёт контекст экрана по префиксу ключа;
+- отмечено, что в сборке 0.59.1005 тот же каталог использовал другой контейнер `cache.dat2` с магией `AMNA` и текстовыми ключами; в 0.60.1247 игра перешла на общий для платформ LOC1, поэтому отдельный парсер под него не нужен.
+
 ## 2.3.0-macos — 2026-08-19
 
 - restored the Latin stat abbreviations the model had transliterated: `ATK` was written as Cyrillic `АТК` in 866 places, which is most damage formulas in the game, plus `AoE` as `АоЕ`/`АоЭ` in five hints. The replacement only applies where the English source actually contains the abbreviation;

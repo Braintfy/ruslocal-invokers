@@ -82,6 +82,16 @@ Journal и state пишутся через temporary file + flush-to-disk + atom
 
 Index record: `u64 keyHash + u32 valueOffset + u32 UTF8ByteLength`. Sentinel отсутствующего значения: `FFFFFFFF/0`.
 
+`keyHash` — это **FNV-1a 64-bit от UTF-8-представления строкового ключа локализации** (разгадано 20.08.2026 сопоставлением ключей из IL2CPP-метаданных Android-сборки со значениями в `dl_en_US.bin`):
+
+```python
+h = 0xCBF29CE484222325
+for byte in key.encode("utf-8"):
+    h = ((h ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+```
+
+Проверка: `ui-multibattle-exit-popup-title` → `"Stop Multi-Battle?"`, `ui-player-profile-avatar-frame-unlock-vip-level` → `"Unlocks at VIP Pass Level {0}"`. Это даёт возможность восстанавливать осмысленное имя строки по её хэшу, что полезно для контекста при переводе и для экранного QA: префикс ключа указывает на экран. Патчеру функция не нужна — он работает с готовым набором хэшей, — но для инструментов анализа она снимает главное белое пятно формата. Подробности: [android-client.md](android-client.md).
+
 Текущий conservative writer поддерживает только пустой collision/key-blob layout, строго возрастающие уникальные hashes и не заполняет sentinel. Для профиля `0.60.1239` сохраняются locale ID `8`, locale revision `1BCA1660`, content version `Prod_0.60.0_58` и 41 290 ключей. String pool пакуется детерминированно; повторная сборка preview дала тот же SHA-256.
 
 ## Что ещё нужно до beta

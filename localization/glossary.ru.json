@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "locale": "ru-RU",
-  "revision": "full-2026-08-19.1",
+  "revision": "screenshot-qa-2026-08-19.1",
   "style": {
     "tone": "clear concise fantasy action RPG",
     "address": "polite plural: вы; imperative plural in player-facing instructions",
@@ -9,7 +9,7 @@
     "quotes": "Russian angle quotes for prose; preserve all technical delimiters",
     "case": "preserve ALL CAPS for short UI labels; otherwise capitalize only sentence starts and proper names",
     "generic_entities": "инвокер, титан, босс, навык, реликвия and other generic gameplay nouns are lowercase in running text",
-    "names": "keep character, boss, place and skill proper names in official Latin spelling until an approved onomasticon exists",
+    "names": "имена инвокеров, боссов, врагов и NPC остаются латиницей целиком, вместе с эпитетом: Redd Riot, Nautila the Unfathomable, Ogryn Hatewitch. Транслитерация и смешанные формы («Бунт Redd») — дефект. Цели заданий, названия мест, предметов и навыков переводятся, имя внутри остаётся латиницей: «Победить Galvos», «Храм Pelanna», «Возвращение Malakan».",
     "numbers_and_units": "preserve source numbers, decimal separators, percentages and compact units byte-for-byte",
     "objectives": "use the infinitive: Получить, Улучшить, Победить",
     "buttons": "use a short infinitive and preserve source capitalization pattern"
@@ -194,7 +194,7 @@
     },
     {
       "source": "Deflection",
-      "target": "перенаправление урона"
+      "target": "перенос урона"
     },
     {
       "source": "Accuracy",
@@ -496,6 +496,21 @@
       "source": "Steals",
       "target": "похищает",
       "forms": "о баффах: Steals N random buffs = похищает N случайных баффов"
+    },
+    {
+      "source": "Taunt",
+      "target": "Провокация",
+      "forms": "дебафф; не «Насмешка» и не «Дразнение»"
+    },
+    {
+      "source": "Launch",
+      "target": "Подбрасывание",
+      "forms": "механика подброса; глагол — «подбрасывает», ярлык — «Подброс»"
+    },
+    {
+      "source": "Manaburn",
+      "target": "Манаожог",
+      "forms": "отдельная скверна, НЕ Манашок"
     }
   ],
   "do_not_translate": [
@@ -505,7 +520,8 @@
   "open_questions": [
     "Единицы измерения (12x8m, 5s) остаются латиницей: этого требует проверка совместимости, локализованные варианты отбраковываются.",
     "Знак + или − перед числом добавлять нельзя: числовая проверка сверяет токены с оригиналом побайтово.",
-    "Терминология сверена с invokersdb.app и ggnoluck.com в августе 2026 года."
+    "Терминология сверена с invokersdb.app и ggnoluck.com в августе 2026 года.",
+    "Отраслевое «файлы cookie» конфликтует с запретом латиницы в готовом тексте: в юридических строках допускается «куки-файлы»."
   ],
   "skill_phrasing": {
     "Attacks 1 enemy, dealing X damage": "Атакует 1 врага, нанося X урона",
@@ -518,5 +534,6 @@
     "Requires Accuracy for:": "Требуется точность для:",
     "if the target is immune to Crowd Control debuffs": "если цель невосприимчива к дебаффам контроля",
     "Launches the target, knocking them Nm away": "Подбрасывает цель, отбрасывая её на Nm"
-  }
+  },
+  "authority": "localization/terminology.ru.json — источник правды для имён эффектов, скверн, стат-сокращений, строк формул и коротких ярлыков. При расхождении выигрывает terminology.ru.json."
 }

@@ -5,7 +5,7 @@
 set -uo pipefail
 
 # Version of this script. It updates itself from the repository; the bundle around it stays frozen.
-APP_VERSION="2.3.0"
+APP_VERSION="2.4.0"
 # Version of the application bundle, which only changes when the launcher or the CLI has to change.
 BUNDLE_VERSION="2.2.0"
 
@@ -29,6 +29,7 @@ LOG_FILE="${SUPPORT_DIR}/patcher.log"
 RESUME_MARKER="${SUPPORT_DIR}/.resuming"
 
 TARGET_NAME="dl_uk_UA.bin"
+ENGLISH_NAME="dl_en_US.bin"
 TITLE="Русификатор Invokers"
 
 mkdir -p "$SUPPORT_DIR" "$WORK_DIR" "$BACKUP_DIR" "$RUNTIME_DIR"
@@ -258,6 +259,184 @@ refresh_overlay() {
     [ -s "$OVERLAY_CACHE" ]
 }
 
+# ---------- Android ----------
+#
+# An app on the phone itself cannot do this: since Android 11 another package's Android/data is
+# closed to the Storage Access Framework and to MANAGE_EXTERNAL_STORAGE alike, and the internal data
+# directory is closed by UID isolation. The adb shell user is the documented exception, so the phone
+# is patched from here over a cable.
+
+ANDROID_PKG="hitzone.anima.spirit.guardians"
+ANDROID_DIR="/sdcard/Android/data/${ANDROID_PKG}/files/i18n"
+ANDROID_STATE="${SUPPORT_DIR}/android-state.json"
+ADB=""
+
+find_adb() {
+    local candidate
+    for candidate in "$(command -v adb 2>/dev/null)" \
+                     "/usr/local/bin/adb" "/opt/homebrew/bin/adb" \
+                     "${HOME}/Library/Android/sdk/platform-tools/adb"; do
+        [ -n "$candidate" ] && [ -x "$candidate" ] && { ADB="$candidate"; return 0; }
+    done
+    return 1
+}
+
+# Echoes the serial of a single usable device, or nothing.
+android_device() {
+    [ -n "$ADB" ] || return 1
+    "$ADB" devices 2>/dev/null | awk 'NR>1 && $2=="device" {print $1}' | head -1
+}
+
+android_has_game() {
+    "$ADB" -s "$1" shell pm list packages 2>/dev/null | tr -d '\r' | grep -qx "package:${ANDROID_PKG}"
+}
+
+android_sha() { "$ADB" -s "$1" shell "sha256sum '$2'" 2>/dev/null | tr -d '\r' | awk '{print toupper($1)}'; }
+android_owner() { "$ADB" -s "$1" shell "ls -l '${ANDROID_DIR}/${TARGET_NAME}'" 2>/dev/null | tr -d '\r' | awk '{print $3}'; }
+
+android_install() {
+    local serial="$1" current original backup built applied
+
+    if ! "$ADB" -s "$serial" shell id 2>/dev/null | tr -d '\r' | grep -q ext_data_rw; then
+        say_error "На этом устройстве у ADB нет доступа к данным приложений.
+
+Такое бывает на некоторых прошивках и на устройствах под управлением организации. Установить перевод на этот телефон не получится."
+        return 1
+    fi
+    if ! android_has_game "$serial"; then
+        say_error "На подключённом устройстве не установлена игра Invokers: Titan Legacy."
+        return 1
+    fi
+
+    current="$(android_sha "$serial" "${ANDROID_DIR}/${TARGET_NAME}")"
+    if [ -z "$current" ]; then
+        say_error "На телефоне ещё нет украинского языкового файла.
+
+Откройте игру, выберите в настройках украинский язык, дождитесь загрузки и полностью закройте игру. Затем повторите."
+        return 1
+    fi
+
+    progress_start "android: downloading overlay"
+    refresh_overlay || { say_error "Не удалось загрузить перевод и нет сохранённой копии."; return 1; }
+
+    # Anything pushed over adb lands owned by shell, while the game writes as its own user. That tells
+    # a pristine file apart from one another tool already replaced, so a patched file is never
+    # recorded as the original and restore can never put a patched file back.
+    local known_patched=""; local known_original=""
+    [ -f "$ANDROID_STATE" ] && known_patched="$(json_field "$ANDROID_STATE" patched_sha256 || true)"
+    [ -f "$ANDROID_STATE" ] && known_original="$(json_field "$ANDROID_STATE" original_sha256 || true)"
+    if [ "$(android_owner "$serial")" = "shell" ] \
+       && [ "$current" != "$known_patched" ] && [ "$current" != "$known_original" ]; then
+        say_error "Файл локализации на телефоне уже подменён каким-то инструментом, и оригинала нет.
+
+Чтобы вернуть оригинал: в игре переключите язык на другой и обратно на украинский — клиент скачает файл заново."
+        return 1
+    fi
+
+    "$ADB" -s "$serial" shell am force-stop "$ANDROID_PKG" >/dev/null 2>&1
+    mkdir -p "${WORK_DIR}/android"
+    rm -f "${WORK_DIR}/android/${ENGLISH_NAME}" "${WORK_DIR}/android/${TARGET_NAME}"
+    "$ADB" -s "$serial" pull "${ANDROID_DIR}/${ENGLISH_NAME}" "${WORK_DIR}/android/${ENGLISH_NAME}" >/dev/null 2>&1 || {
+        say_error "Не удалось прочитать файлы игры с телефона."; return 1; }
+    "$ADB" -s "$serial" pull "${ANDROID_DIR}/${TARGET_NAME}" "${WORK_DIR}/android/${TARGET_NAME}" >/dev/null 2>&1 || {
+        say_error "Не удалось прочитать файлы игры с телефона."; return 1; }
+
+    if [ "$current" = "$known_patched" ] && [ -n "$known_original" ]; then
+        original="$known_original"
+        backup="${BACKUP_DIR}/android.${original}.${TARGET_NAME}"
+        [ -f "$backup" ] && [ "$(sha256_of "$backup")" = "$original" ] || {
+            say_error "Резервная копия оригинала повреждена. Переключите язык в игре, чтобы клиент скачал файл заново."; return 1; }
+        cp -f "$backup" "${WORK_DIR}/android/${TARGET_NAME}"
+    else
+        original="$current"
+        backup="${BACKUP_DIR}/android.${original}.${TARGET_NAME}"
+        if [ ! -f "$backup" ] || [ "$(sha256_of "$backup")" != "$original" ]; then
+            cp -f "${WORK_DIR}/android/${TARGET_NAME}" "${backup}.tmp"
+            [ "$(sha256_of "${backup}.tmp")" = "$original" ] || { rm -f "${backup}.tmp"; say_error "Резервная копия не сошлась, ничего не изменено."; return 1; }
+            mv -f "${backup}.tmp" "$backup"
+        fi
+    fi
+
+    progress_start "android: building"
+    built="${WORK_DIR}/android/${TARGET_NAME}.ru"
+    rm -f "$built" "${WORK_DIR}/android/report.json"
+    if ! "$CLI" build --english "${WORK_DIR}/android/${ENGLISH_NAME}" --base "${WORK_DIR}/android/${TARGET_NAME}" \
+            --translations "$OVERLAY_CACHE" --output "$built" --report "${WORK_DIR}/android/report.json" \
+            --include-draft --raw --per-locale-content-version >>"$LOG_FILE" 2>&1; then
+        say_error "Не удалось собрать перевод для версии игры на телефоне.
+
+Скорее всего игра обновилась и перевод ещё не адаптирован."
+        return 1
+    fi
+    applied="$(/usr/bin/sed -n 's/.*"applied_ru"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "${WORK_DIR}/android/report.json" | head -1)"
+
+    "$ADB" -s "$serial" push "$built" "${ANDROID_DIR}/${TARGET_NAME}" >/dev/null 2>&1 || {
+        say_error "Не удалось записать файл на телефон."; return 1; }
+
+    local installed; installed="$(android_sha "$serial" "${ANDROID_DIR}/${TARGET_NAME}")"
+    if [ "$installed" != "$(sha256_of "$built")" ]; then
+        "$ADB" -s "$serial" push "$backup" "${ANDROID_DIR}/${TARGET_NAME}" >/dev/null 2>&1
+        say_error "Установленный файл не прошёл проверку, оригинал возвращён."
+        return 1
+    fi
+
+    cat > "$ANDROID_STATE" <<JSON
+{
+  "schema": 1,
+  "device": "${serial}",
+  "original_sha256": "${original}",
+  "patched_sha256": "${installed}",
+  "backup_path": "${backup}"
+}
+JSON
+
+    say_info "Готово. На телефоне переведено строк: ${applied:-?}.
+
+ЧТОБЫ ПЕРЕВОД НЕ ПРОПАЛ — то же правило, что и на компьютере:
+не открывайте выбор языка в настройках игры. При выборе любого языка клиент заново скачивает файл и стирает перевод. Язык должен остаться украинским.
+
+После обновления игры перевод нужно установить заново.
+Вернуть оригинал можно кнопкой «Восстановить на телефоне»."
+    return 0
+}
+
+android_restore() {
+    local serial="$1" original backup current
+    [ -f "$ANDROID_STATE" ] || { say_info "Перевод на телефон не устанавливался."; return 0; }
+    original="$(json_field "$ANDROID_STATE" original_sha256)"
+    backup="$(json_field "$ANDROID_STATE" backup_path)"
+    [ -f "$backup" ] && [ "$(sha256_of "$backup")" = "$original" ] || {
+        say_error "Резервная копия повреждена или отсутствует."; return 1; }
+
+    current="$(android_sha "$serial" "${ANDROID_DIR}/${TARGET_NAME}")"
+    [ "$current" != "$original" ] || { say_info "На телефоне уже оригинальный файл."; return 0; }
+
+    "$ADB" -s "$serial" shell am force-stop "$ANDROID_PKG" >/dev/null 2>&1
+    "$ADB" -s "$serial" push "$backup" "${ANDROID_DIR}/${TARGET_NAME}" >/dev/null 2>&1 || {
+        say_error "Не удалось восстановить оригинал на телефоне."; return 1; }
+    [ "$(android_sha "$serial" "${ANDROID_DIR}/${TARGET_NAME}")" = "$original" ] || {
+        say_error "Восстановленный файл не прошёл проверку."; return 1; }
+    say_info "На телефоне восстановлен оригинальный украинский текст."
+    return 0
+}
+
+offer_adb_install() {
+    local answer
+    answer="$(ask "К компьютеру подключён телефон, но для работы с ним нужен ADB — стандартная утилита Google для связи с устройствами Android.
+
+Её нет в системе. Установить через Homebrew одной командой?" "Не сейчас" "Установить")"
+    [ "$answer" = "Установить" ] || return 1
+    if ! command -v brew >/dev/null 2>&1; then
+        say_error "Homebrew не установлен.
+
+Скачайте Android Platform Tools вручную: developer.android.com/tools/releases/platform-tools"
+        return 1
+    fi
+    say_info "Устанавливаю ADB, это займёт минуту. Нажмите OK и подождите."
+    brew install --cask android-platform-tools >>"$LOG_FILE" 2>&1
+    find_adb
+}
+
 # ---------- actions ----------
 
 do_install() {
@@ -478,6 +657,38 @@ while true; do
     fi
     break
 done
+
+# A macOS dialog takes at most three buttons, so the platform is a separate question rather than a
+# fourth button on the action menu.
+ANDROID_SERIAL=""
+if find_adb; then
+    ANDROID_SERIAL="$(android_device)"
+    [ -n "$ANDROID_SERIAL" ] && android_has_game "$ANDROID_SERIAL" || ANDROID_SERIAL=""
+fi
+
+PLATFORM="mac"
+if [ -n "$ANDROID_SERIAL" ]; then
+    where="$(ask "К компьютеру подключён телефон Android с установленной игрой.
+
+Куда установить перевод?" "Отмена" "На телефон" "На этот Mac")"
+    case "$where" in
+        "На телефон") PLATFORM="android" ;;
+        "На этот Mac") PLATFORM="mac" ;;
+        *) exit 0 ;;
+    esac
+fi
+
+if [ "$PLATFORM" = "android" ]; then
+    action="$(ask "Телефон: ${ANDROID_SERIAL}
+
+Что сделать?" "Отмена" "Восстановить на телефоне" "Установить на телефон")"
+    case "$action" in
+        "Установить на телефон") android_install "$ANDROID_SERIAL" ;;
+        "Восстановить на телефоне") android_restore "$ANDROID_SERIAL" ;;
+        *) exit 0 ;;
+    esac
+    exit 0
+fi
 
 action="$(ask "$(describe_state "$CACHE_ROOT")
 
