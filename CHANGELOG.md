@@ -1,5 +1,15 @@
 # Changelog
 
+## macOS 2.3.0 — 2026-08-20
+
+- built the bundle universal. Both slices were arm64 only, so on an Intel Mac the app did not fail — it never started: Finder drew a prohibitory badge on the icon and there was nowhere for a message to appear. Rosetta does not help here, it translates the other direction. The launcher is now compiled for both architectures and the CLI is two publishes joined with `lipo`, which is why the image grew from 29 MB to 60 MB;
+- replaced the one dialog that covered every empty result. It blamed Full Disk Access for all of them, which is wrong in the common cases: on a machine that cannot run the game no permission will ever help, and a game that has never been launched has no data to protect. There is now a separate message for each real cause — Intel hardware, game not installed, game never launched, access not granted, several containers — and the Intel one says plainly that Invokers for Mac is an iPhone app and App Store installs those only on Apple Silicon;
+- moved the Android check ahead of the Mac data check. A computer that cannot run the game itself can still build the file and carry it to a connected phone, and dying on the missing Mac data first hid that from exactly the users with no other route;
+- separated the bundle being built from the oldest bundle that still works. They were the same value, so every rebuild told every existing user to download the image again; the nag now also compares dotted numbers instead of strings, which had reported a newer bundle as outdated;
+- fixed `find_cache_root` returning failure after succeeding. It piped into `head`, which closes the pipe early, and under `pipefail` that became a non-zero exit — masked at the only call site by `|| true`, and wrong for anyone else who checked;
+- lowered the minimum to macOS 12 and refreshed the counts, which still advertised 40 541 strings from before the screenshot QA pass;
+- stopped self-update from walking backwards. It replaced the driver whenever the published version merely *differed* from the running one, so a freshly released image whose changes had not reached `main` yet would downgrade itself to the older script on its very first launch and quietly undo the release. It now refuses to move to an older version unless the manifest says `allow_downgrade`, which keeps a deliberate rollback possible without letting an accidental one through.
+
 ## Android 2.0.0 — 2026-08-20
 
 - turned the phone into the builder and the computer into a courier, which is what finally makes the translation installable without root. The app already knew how to compose the LOC1 file; what it cannot do is reach the game's directory. So the computer copies the game's two language files into the patcher's own directory — the one place adb may write and the app may read without any permission — starts the build with an explicit intent, and copies the result back. The computer needs adb and nothing else: no .NET, no repository, no build tools;

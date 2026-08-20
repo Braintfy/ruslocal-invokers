@@ -5,9 +5,12 @@
 set -uo pipefail
 
 # Version of this script. It updates itself from the repository; the bundle around it stays frozen.
-APP_VERSION="2.4.0"
+APP_VERSION="2.6.0"
 # Version of the application bundle, which only changes when the launcher or the CLI has to change.
-BUNDLE_VERSION="2.2.0"
+BUNDLE_VERSION="2.3.0"
+# Oldest bundle that still works. Kept apart from BUNDLE_VERSION so rebuilding the image does not tell
+# everyone to download it again: a new bundle is only mandatory when the old one genuinely cannot run.
+MINIMUM_BUNDLE_VERSION="2.2.0"
 
 REPO_RAW="https://raw.githubusercontent.com/Braintfy/ruslocal-invokers/main"
 OVERLAY_URL="${REPO_RAW}/translations/ru_RU.jsonl"
@@ -72,18 +75,123 @@ json_field() {
 
 # ---------- environment ----------
 
-find_cache_root() {
-    local containers="${HOME}/Library/Containers" found=() candidate
-    [ -d "$containers" ] || return 1
-    for container in "$containers"/*/; do
-        candidate="${container}Data/Documents/i18n"
-        [ -f "${candidate}/dl_en_US.bin" ] && found+=("$candidate")
+# Every place a build of the game is known to keep its localization cache. The iOS-on-Mac build hides
+# it in a container named after a random UUID, so the English file is what identifies the directory
+# rather than the path. Listing this keeps working without Full Disk Access; reading the files does not.
+cache_candidates() {
+    local containers="${HOME}/Library/Containers" container candidate
+    if [ -d "$containers" ]; then
+        for container in "$containers"/*/; do
+            candidate="${container}Data/Documents/i18n"
+            [ -f "${candidate}/${ENGLISH_NAME}" ] && printf '%s\n' "$candidate"
+        done
+    fi
+    # Where a native Unity player would keep the same tuple, should one ever ship for macOS.
+    for candidate in "${HOME}/Library/Application Support/Hit_Zone/Invokers/i18n" \
+                     "${HOME}/Library/Application Support/com.Hit_Zone.Invokers/i18n"; do
+        [ -f "${candidate}/${ENGLISH_NAME}" ] && printf '%s\n' "$candidate"
     done
-    [ "${#found[@]}" -eq 1 ] || return 1
-    printf '%s\n' "${found[0]}"
+}
+
+# The list is collected once and counted in memory. Piping into head instead would close the pipe
+# early, and under pipefail that turns a successful lookup into a non-zero exit status.
+cache_candidate_count() {
+    local list
+    list="$(cache_candidates)"
+    [ -n "$list" ] || { printf '0\n'; return 0; }
+    printf '%s\n' "$list" | wc -l | tr -d ' '
+}
+
+find_cache_root() {
+    local list
+    list="$(cache_candidates)"
+    [ -n "$list" ] || return 1
+    [ "$(printf '%s\n' "$list" | wc -l | tr -d ' ')" -eq 1 ] || return 1
+    printf '%s\n' "$list"
 }
 
 game_running() { pgrep -f "Invokers.app/Invokers" >/dev/null 2>&1; }
+
+# Reports the hardware, not the process: under Rosetta uname would answer x86_64 on an Apple Silicon
+# machine, and the whole diagnosis below hangs on telling those two apart correctly.
+apple_silicon() { [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = "1" ]; }
+
+cpu_name() { sysctl -n machdep.cpu.brand_string 2>/dev/null || uname -m; }
+
+# Spotlight finds the game wherever it was moved and needs no permission of its own; the fixed path is
+# the fallback for a machine with indexing switched off.
+game_bundle() {
+    local hit
+    hit="$(mdfind "kMDItemCFBundleIdentifier == 'hitzone.anima.spirit.guardians'" 2>/dev/null | head -1)"
+    if [ -n "$hit" ] && [ -d "$hit" ]; then printf '%s\n' "$hit"; return 0; fi
+    [ -d "/Applications/Invokers.app" ] && { printf '%s\n' "/Applications/Invokers.app"; return 0; }
+    return 1
+}
+
+# The bundled file handler is built for Apple Silicon, because the iOS-on-Mac game it edits cannot be
+# installed anywhere else. Checking it here turns "Bad CPU type in executable" into a sentence that
+# tells the user what actually happened.
+require_cli() {
+    [ -f "$CLI" ] || die "Внутри приложения нет файла обработчика (${CLI}).
+
+Образ повреждён — скачайте его заново со страницы проекта."
+    chmod +x "$CLI" 2>/dev/null || true
+    "$CLI" help >/dev/null 2>&1 && return 0
+    if apple_silicon; then
+        die "Встроенный обработчик файлов игры не запускается.
+
+Скачайте образ приложения заново со страницы проекта."
+    fi
+    die "Встроенный обработчик файлов игры собран под Apple Silicon и на процессоре Intel не работает.
+
+Процессор этого компьютера: $(cpu_name)."
+}
+
+# One message per real cause. The old dialog blamed Full Disk Access for every empty result, which is
+# wrong in the common cases: on a machine that cannot run the game at all no permission will ever help,
+# and a game that has never been launched has no data to protect in the first place.
+diagnose_missing_game() {
+    local bundle count
+    bundle="$(game_bundle || true)"
+    count="$(cache_candidate_count)"
+
+    if [ "$count" -gt 1 ]; then
+        die "Найдено несколько папок с данными игры (${count}).
+
+Русификатор не станет угадывать, какую из них менять, чтобы не испортить чужие файлы. Напишите об этом в issue проекта — путь нужно будет указать вручную."
+    fi
+
+    if [ -z "$bundle" ] && ! apple_silicon; then
+        die "На этом Mac игру запустить нельзя.
+
+Invokers для Mac — это приложение для iPhone и iPad, а такие приложения App Store ставит только на компьютеры Apple Silicon (M1 и новее). Здесь процессор Intel: $(cpu_name).
+
+Русификатору нечего менять: папки с данными игры на этом компьютере нет и не появится.
+
+Если вы играете на телефоне Android — подключите его кабелем, включите отладку по USB и запустите русификатор снова: перевод можно поставить на телефон."
+    fi
+
+    if [ -z "$bundle" ]; then
+        die "Игра Invokers на этом Mac не найдена.
+
+Установите её из App Store — на Apple Silicon она лежит в разделе «Приложения для iPhone и iPad» — и запустите хотя бы один раз, чтобы игра создала свою папку с данными.
+
+Затем запустите русификатор снова."
+    fi
+
+    if [ -d "${HOME}/Library/Containers" ] && ! ls "${HOME}/Library/Containers" >/dev/null 2>&1; then
+        require_disk_access "${HOME}/Library/Containers"
+        return 0
+    fi
+
+    die "Игра установлена, но её языковые файлы ещё не скачаны.
+
+Запустите Invokers, дождитесь главного меню, зайдите в настройки и выберите украинский язык. Дождитесь загрузки и полностью закройте игру (Cmd+Q).
+
+До этого заменять нечего: игра держит языковые таблицы не внутри себя, а в папке данных, и создаёт их при первом запуске.
+
+Игра найдена здесь: ${bundle}"
+}
 
 # macOS blocks one app from reading another app's container until the user grants Full Disk Access.
 # An app launched from Finder therefore sees "Operation not permitted" where a terminal would not.
@@ -186,6 +294,17 @@ self_update() {
     [ -n "$published" ] && [ -n "$expected" ] || return 0
     [ "$published" != "$APP_VERSION" ] || return 0
 
+    # A published version older than the one already running means the repository has not caught up
+    # with a release yet. Following it downgrades a working driver to an obsolete one — which is what a
+    # freshly released image does on its very first launch, silently undoing everything the release was
+    # for. Rolling back stays possible, but it has to be stated in the manifest instead of happening by
+    # accident.
+    if version_older "$published" "$APP_VERSION" \
+       && [ "$(json_field "$manifest" allow_downgrade || true)" != "yes" ]; then
+        printf 'self-update refused: published %s is older than %s\n' "$published" "$APP_VERSION" >>"$LOG_FILE"
+        return 0
+    fi
+
     fresh="${WORK_DIR}/patcher.sh.new"
     fetch "$PATCHER_URL" "$fresh" || { rm -f "$fresh"; return 0; }
     if [ "$(sha256_of "$fresh")" != "$(printf '%s' "$expected" | tr '[:lower:]' '[:upper:]')" ]; then
@@ -211,12 +330,30 @@ $(json_field "$manifest" notes || true)
     INVOKERSRU_UPDATED=1 exec /bin/bash "${RUNTIME_DIR}/patcher.sh" "$@"
 }
 
+# Compares dotted numbers rather than strings, so a bundle newer than the published minimum is not
+# mistaken for an outdated one.
+version_older() {
+    local -a left right
+    local index a b
+    IFS=. read -r -a left <<<"$1"
+    IFS=. read -r -a right <<<"$2"
+    for index in 0 1 2; do
+        a="${left[$index]:-0}"; b="${right[$index]:-0}"
+        a="${a//[!0-9]/}"; b="${b//[!0-9]/}"
+        [ -n "$a" ] || a=0
+        [ -n "$b" ] || b=0
+        [ "$a" -lt "$b" ] && return 0
+        [ "$a" -gt "$b" ] && return 1
+    done
+    return 1
+}
+
 check_app_update() {
     local manifest="${WORK_DIR}/manifest.json" required notes
     [ -f "$manifest" ] || fetch "$MANIFEST_URL" "$manifest" || return 0
     required="$(json_field "$manifest" minimum_bundle_version || true)"
     [ -n "$required" ] || return 0
-    if [ "$required" != "$BUNDLE_VERSION" ]; then
+    if version_older "$BUNDLE_VERSION" "$required"; then
         notes="$(json_field "$manifest" bundle_notes || true)"
         say_info "Вышла новая сборка приложения: ${required} (у вас ${BUNDLE_VERSION}).
 
@@ -442,7 +579,7 @@ offer_adb_install() {
 do_install() {
     local cache_root="$1" english target stamp built current original backup applied
 
-    english="${cache_root}/dl_en_US.bin"
+    english="${cache_root}/${ENGLISH_NAME}"
     target="${cache_root}/${TARGET_NAME}"
     stamp="${cache_root}/${TARGET_NAME}.ver"
 
@@ -606,8 +743,6 @@ describe_state() {
 
 # ---------- main ----------
 
-[ -x "$CLI" ] || die "Повреждённая установка: не найден исполняемый файл внутри приложения."
-
 # A relaunch triggered by the Full Disk Access prompt should land the user back where they were,
 # not at the beginning of the same explanation they just read.
 RESUMING=false
@@ -625,58 +760,71 @@ if [ "$RESUMING" = false ]; then
 
 Приложение не связано с HitZone Inc. Оно изменяет только один файл кэша локализации внутри папки данных игры и не трогает саму игру, её подпись и защиту. Оригинал сохраняется, откат доступен в любой момент.
 
-Переведено 40 541 строка из 41 292 — почти весь интерфейс. Перевод машинный и не вычитан человеком. Используйте на свой риск." "Выход" "Продолжить")"
+Переведено 41 037 строк из 41 292 — весь интерфейс. Перевод машинный и не вычитан человеком. Используйте на свой риск." "Выход" "Продолжить")"
     [ "$choice" = "Продолжить" ] || exit 0
 fi
 
 check_app_update
 
-CACHE_ROOT="$(find_cache_root || true)"
-if [ -z "$CACHE_ROOT" ]; then
-    # Without Full Disk Access the container is invisible rather than absent, so tell those two apart
-    # before blaming the installation.
-    if [ -d "${HOME}/Library/Containers" ] && ! ls "${HOME}/Library/Containers" >/dev/null 2>&1; then
-        require_disk_access "${HOME}/Library/Containers"
-    fi
-    die "Не удалось найти данные игры Invokers.
-
-Убедитесь, что игра установлена из App Store и была запущена хотя бы один раз.
-
-Если игра точно установлена, скорее всего не выдан полный доступ к диску: «Системные настройки» → «Конфиденциальность и безопасность» → «Полный доступ к диску» → включить «Русификатор Invokers»."
+# The phone is looked for before the Mac's own data, because a computer that cannot run the game itself
+# can still carry the translation onto a connected Android device. Failing on the missing Mac data
+# first would hide that from exactly the users who have no other route.
+ANDROID_SERIAL=""
+if find_adb; then
+    ANDROID_SERIAL="$(android_device)"
+    if [ -n "$ANDROID_SERIAL" ] && ! android_has_game "$ANDROID_SERIAL"; then ANDROID_SERIAL=""; fi
 fi
-printf 'cache root: %s\n' "$CACHE_ROOT" >>"$LOG_FILE"
-require_disk_access "${CACHE_ROOT}/dl_en_US.bin"
 
-while true; do
-    if game_running; then
+CACHE_ROOT="$(find_cache_root || true)"
+PLATFORM="mac"
+
+if [ -z "$CACHE_ROOT" ]; then
+    if [ -n "$ANDROID_SERIAL" ]; then
+        answer="$(ask "Данные игры на этом Mac не найдены, но к компьютеру подключён телефон Android с установленной игрой.
+
+Установить перевод на телефон?" "Почему не найдено" "На телефон")"
+        if [ "$answer" = "На телефон" ]; then
+            PLATFORM="android"
+        else
+            diagnose_missing_game
+            CACHE_ROOT="$(find_cache_root || true)"
+            [ -n "$CACHE_ROOT" ] || exit 0
+        fi
+    else
+        diagnose_missing_game
+        CACHE_ROOT="$(find_cache_root || true)"
+        [ -n "$CACHE_ROOT" ] || die "Данные игры так и не найдены.
+
+Запустите игру, дождитесь главного меню и попробуйте снова."
+    fi
+fi
+
+if [ "$PLATFORM" = "mac" ]; then
+    printf 'cache root: %s\n' "$CACHE_ROOT" >>"$LOG_FILE"
+    require_disk_access "${CACHE_ROOT}/${ENGLISH_NAME}"
+
+    while game_running; do
         retry="$(ask "Игра сейчас запущена.
 
 Полностью закройте Invokers (Cmd+Q), иначе изменения не сохранятся." "Выход" "Я закрыл, продолжить")"
         [ "$retry" = "Я закрыл, продолжить" ] || exit 0
-        continue
-    fi
-    break
-done
+    done
 
-# A macOS dialog takes at most three buttons, so the platform is a separate question rather than a
-# fourth button on the action menu.
-ANDROID_SERIAL=""
-if find_adb; then
-    ANDROID_SERIAL="$(android_device)"
-    [ -n "$ANDROID_SERIAL" ] && android_has_game "$ANDROID_SERIAL" || ANDROID_SERIAL=""
-fi
-
-PLATFORM="mac"
-if [ -n "$ANDROID_SERIAL" ]; then
-    where="$(ask "К компьютеру подключён телефон Android с установленной игрой.
+    # A macOS dialog takes at most three buttons, so the platform is a separate question rather than a
+    # fourth button on the action menu.
+    if [ -n "$ANDROID_SERIAL" ]; then
+        where="$(ask "К компьютеру подключён телефон Android с установленной игрой.
 
 Куда установить перевод?" "Отмена" "На телефон" "На этот Mac")"
-    case "$where" in
-        "На телефон") PLATFORM="android" ;;
-        "На этот Mac") PLATFORM="mac" ;;
-        *) exit 0 ;;
-    esac
+        case "$where" in
+            "На телефон") PLATFORM="android" ;;
+            "На этот Mac") PLATFORM="mac" ;;
+            *) exit 0 ;;
+        esac
+    fi
 fi
+
+require_cli
 
 if [ "$PLATFORM" = "android" ]; then
     action="$(ask "Телефон: ${ANDROID_SERIAL}
