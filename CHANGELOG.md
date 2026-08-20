@@ -1,5 +1,13 @@
 # Changelog
 
+## Перевод — 2026-08-20
+
+- shortened the stat labels that were covering their own numbers. The stats panel draws the label and the value in fixed columns, and «СКОРОСТЬ ДВИЖЕНИЯ» at 17 characters simply ran under the figure; «КРИТ. ШАНС» at 10 sits clear, so that is the width the panel actually has. Combo, Skill and Move speed, Mana Gen and Skill Recovery now fit, the worst case dropping from 17 to 12;
+- settled the same stats across their spellings while doing it. The catalog held `Crit DMG`, `CRIT DMG` and `Crit Damage` as three different Russian phrases, and `Combo SPD` as both «SPD комбо» and «Скорость комбо» — the panel picks whichever id that screen uses, so a label could read one way in one place and another elsewhere;
+- moved the override pass last in the normaliser. An exact-string override is a decision about one specific label, and the trailing-period heuristic was trimming the dot off «СКОР. ДВИЖ.» after the fact;
+- checked the Ukrainian duration in battle («23 г. 55 хв.») against the game's own file: there is no such string in it, and no hour or minute unit anywhere in the corpus. The client formats durations from the active locale rather than the translation table, so no catalog can change it;
+- rewrote what the README claims about the translation. It still said the text was raw machine output, which stopped being the whole story after the terminology pass, the prose proofread and this label work.
+
 ## ПК 1.0.0 — 2026-08-20
 
 - added a tool that translates the PC build of the game: unzip, run, pick install. The CLI already knew how to compose the file and the game's own two language files are right there on the machine, so nothing was missing except a driver to put them together. `scripts/build-pc-game-tool.sh` cross-builds the win-x64 binary from macOS and packs it with the catalog;

@@ -261,8 +261,10 @@ def main():
                 ("numero", fix_numero),
                 ("stat_abbreviations", lambda s, t: fix_stats(s, t, terms["stat_abbreviations"])),
                 ("ui_labels", lambda s, t: fix_ui_label(s, t, terms["ui_labels"])),
-                ("overrides", lambda s, t: fix_override(s, t, terms["overrides"])),
                 ("trailing_period", fix_trailing_period),
+                # Last on purpose: an exact-string override is a deliberate decision about one label,
+                # and the heuristics above have no business trimming it afterwards.
+                ("overrides", lambda s, t: fix_override(s, t, terms["overrides"])),
             ):
                 text, hits = function(source, text)
                 if hits:
