@@ -1,5 +1,12 @@
 # Changelog
 
+## Android APK 1.0.0 — 2026-08-20
+
+- added an Android APK that installs the translation on the phone itself where root is available, and otherwise explains exactly what to do. It composes the Russian file on the device: the LOC1 container and the catalog reader are reimplemented in Java, because the .NET tool cannot run there;
+- kept the app honest about the limit rather than failing mysteriously. Since Android 11 an ordinary app cannot read or write another package's Android/data — the Storage Access Framework refuses that path and MANAGE_EXTERNAL_STORAGE does not cover it — so without root the app states this, walks through enabling developer mode including the seven taps on the build number that reveal it, and opens both the settings screen and the guide;
+- built the APK without Gradle, driving aapt2, javac, d8 and apksigner directly, so nothing is pulled from Maven and the package contains no third-party code;
+- kept the signing key outside the repository and reused it across builds. The first build generated a fresh key every time, which Android rejects as an incompatible update and would have stranded anyone who had already installed the app.
+
 ## Разведка Android — 2026-08-20
 
 - проверено на Samsung Galaxy S25 (Android 16) с игрой 0.60.1247: рантайм-кэш лежит во внешнем каталоге `/sdcard/Android/data/hitzone.anima.spirit.guardians/files/i18n/`, и `dl_en_US.bin` с `dl_uk_UA.bin` **побайтово равны** снятым с macOS той же версии, так что собранный для macOS русский файл встал на Android без пересборки: 41 037 строк применено, 1 английский fallback;
