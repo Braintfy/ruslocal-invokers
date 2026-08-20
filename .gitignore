@@ -36,3 +36,8 @@ manifest.dat
 .env
 appsettings.local.json
 patch-state.json
+
+# The PC helper's local scratch: downloaded platform-tools, the catalog copy and backups.
+pc/platform-tools/
+pc/data/
+pc/*.apk

@@ -21,6 +21,9 @@ PLATFORM="$(ls -d "${SDK}/platforms"/android-* 2>/dev/null | sort -V | tail -1)"
 
 JAVA_HOME="${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}"
 [ -x "${JAVA_HOME}/bin/javac" ] || { echo "ERROR: JDK not found at ${JAVA_HOME}" >&2; exit 1; }
+# d8, aapt2 and apksigner are launcher scripts that look for java on PATH rather than in JAVA_HOME.
+export JAVA_HOME
+export PATH="${JAVA_HOME}/bin:${PATH}"
 
 VERSION="$(/usr/bin/sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' "${SRC_DIR}/AndroidManifest.xml" | head -1)"
 [ -n "$VERSION" ] || VERSION="1.0.0"
