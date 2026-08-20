@@ -1,13 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="ru.invokers.patcher"
-    android:versionCode="1"
-    android:versionName="1.0.0">
+    android:versionCode="2"
+    android:versionName="2.0.0">
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Lets the app report whether the game is installed and which build it is. Without this the
+         package manager hides other packages from apps targeting SDK 30 and above. -->
+    <queries>
+        <package android:name="hitzone.anima.spirit.guardians" />
+    </queries>
 
     <application
         android:label="Русификатор Invokers"
@@ -17,10 +23,16 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:label="Русификатор Invokers">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- A computer starts this action over adb to have the phone compose the file itself. -->
+            <intent-filter>
+                <action android:name="ru.invokers.patcher.BRIDGE" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
     </application>

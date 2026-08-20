@@ -1,5 +1,17 @@
 # Changelog
 
+## Android 2.0.0 — 2026-08-20
+
+- turned the phone into the builder and the computer into a courier, which is what finally makes the translation installable without root. The app already knew how to compose the LOC1 file; what it cannot do is reach the game's directory. So the computer copies the game's two language files into the patcher's own directory — the one place adb may write and the app may read without any permission — starts the build with an explicit intent, and copies the result back. The computer needs adb and nothing else: no .NET, no repository, no build tools;
+- shipped that computer side as `Rusifikator-Invokers-PC.zip`, 44 KB, with the APK inside it. On first run it downloads platform-tools from Google itself, so the player installs nothing by hand. `Русификатор-Android.cmd` for Windows, `Русификатор-Android.command` for macOS, both leading through a three-item menu: install, restore, or make the game re-download the original;
+- added the wireless route. Android's own Wi-Fi debugging carries adb with no cable at all, and on Windows it is the more reliable of the two because it needs no USB driver. The script walks through pairing, including the detail that trips everyone: the port in the pairing dialog is not the port to connect to;
+- rebuilt the app as a wizard. It works out what the phone can actually do — root, files waiting from a computer, or neither — and shows one obvious button for that case. The two routes it cannot take itself are written out as numbered steps with buttons that open the settings screens, including how to reveal developer options in the first place;
+- moved the backup and the record of what was installed onto the phone. A player who re-downloads the archive, or switches computers, can still put the original text back instead of being stranded with a patched file and no way home;
+- fixed the catalog reader, which had never been exercised against the real file: it looked for `"id":"` and the catalog is written as `"id": "`, so the app applied zero translations and produced a file that was purely English. Verified now against the published catalog, all 41 037 strings;
+- cut the on-device build from minutes to two seconds. `String.format("%02X", …)` ran 2.6 million times over the catalog; with hand-written hex and a single pass instead of three, composing the file is no longer the slow part;
+- checked the Java build against the .NET one: same 41 292 entries with the same values. The bytes differ only because the strings land in the pool in a different order, and the offsets are explicit, so the game cannot tell;
+- exported JAVA_HOME in the APK build script, which had been relying on whatever the calling shell happened to have on PATH.
+
 ## Android APK 1.0.0 — 2026-08-20
 
 - added an Android APK that installs the translation on the phone itself where root is available, and otherwise explains exactly what to do. It composes the Russian file on the device: the LOC1 container and the catalog reader are reimplemented in Java, because the .NET tool cannot run there;

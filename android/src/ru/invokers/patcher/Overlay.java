@@ -37,9 +37,9 @@ final class Overlay {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (line.isEmpty()) continue;
-                String id = field(line, "\"id\":\"");
-                String sha = field(line, "\"source_sha256\":\"");
-                String text = field(line, "\"translation\":\"");
+                String id = field(line, "id");
+                String sha = field(line, "source_sha256");
+                String text = field(line, "translation");
                 if (id == null || sha == null || text == null) continue;
                 overlay.byId.put(Long.parseUnsignedLong(id, 16), new Record(sha, unescape(text)));
             }
@@ -47,11 +47,22 @@ final class Overlay {
         return overlay;
     }
 
-    /** Reads one flat JSON string field. The catalog is machine-written, so the shape is fixed. */
+    /**
+     * Reads one flat JSON string field. The catalog is machine-written, but whether it carries a
+     * space after the colon has changed between generations of the tooling, so the separator is
+     * skipped rather than assumed.
+     */
     private static String field(String line, String key) {
-        int start = line.indexOf(key);
+        String needle = "\"" + key + "\"";
+        int start = line.indexOf(needle);
         if (start < 0) return null;
-        start += key.length();
+        start += needle.length();
+        while (start < line.length() && Character.isWhitespace(line.charAt(start))) start++;
+        if (start >= line.length() || line.charAt(start) != ':') return null;
+        start++;
+        while (start < line.length() && Character.isWhitespace(line.charAt(start))) start++;
+        if (start >= line.length() || line.charAt(start) != '"') return null;
+        start++;
         StringBuilder sb = new StringBuilder();
         for (int i = start; i < line.length(); i++) {
             char c = line.charAt(i);
@@ -94,9 +105,15 @@ final class Overlay {
     }
 
     /**
-     * Applies the catalog to the Ukrainian slot, using English only to verify each translation is
-     * still current. A record whose source changed is skipped, so the game keeps official text
-     * instead of showing a translation written for a different sentence.
+     * Rewrites the Ukrainian slot in a single pass.
+     *
+     * A translation is used only while the English source still hashes to the value it was written
+     * against, so a sentence the game reworded keeps its official text instead of a translation
+     * meant for something else. Everything the catalog does not cover falls back to English, which
+     * is what the rest of the project builds too.
+     *
+     * One pass matters here: this runs on a phone, and hashing every string twice over a catalog of
+     * forty thousand entries is the difference between seconds and minutes.
      */
     int apply(Loc1 english, Loc1 target) throws NoSuchAlgorithmException {
         Map<Long, String> englishByHash = new HashMap<>(english.entries.size() * 2);
@@ -108,59 +125,32 @@ final class Overlay {
         int applied = 0;
         for (Loc1.Entry entry : target.entries) {
             if (entry.wasNull) continue;
-            Record record = byId.get(entry.keyHash);
-            if (record == null) continue;
             String source = englishByHash.get(entry.keyHash);
             if (source == null) continue;
-            if (!hex(digest.digest(source.getBytes(StandardCharsets.UTF_8))).equalsIgnoreCase(record.sourceSha256)) {
-                continue;
+
+            Record record = byId.get(entry.keyHash);
+            if (record != null
+                    && hex(digest.digest(source.getBytes(StandardCharsets.UTF_8)))
+                            .equalsIgnoreCase(record.sourceSha256)) {
+                entry.value = record.translation;
+                applied++;
+            } else if (!source.equals(entry.value)) {
+                entry.value = source;
             }
-            entry.value = record.translation;
-            applied++;
         }
         return applied;
     }
 
-    /** Every entry the catalog does not cover falls back to the official English text. */
-    static int fillEnglishFallback(Loc1 english, Loc1 target, java.util.Set<Long> translated) {
-        Map<Long, String> englishByHash = new HashMap<>(english.entries.size() * 2);
-        for (Loc1.Entry e : english.entries) {
-            if (!e.wasNull) englishByHash.put(e.keyHash, e.value);
-        }
-        int filled = 0;
-        for (Loc1.Entry entry : target.entries) {
-            if (entry.wasNull || translated.contains(entry.keyHash)) continue;
-            String source = englishByHash.get(entry.keyHash);
-            if (source != null && !source.equals(entry.value)) {
-                entry.value = source;
-                filled++;
-            }
-        }
-        return filled;
-    }
+    private static final char[] HEX = "0123456789ABCDEF".toCharArray();
 
-    java.util.Set<Long> idsAppliedTo(Loc1 english, Loc1 target) throws NoSuchAlgorithmException {
-        MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        Map<Long, String> englishByHash = new HashMap<>(english.entries.size() * 2);
-        for (Loc1.Entry e : english.entries) {
-            if (!e.wasNull) englishByHash.put(e.keyHash, e.value);
-        }
-        java.util.Set<Long> ids = new java.util.HashSet<>();
-        for (Loc1.Entry entry : target.entries) {
-            Record record = byId.get(entry.keyHash);
-            if (record == null || entry.wasNull) continue;
-            String source = englishByHash.get(entry.keyHash);
-            if (source == null) continue;
-            if (hex(digest.digest(source.getBytes(StandardCharsets.UTF_8))).equalsIgnoreCase(record.sourceSha256)) {
-                ids.add(entry.keyHash);
-            }
-        }
-        return ids;
-    }
-
+    /** Hand-rolled because String.format costs whole minutes over a catalog this size. */
     static String hex(byte[] bytes) {
-        StringBuilder sb = new StringBuilder(bytes.length * 2);
-        for (byte b : bytes) sb.append(String.format("%02X", b));
-        return sb.toString();
+        char[] out = new char[bytes.length * 2];
+        for (int i = 0; i < bytes.length; i++) {
+            int v = bytes[i] & 0xFF;
+            out[i * 2] = HEX[v >>> 4];
+            out[i * 2 + 1] = HEX[v & 0x0F];
+        }
+        return new String(out);
     }
 }
