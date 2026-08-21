@@ -1,4 +1,4 @@
-# InvokersRu 3.1 Preview — Windows package
+# InvokersRu 3.1.1 Preview — Windows package
 
 The Windows release is a per-user Inno Setup package around a self-contained,
 multi-file `win-x64` publish. The installed player payload contains the GUI, the
@@ -17,12 +17,30 @@ components, including during silent installs.
 
 ## Prerequisites
 
-- Windows 10 x64 version 1809 or later;
+- Windows 10 x64 build 14393 (version 1607, including Enterprise 2016 LTSC) or
+  later, or Windows 11 x64;
 - .NET 10 SDK for building (the resulting player does not need a system .NET);
 - official Inno Setup 6.3 or newer only when compiling the installer;
 - optionally, an Authenticode code-signing identity and an RFC 3161 timestamp
   service. The current 3.1 community preview is intentionally unsigned; signing
   remains the recommended next release-hardening step.
+
+The installer and the self-contained player no longer impose the previous
+Windows 10 1809 floor. Microsoft support and security updates still follow the
+lifecycle of the user's Windows edition; this package cannot extend an
+end-of-support operating system's lifecycle.
+
+The pinned .NET 10 SDK exposes Windows API reference packs down to 17763, so the
+GUI compiles against that oldest available pack while
+`SupportedOSPlatformVersion` and Setup both declare the actual 14393 runtime
+floor. The application uses only APIs available at that declared floor; the
+target-pack number is not an installer or runtime version check.
+
+Players using the already published 3.1.0 preview must install 3.1.1 once. The
+Windows 10 floor and compatible-revision behavior are executable code changes,
+not translation data. After that migration, ordinary compatible catalog
+updates continue through the signed data channel unless the application itself
+explicitly reports that a newer patcher is required.
 
 The scripts do not download Inno Setup, certificates or signing tools. During
 `dotnet restore`, the publish script uses the official NuGet v3 feed only to
@@ -35,8 +53,8 @@ Run from the repository root:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\publish-windows-preview.ps1 `
-  -OutputDirectory .\work\publish\windows-3.1.0-preview `
-  -AppVersion 3.1.0-preview `
+  -OutputDirectory .\work\publish\windows-3.1.1-preview `
+  -AppVersion 3.1.1-preview `
   -SignedUpdateChannelConfig .\config\signed-update-channel.v1.json
 ```
 
@@ -72,8 +90,8 @@ To sign the project entry points before the payload hashes are sealed:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\publish-windows-preview.ps1 `
-  -OutputDirectory .\work\publish\windows-3.1.0-preview-signed `
-  -AppVersion 3.1.0-preview `
+  -OutputDirectory .\work\publish\windows-3.1.1-preview-signed `
+  -AppVersion 3.1.1-preview `
   -SignedUpdateChannelConfig .\config\signed-update-channel.v1.json `
   -SignToolPath "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe" `
   -CertificateThumbprint 0123456789ABCDEF0123456789ABCDEF01234567 `
@@ -87,8 +105,8 @@ Trusted Signing provider. Secrets are not stored in the repository.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 `
-  -InputDirectory .\work\publish\windows-3.1.0-preview `
-  -AppVersion 3.1.0-preview `
+  -InputDirectory .\work\publish\windows-3.1.1-preview `
+  -AppVersion 3.1.1-preview `
   -VerifyOnly
 ```
 
@@ -102,12 +120,12 @@ that an installer was signed. To verify an already signed player payload, add
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 `
-  -InputDirectory .\work\publish\windows-3.1.0-preview `
-  -AppVersion 3.1.0-preview `
+  -InputDirectory .\work\publish\windows-3.1.1-preview `
+  -AppVersion 3.1.1-preview `
   -OutputDirectory .\work\installer-output
 ```
 
-The output is named `InvokersRu-3.1-Preview-3.1.0-preview-win-x64.exe` and gets a
+The output is named `InvokersRu-3.1-Preview-3.1.1-preview-win-x64.exe` and gets a
 `.sha256` sidecar. The current community preview may be distributed unsigned,
 but its exact source commit and SHA-256 sidecar must be published prominently.
 Windows can show “Unknown publisher” or SmartScreen until a trusted certificate
@@ -122,8 +140,8 @@ only that configured name:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 `
-  -InputDirectory .\work\publish\windows-3.1.0-preview-signed `
-  -AppVersion 3.1.0-preview `
+  -InputDirectory .\work\publish\windows-3.1.1-preview-signed `
+  -AppVersion 3.1.1-preview `
   -OutputDirectory .\work\installer-output-signed `
   -InnoSignToolName InvokersRuRelease `
   -ExpectedSignerThumbprint 0123456789ABCDEF0123456789ABCDEF01234567

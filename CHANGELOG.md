@@ -28,6 +28,32 @@
 - compressed the Android section from four near-identical walkthroughs to four short ones with the shared step — pick Ukrainian, close the game — stated once, and merged the two update sections that had been explaining the same thing twice;
 - brought README.en.md level with the Russian one, which had drifted three changes behind: it still had no emulator method, no numbers, no pointer to the localization kit, and named release files that do not exist;
 - documented the SDK pin in the developer section. `global.json` requires 10.0.302 and a newer SDK simply refuses to build, which is a confusing first five minutes for anyone cloning the repository; the two update-channel commands were missing from the command list as well.
+## Windows 3.1.1 Preview — 2026-08-21
+
+- lowered the installer floor from Windows 10 1809 to x64 Windows 10 build
+  14393 (version 1607, including Enterprise 2016 LTSC), while retaining a
+  self-contained `win-x64` payload that does not require a system .NET Runtime;
+- used the oldest Windows API target pack available in the pinned .NET 10 SDK
+  (17763) while declaring the actual supported-platform floor as 14393, so
+  neither the application metadata nor Setup accidentally requires Windows 11;
+- made Setup, uninstall, and PE product metadata derive from the exact
+  `AppVersion`, and added packaging regressions for the OS floor, x64 mode,
+  target framework, and 3.1.1 version defaults;
+- added the bounded `compatible-revision` runtime mode: a new game/content
+  revision no longer needs a new EXE or exact profile when it still uses the
+  trusted raw LOC1 schema-4 family, EN=1/UK=8 slots and identical ordered keys;
+  only rows with exact current English source and Ukrainian hint hashes are
+  applied, while changed/new/missing rows remain English and null entries keep
+  their base value;
+- made exact and compatible profiles interoperable across game updates,
+  catalog-only updates, launcher repair and interrupted transactions. Dynamic
+  profiles pin the observed tuple, catalog, locally materialized output and
+  composition counts before the existing locked, journalled atomic mutation;
+  exact state/backup/history authentication remains required for restore and
+  recovery, with no force or fuzzy-matching path;
+- kept the community preview honestly unsigned. Windows may still show Unknown
+  publisher or SmartScreen; users of the already published 3.1.0 preview need
+  this one-time player update before later compatible data-only updates.
 
 ## Windows 3.1.0 Preview — 2026-08-21
 

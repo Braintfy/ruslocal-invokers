@@ -277,6 +277,9 @@ internal sealed class MainForm : Form
                 : update.CombinedOutput);
             CliCommandResult command = await _cli.RunAsync("cache-plan", new[] { "--json" });
             CliPlanResult plan = CliPlanResult.Parse(command);
+            string? refreshWarning = CliPlanResult.ExtractUpdateRefreshWarning(update);
+            if (plan.UpdateProblem == null && !plan.UpdateProblemBlocksApply && refreshWarning != null)
+                plan.UpdateProblem = refreshWarning;
             _lastPlan = plan;
             RenderPlan(plan);
             AppendLog(plan.RawOutput.Length == 0 ? $"CLI завершился с кодом {plan.ExitCode} без вывода." : plan.RawOutput);
@@ -368,28 +371,41 @@ internal sealed class MainForm : Form
         {
             MessageBox.Show(
                 this,
-                "Точная версия игры или файлы перевода не подтверждены. Принудительной установки у этого патчера нет.",
+                "Проверка не разрешила установку. Прочитайте предупреждение в окне, закройте игру и лаунчер и снова нажмите «Проверить».",
                 "Установка заблокирована",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
             return;
         }
 
-        string coverage = $"{plan.Profile.AppliedTranslations:N0} из {plan.Profile.EntryCount:N0}";
+        bool compatibleRevision = string.Equals(plan.Profile.Mode, "compatible-revision", StringComparison.Ordinal);
+        bool metadataOnly = string.Equals(plan.TranslationUpdateKind, "metadata-only", StringComparison.Ordinal);
+        int sourceRows = plan.Profile.AppliedTranslations + plan.Profile.EnglishFallbacks;
+        string coverage = $"{plan.Profile.AppliedTranslations:N0} из {sourceRows:N0} переводимых";
+        string selectionSummary = metadataOnly
+            ? "Текстовый файл уже совпадает с новым проверенным результатом. Файл игры переписываться не будет; патчер атомарно обновит только служебные данные состояния и каталога."
+            : compatibleRevision
+            ? "Точного опубликованного профиля этой ревизии нет. Патчер проверил неизменный формат и порядок ключей; "
+                + $"Все проверки, включая точное совпадение английского исходника и украинской подсказки, прошли {coverage} строк.\n"
+                + $"Останется на английском: {plan.Profile.EnglishFallbacks:N0}; пустых/служебных строк: {plan.Profile.BaseFallbacks:N0}."
+            : $"Будет установлена русская локализация для версии {plan.Profile.GameVersion}.\n\n"
+                + $"Русский текст: {coverage}.\n"
+                + $"Останется на английском: {plan.Profile.EnglishFallbacks:N0}; пустых/служебных строк: {plan.Profile.BaseFallbacks:N0}.";
         DialogResult confirmation = MessageBox.Show(
             this,
             "Перед продолжением убедитесь: в игре выбран украинский язык, а игра и лаунчер полностью закрыты.\n\n"
-            + $"Будет установлена русская локализация для версии {plan.Profile.GameVersion}.\n\n"
-            + $"Русский текст: {coverage}.\n"
-            + $"Останется на английском: {plan.Profile.EnglishFallbacks:N0}; пустых/служебных строк: {plan.Profile.BaseFallbacks:N0}.\n\n"
+            + selectionSummary + "\n\n"
             + "Это предварительный перевод сообщества: часть формулировок ещё будет редактироваться. Оригинал сохраняется в проверенной резервной копии. Продолжить?",
-            plan.TranslationUpdateAvailable
-                || string.Equals(plan.Status, "PatchSupersededByOfficialUpdate", StringComparison.Ordinal)
-                || string.Equals(plan.Status, "PatchSupersededByCatalogUpdate", StringComparison.Ordinal)
-                ? "Обновить русификацию после обновления игры"
-                : "Установить русификацию",
+            metadataOnly
+                ? "Обновить служебные данные перевода"
+                : string.Equals(plan.Status, "PatchSupersededByOfficialUpdate", StringComparison.Ordinal)
+                    ? "Обновить русификацию после обновления игры"
+                    : plan.TranslationUpdateAvailable
+                        || string.Equals(plan.Status, "PatchSupersededByCatalogUpdate", StringComparison.Ordinal)
+                        ? "Обновить русификацию"
+                        : "Установить русификацию",
             MessageBoxButtons.YesNo,
-            MessageBoxIcon.Question,
+            compatibleRevision ? MessageBoxIcon.Warning : MessageBoxIcon.Question,
             MessageBoxDefaultButton.Button2);
         if (confirmation != DialogResult.Yes) return;
 
@@ -431,39 +447,61 @@ internal sealed class MainForm : Form
     private void RenderPlan(CliPlanResult plan)
     {
         _pathLabel.Text = string.IsNullOrWhiteSpace(plan.CacheRoot) ? _gameRoot : plan.CacheRoot;
-        string content = plan.Observed.EnglishContent ?? "не определён";
+        string englishContent = plan.Observed.EnglishContent ?? "не определён";
+        string baseContent = plan.Observed.BaseContent ?? "не определён";
+        string englishRevision = plan.Observed.EnglishReleaseRevision?.ToString() ?? "?";
+        string baseRevision = plan.Observed.BaseReleaseRevision?.ToString() ?? "?";
+        string content = $"EN: {englishContent} (rev {englishRevision})   •   UK: {baseContent} (rev {baseRevision})";
         string observedVersion = plan.Observed.GameVersion ?? "не определена";
-        string versionText = string.Equals(observedVersion, plan.Profile.GameVersion, StringComparison.Ordinal)
-            ? $"Версия игры: {observedVersion}"
-            : $"Версия игры: {observedVersion}   •   поддерживается: {plan.Profile.GameVersion}";
+        bool compatibleRevision = string.Equals(plan.Profile.Mode, "compatible-revision", StringComparison.Ordinal);
+        string versionText = compatibleRevision
+            ? $"Наблюдаемая версия игры: {observedVersion}"
+            : string.Equals(observedVersion, plan.Profile.GameVersion, StringComparison.Ordinal)
+                ? $"Версия игры: {observedVersion}"
+                : $"Наблюдаемая версия игры: {observedVersion}   •   точный профиль: {plan.Profile.GameVersion}";
         _versionLabel.Text = $"{versionText}   •   контент: {content}   •   патчер: {plan.PatcherVersion}";
 
         if (plan.CanApply)
         {
             bool translationUpdate = plan.TranslationUpdateAvailable;
+            bool metadataOnly = string.Equals(plan.TranslationUpdateKind, "metadata-only", StringComparison.Ordinal);
             bool catalogUpdate = string.Equals(plan.Status, "PatchSupersededByCatalogUpdate", StringComparison.Ordinal);
             bool afterUpdate = translationUpdate
                 || catalogUpdate
                 || string.Equals(plan.Status, "PatchSupersededByOfficialUpdate", StringComparison.Ordinal);
-            SetBadge(afterUpdate ? "НУЖНО ОБНОВИТЬ ПЕРЕВОД" : "ГОТОВО К УСТАНОВКЕ", afterUpdate ? Theme.Warning : Theme.Green);
-            _stateLabel.Text = $"Перевод: {plan.Profile.AppliedTranslations:N0} / {plan.Profile.EntryCount:N0} строк   •   английских: {plan.Profile.EnglishFallbacks:N0}";
+            SetBadge(compatibleRevision ? "СОВМЕСТИМАЯ ВЕРСИЯ" : afterUpdate ? "НУЖНО ОБНОВИТЬ ПЕРЕВОД" : "ГОТОВО К УСТАНОВКЕ",
+                compatibleRevision ? Theme.Warning : afterUpdate ? Theme.Warning : Theme.Green);
+            int sourceRows = plan.Profile.AppliedTranslations + plan.Profile.EnglishFallbacks;
+            _stateLabel.Text = $"Перевод: {plan.Profile.AppliedTranslations:N0} / {sourceRows:N0} переводимых строк   •   английских: {plan.Profile.EnglishFallbacks:N0}";
             _stateLabel.ForeColor = Theme.Green;
-            _noticeLabel.Text = translationUpdate || catalogUpdate
-                ? "Найден более свежий проверенный перевод для этой версии игры. Новый файл будет собран из закреплённой копии оригинала и атомарно заменит старый перевод одной операцией."
-                : afterUpdate
-                ? "Игра обновилась и вернула официальный файл. Старую резервную копию патчер сохранит в истории и установит перевод, собранный точно для новой версии."
-                : "Версия, файлы игры, каталог и ожидаемый результат совпадают. Оригинал будет сохранён перед атомарной заменой.";
-            _noticeLabel.Text += PatcherVersionNotice(plan);
+            _noticeLabel.Text = metadataOnly
+                ? "Новый проверенный каталог даёт тот же текстовый файл. Патчер не будет переписывать файл игры: обновятся только атомарные служебные данные, чтобы дальнейшее восстановление не зависело от старого каталога."
+                : compatibleRevision
+                ? $"Точного опубликованного профиля этой ревизии нет. Формат, локали и порядок ключей совместимы; {plan.Profile.AppliedTranslations:N0} из {sourceRows:N0} переводимых строк прошли все проверки, включая точное совпадение английского исходника и украинской подсказки. Остальные {plan.Profile.EnglishFallbacks:N0} останутся на английском; пустых/служебных: {plan.Profile.BaseFallbacks:N0}."
+                : translationUpdate || catalogUpdate
+                    ? "Найден более свежий проверенный перевод для этой версии игры. Новый файл будет собран из закреплённой копии оригинала и атомарно заменит старый перевод одной операцией."
+                    : afterUpdate
+                        ? "Игра обновилась и вернула официальный файл. Старую резервную копию патчер сохранит в истории и установит перевод, собранный точно для новой версии."
+                        : "Версия, файлы игры, каталог и ожидаемый результат совпадают. Оригинал будет сохранён перед атомарной заменой.";
+            if (compatibleRevision && plan.Profile.EnglishFallbacks > 0)
+                _noticeLabel.Text += " Когда в GitHub появятся свежие строки для этой ревизии, патчер сможет перевести оставшийся английский текст без обновления EXE.";
+            _noticeLabel.Text += CatalogSourceNotice(plan);
             _noticeLabel.ForeColor = afterUpdate ? Theme.Warning : Theme.Text;
         }
         else if (plan.CanRestore)
         {
-            SetBadge("РУСИФИКАЦИЯ АКТИВНА", Theme.Blue);
+            bool blockedTranslationUpdate = (plan.TranslationUpdateAvailable && !plan.CanApply)
+                || plan.UpdateProblemBlocksApply;
+            SetBadge(blockedTranslationUpdate ? "ОБНОВЛЕНИЕ ЗАБЛОКИРОВАНО" : "РУСИФИКАЦИЯ АКТИВНА",
+                blockedTranslationUpdate ? Theme.Warning : Theme.Blue);
             _stateLabel.Text = $"Установлено русских строк: {plan.State?.AppliedTranslations ?? plan.Profile.AppliedTranslations:N0}   •   резервная копия проверена";
-            _stateLabel.ForeColor = Theme.Blue;
-            _noticeLabel.Text = $"Русификация уже установлена. Английских строк: {plan.Profile.EnglishFallbacks:N0}; пустых/служебных: {plan.Profile.BaseFallbacks:N0}. Оригинал можно восстановить из закреплённой резервной копии."
-                + PatcherVersionNotice(plan);
-            _noticeLabel.ForeColor = Theme.Text;
+            _stateLabel.ForeColor = blockedTranslationUpdate ? Theme.Warning : Theme.Blue;
+            _noticeLabel.Text = (blockedTranslationUpdate
+                    ? "Установленный перевод можно восстановить, но предложенное обновление сейчас нельзя применить: подписанные данные, версия патчера или каталог не прошли текущую проверку. "
+                    : "Русификация уже установлена. ")
+                + "Оригинал можно восстановить из закреплённой резервной копии; перед восстановлением патчер ещё раз проверит состояние и контрольные суммы."
+                + CatalogSourceNotice(plan);
+            _noticeLabel.ForeColor = blockedTranslationUpdate ? Theme.Warning : Theme.Text;
         }
         else if (string.Equals(plan.Status, "MissingFiles", StringComparison.Ordinal))
         {
@@ -475,27 +513,63 @@ internal sealed class MainForm : Form
         }
         else if (string.Equals(plan.PlanAction, "REFUSE_PATCHER_OR_SIGNED_DATA_NOT_CURRENT", StringComparison.Ordinal))
         {
-            bool patcherTooOld = plan.Update?.PatcherDisposition == "TooOld";
+            bool patcherTooOld = plan.ChannelAuthority?.PatcherDisposition == "TooOld";
+            bool expired = plan.Update?.Expired == true;
+            bool lkgOnly = string.Equals(plan.Catalog.Source, "LastKnownGood", StringComparison.Ordinal);
             SetBadge(patcherTooOld ? "НУЖЕН НОВЫЙ ПАТЧЕР" : "ДАННЫЕ НЕ ГОТОВЫ", Theme.Warning);
             _stateLabel.Text = patcherTooOld
-                ? $"Установлен патчер {plan.PatcherVersion}; канал требует {plan.Update?.MinimumPatcherVersion ?? "новую версию"}"
-                : "Подписанный манифест получен, но точный каталог перевода сейчас недоступен";
+                ? $"Установлен патчер {plan.PatcherVersion}; канал требует {plan.ChannelAuthority?.MinimumPatcherVersion ?? "новую версию"}"
+                : expired ? "Срок действия выбранных подписанных данных истёк"
+                : lkgOnly ? "Доступна только предыдущая проверенная копия данных"
+                : "Подписанный канал не предоставил пригодный каталог для новой установки";
             _stateLabel.ForeColor = Theme.Warning;
             _noticeLabel.Text = patcherTooOld
                 ? "Формат данных изменился, и эта версия патчера больше не может установить обновление. Нажмите этот текст, чтобы открыть проверенную страницу Releases. Если русификация уже установлена, восстановление оригинала остаётся доступным."
-                : "Установка заблокирована до получения каталога с точной контрольной суммой. Проверьте сеть и снова нажмите «Проверить»; уже установленный перевод и его резервная копия не изменяются.";
+                : expired ? "Установка заблокирована до получения актуальных подписанных данных. Уже установленный перевод и его резервная копия не изменяются."
+                : lkgOnly ? "Предыдущая проверенная копия разрешена только для обслуживания точно записанного установленного артефакта. Для новой установки снова нажмите «Проверить» при доступной сети."
+                : "Установка заблокирована до получения пригодного каталога с подтверждённой контрольной суммой. Проверьте сеть и снова нажмите «Проверить».";
             _noticeLabel.ForeColor = Theme.Warning;
+        }
+        else if (!plan.IsVersionRisk
+            && (plan.ProcessConflicts.Length > 0
+                || string.Equals(plan.PlanAction, "REFUSE_CLOSE_GAME_AND_LAUNCHER", StringComparison.Ordinal)))
+        {
+            SetBadge("ЗАКРОЙТЕ ИГРУ", Theme.Warning);
+            _stateLabel.Text = $"Состояние: обнаружены запущенные процессы ({plan.ProcessConflicts.Length})";
+            _stateLabel.ForeColor = Theme.Warning;
+            _noticeLabel.Text = string.Equals(plan.Status, "RecoveryRequired", StringComparison.Ordinal)
+                ? "Есть незавершённая транзакция, но восстановление нельзя запускать, пока игра или лаунчер открыты. Полностью закройте их и нажмите «Проверить»."
+                : "Полностью закройте игру и лаунчер, включая значок в системном трее, затем нажмите «Проверить». Патчер сам процессы не завершает.";
+            _noticeLabel.ForeColor = Theme.Warning;
+        }
+        else if (string.Equals(plan.Status, "InconsistentState", StringComparison.Ordinal))
+        {
+            bool tupleMismatch = plan.Diagnostic.Kind is "translation-data" or "structural-boundary";
+            SetBadge(tupleMismatch ? "ДАННЫЕ И СОСТОЯНИЕ РАСХОДЯТСЯ" : "СОСТОЯНИЕ НЕ СОГЛАСОВАНО", Theme.Danger);
+            _stateLabel.Text = tupleMismatch
+                ? $"После записанной установки изменился компонент: {DiagnosticComponentName(plan.Diagnostic.Component)}"
+                : "Состояние патчера, журнал или файлы не прошли взаимную проверку";
+            _stateLabel.ForeColor = Theme.Danger;
+            _noticeLabel.Text = "Это несогласованность локального состояния после обновления игры, ручного изменения или оборванной операции, а не вывод о версии клиента. "
+                + DiagnosticComparison(plan)
+                + " Принудительная запись и восстановление отключены: не запускайте игру и не меняйте файлы вручную; сохраните журнал проверки и обратитесь в поддержку проекта.";
+            _noticeLabel.ForeColor = Theme.Danger;
         }
         else if (plan.IsVersionRisk)
         {
-            SetBadge("ВЕРСИЯ НЕ ПОДДЕРЖИВАЕТСЯ", Theme.Danger);
-            _stateLabel.Text = $"Состояние: {DisplayStatus(plan.Status)}";
+            bool translationData = string.Equals(plan.Diagnostic.Kind, "translation-data", StringComparison.Ordinal);
+            SetBadge(translationData ? "НУЖНЫ СВЕЖИЕ ДАННЫЕ ПЕРЕВОДА" : "НУЖНА ПОДДЕРЖКА ФОРМАТА",
+                translationData ? Theme.Warning : Theme.Danger);
+            _stateLabel.Text = translationData
+                ? $"Не совпадают данные перевода: {DiagnosticComponentName(plan.Diagnostic.Component)}"
+                : $"Структурная граница: {DiagnosticComponentName(plan.Diagnostic.Component)}";
             _stateLabel.ForeColor = Theme.Danger;
-            _noticeLabel.Text = plan.Update != null && !plan.Update.ExactGameProfileFound
-                ? "Патчер распознал обновление игры, но точные данные перевода для этой версии ещё не опубликованы. Новые строки временно остались бы на английском, поэтому запись отключена; после публикации данных достаточно снова нажать «Проверить» — новый EXE не нужен."
-                : "Версия или контрольные суммы расходятся с проверенной сборкой. Принудительная установка отключена; после публикации точного профиля снова нажмите «Проверить»."
+            _noticeLabel.Text = (translationData
+                    ? "Версия клиента сама по себе не признана несовместимой. Текущий каталог не может подтвердить перевод для этих данных; дождитесь свежего каталога GitHub и снова нажмите «Проверить». "
+                    : "Формат LOC1, фиксированный путь, locale slot, семейство GUID или порядок ключей вышли за поддерживаемые границы. Нужна новая поддержка патчера/данных; принудительная установка отключена. ")
+                + DiagnosticComparison(plan)
                 + (plan.ProcessConflicts.Length > 0 ? " Игра или лаунчер сейчас также запущены." : string.Empty);
-            _noticeLabel.ForeColor = Theme.Danger;
+            _noticeLabel.ForeColor = translationData ? Theme.Warning : Theme.Danger;
         }
         else if (string.Equals(plan.Status, "RecoveryRequired", StringComparison.Ordinal))
         {
@@ -505,23 +579,16 @@ internal sealed class MainForm : Form
             _noticeLabel.Text = plan.InstallationWritesEnabled
                 ? "Не запускайте игру и не изменяйте её файлы вручную. Нажмите «Восстановить после сбоя»: патчер продолжит только при однозначных контрольных суммах."
                 : "Не запускайте игру и не изменяйте её файлы вручную. Эта диагностическая сборка не имеет права записи.";
-            _noticeLabel.Text += PatcherVersionNotice(plan);
-            _noticeLabel.ForeColor = Theme.Warning;
-        }
-        else if (plan.ProcessConflicts.Length > 0 || string.Equals(plan.PlanAction, "REFUSE_CLOSE_GAME_AND_LAUNCHER", StringComparison.Ordinal))
-        {
-            SetBadge("ЗАКРОЙТЕ ИГРУ", Theme.Warning);
-            _stateLabel.Text = $"Состояние: обнаружены запущенные процессы ({plan.ProcessConflicts.Length})";
-            _stateLabel.ForeColor = Theme.Warning;
-            _noticeLabel.Text = "Полностью закройте игру и лаунчер, включая значок в системном трее, затем нажмите «Проверить». Патчер сам процессы не завершает.";
             _noticeLabel.ForeColor = Theme.Warning;
         }
         else if (string.Equals(plan.PlanAction, "REFUSE_MISSING_OR_MISMATCHED_CATALOG", StringComparison.Ordinal))
         {
             SetBadge("ОБНОВИТЕ ПЕРЕВОД", Theme.Warning);
-            _stateLabel.Text = "Состояние: файл перевода отсутствует или не совпадает с этой версией патчера";
+            _stateLabel.Text = "Состояние: файл перевода отсутствует или не совпадает с выбранными проверенными данными";
             _stateLabel.ForeColor = Theme.Warning;
-            _noticeLabel.Text = "Проверенный каталог недоступен или повреждён. Нажмите «Проверить» при доступной сети; патчер повторно скачает только данные перевода.";
+            _noticeLabel.Text = "Не совпадают именно данные перевода, а не версия клиента. "
+                + DiagnosticComparison(plan)
+                + " Нажмите «Проверить» при доступной сети; патчер повторно скачает только каталог перевода.";
             _noticeLabel.ForeColor = Theme.Warning;
         }
         else if (string.Equals(plan.PlanAction, "REFUSE_DEV_WRITES_DISABLED", StringComparison.Ordinal))
@@ -541,6 +608,9 @@ internal sealed class MainForm : Form
             _noticeLabel.ForeColor = Theme.Warning;
         }
 
+        // A failed freshness check and a patcher-version warning remain relevant in every state,
+        // including the exact refusal states where the player is told to wait for newer data.
+        _noticeLabel.Text += NonBlockingRefreshNotice(plan) + PatcherVersionNotice(plan);
         UpdateButtons();
     }
 
@@ -578,6 +648,8 @@ internal sealed class MainForm : Form
         _checkButton.Enabled = !_busy;
         _applyButton.Text = _lastPlan?.CanRecover == true
             ? "Восстановить после сбоя"
+            : string.Equals(_lastPlan?.TranslationUpdateKind, "metadata-only", StringComparison.Ordinal)
+                ? "Обновить служебные данные"
             : _lastPlan?.TranslationUpdateAvailable == true
                 || string.Equals(_lastPlan?.Status, "PatchSupersededByOfficialUpdate", StringComparison.Ordinal)
                 || string.Equals(_lastPlan?.Status, "PatchSupersededByCatalogUpdate", StringComparison.Ordinal)
@@ -599,17 +671,124 @@ internal sealed class MainForm : Form
 
     private static string PatcherVersionNotice(CliPlanResult plan)
     {
-        return plan.Update?.PatcherDisposition switch
+        return plan.ChannelAuthority?.PatcherDisposition switch
         {
-            "UpdateAvailable" => $" Доступен патчер {plan.Update.LatestPatcherVersion}; текущая версия пока совместима.",
-            "TooOld" => $" Для новых данных нужен патчер {plan.Update.MinimumPatcherVersion}; восстановление оригинала по-прежнему доступно.",
+            "UpdateAvailable" => $" Доступен патчер {plan.ChannelAuthority.LatestPatcherVersion}; текущая версия пока совместима.",
+            "TooOld" when plan.CanRestore || plan.CanRecover => $" Для новых данных нужен патчер {plan.ChannelAuthority.MinimumPatcherVersion}; восстановление оригинала по-прежнему доступно.",
+            "TooOld" => $" Для новых данных нужен патчер {plan.ChannelAuthority.MinimumPatcherVersion}.",
             _ => string.Empty
         };
     }
 
+    private static string NonBlockingRefreshNotice(CliPlanResult plan)
+    {
+        if (plan.UpdateProblem == null || plan.UpdateProblemBlocksApply) return string.Empty;
+        return plan.Catalog.ExactMatch
+            ? " Свежесть данных GitHub сейчас не удалось подтвердить; используется уже проверенный локальный или встроенный каталог."
+            : " Свежесть данных GitHub сейчас не удалось подтвердить.";
+    }
+
+    private static string CatalogSourceNotice(CliPlanResult plan)
+    {
+        if (!plan.Catalog.ExactMatch) return string.Empty;
+        return plan.Catalog.Source switch
+        {
+            "Remote" => " Выбранный каталог: актуальный пакет GitHub.",
+            "CachedCurrent" => " Выбранный каталог: ранее проверенный локальный кэш GitHub.",
+            "LastKnownGood" => " Выбранный каталог: предыдущая проверенная копия.",
+            "embedded" => " Выбранный каталог: встроенная проверенная копия.",
+            _ => string.Empty
+        };
+    }
+
+    private static string DiagnosticComponentName(string component)
+    {
+        return component switch
+        {
+            "english-source" => "английский источник (EN)",
+            "ukrainian-base" => "украинская база (UK)",
+            "version-stamp" => "маркер версии кэша",
+            "catalog-sha256" => "каталог перевода",
+            "source-hint-coverage" => "совпадение EN-исходников и UK-подсказок",
+            "loc1-schema" => "схема LOC1",
+            "content-guid" => "семейство контента GUID",
+            "locale-slot" => "locale slot EN/UK",
+            "ordered-keyset" => "порядок ключей LOC1",
+            "missing-files" => "фиксированный набор EN/UK/stamp",
+            "official-base-refresh" => "официальный UK-файл после обновления",
+            "journal" => "журнал незавершённой операции",
+            "journal-authentication" => "проверка журнала незавершённой операции",
+            "patch-state" => "записанное состояние патчера",
+            _ => component
+        };
+    }
+
+    private static string DiagnosticComparison(CliPlanResult plan)
+    {
+        if (plan.Diagnostic.Current == null && plan.Diagnostic.Expected == null) return string.Empty;
+        return plan.Diagnostic.Component switch
+        {
+            "english-source" => $"EN сейчас {FormatCorpus(plan.Observed.EnglishContent, plan.Observed.EnglishReleaseRevision, plan.Observed.EnglishLocaleRevision)}; "
+                + $"перевод подготовлен для {FormatCorpus(plan.Profile.EnglishContent, plan.Profile.EnglishReleaseRevision, plan.Profile.EnglishLocaleRevision)}.",
+            "ukrainian-base" => $"UK сейчас {FormatCorpus(plan.Observed.BaseContent, plan.Observed.BaseReleaseRevision, plan.Observed.BaseLocaleRevision)}; "
+                + $"перевод подготовлен для {FormatCorpus(plan.Profile.BaseContent, plan.Profile.BaseReleaseRevision, plan.Profile.BaseLocaleRevision)}.",
+            "version-stamp" => $"Маркер игры сейчас {plan.Observed.GameVersion ?? "не читается"}; профиль перевода ожидает {plan.Profile.GameVersion}.",
+            "catalog-sha256" => $"Выбранный каталог: {FormatCatalogSource(plan.Catalog.Source)}, отпечаток {ShortDigest(plan.Catalog.Sha256)}; "
+                + $"профиль перевода ожидает {ShortDigest(plan.Profile.CatalogSha256)}.",
+            "source-hint-coverage" => CoverageComparison(plan),
+            "loc1-schema" => $"Схема LOC1 сейчас EN {plan.Observed.EnglishSchema?.ToString() ?? "не читается"}, UK {plan.Observed.BaseSchema?.ToString() ?? "не читается"}; поддерживается схема {plan.Profile.Loc1Schema}.",
+            "content-guid" => $"Семейство контента сейчас EN {ShortGuid(plan.Observed.EnglishContentGuid)}, UK {ShortGuid(plan.Observed.BaseContentGuid)}; ожидается {ShortGuid(plan.Profile.ContentGuid)}.",
+            "locale-slot" => $"Locale slot сейчас EN {plan.Observed.EnglishLocaleId?.ToString() ?? "?"}, UK {plan.Observed.BaseLocaleId?.ToString() ?? "?"}; ожидается EN {plan.Profile.EnglishLocaleId}, UK {plan.Profile.BaseLocaleId}.",
+            "ordered-keyset" => $"Порядок ключей LOC1 сейчас {ShortDigest(plan.Observed.OrderedKeysetSha256)}; ожидается {ShortDigest(plan.Profile.OrderedKeysetSha256)}.",
+            "missing-files" => "Не удалось прочитать полный фиксированный набор EN/UK/stamp по пути установки игры.",
+            "official-base-refresh" => $"Официальный UK-файл сейчас {FormatCorpus(plan.Observed.BaseContent, plan.Observed.BaseReleaseRevision, plan.Observed.BaseLocaleRevision)}; "
+                + "состояние установленного перевода относится к предыдущему официальному UK-файлу.",
+            "journal" => "Журнал незавершённой операции не прошёл аутентификацию состояния.",
+            "journal-authentication" => "Найден журнал незавершённой операции, но его нельзя однозначно связать с проверенным профилем, резервной копией и текущими файлами.",
+            "patch-state" => "Записанное состояние патчера не совпадает с текущими файлами и проверенным профилем.",
+            _ => $"Компонент: {DiagnosticComponentName(plan.Diagnostic.Component)}; текущее и ожидаемое значения не совпали."
+        };
+    }
+
+    private static string FormatCorpus(string? content, uint? releaseRevision, uint? localeRevision)
+    {
+        if (content == null) return "не читается";
+        string release = releaseRevision?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?";
+        string revision = localeRevision.HasValue ? localeRevision.Value.ToString("X8", System.Globalization.CultureInfo.InvariantCulture) : "????????";
+        return $"{content} (release {release}, revision {revision})";
+    }
+
+    private static string CoverageComparison(CliPlanResult plan)
+    {
+        int sourceRows = checked(plan.Profile.AppliedTranslations + plan.Profile.EnglishFallbacks);
+        if (plan.Profile.AppliedTranslations == 0)
+            return $"Ни одна из {sourceRows:N0} переводимых строк не прошла одновременную проверку EN-исходника и UK-подсказки; нужен свежий каталог перевода.";
+        return $"Все проверки прошли {plan.Profile.AppliedTranslations:N0} из {sourceRows:N0} переводимых строк; {plan.Profile.EnglishFallbacks:N0} останутся на английском до обновления каталога.";
+    }
+
+    private static string FormatCatalogSource(string? source) => source switch
+    {
+        "Remote" => "GitHub",
+        "CachedCurrent" => "локальный кэш GitHub",
+        "LastKnownGood" => "предыдущая проверенная копия",
+        "embedded" => "встроенная копия",
+        "ChannelHead" => "метаданные канала GitHub",
+        _ => "не найден"
+    };
+
+    private static string ShortDigest(string? digest)
+    {
+        return string.IsNullOrWhiteSpace(digest) ? "не читается" : digest[..Math.Min(12, digest.Length)];
+    }
+
+    private static string ShortGuid(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? "не читается" : value[..Math.Min(8, value.Length)];
+    }
+
     private void OpenVerifiedPatcherPage()
     {
-        string? url = _lastPlan?.Update?.DownloadPage;
+        string? url = _lastPlan?.ChannelAuthority?.DownloadPage;
         if (string.IsNullOrWhiteSpace(url)) return;
         try
         {
@@ -625,7 +804,7 @@ internal sealed class MainForm : Form
     {
         return status switch
         {
-            "UnknownBuild" => "неизвестная или обновлённая версия игры",
+            "UnknownBuild" => "наблюдаемые файлы не прошли проверку совместимости",
             "MissingFiles" => "файлы игры не найдены по стандартному пути",
             "InconsistentState" => "файлы изменены после предыдущей операции",
             "RecoveryRequired" => "предыдущая транзакция требует восстановления",
@@ -652,7 +831,7 @@ internal sealed class MainForm : Form
             return "Файл перевода отсутствует или повреждён. Нажмите «Проверить» при доступной сети — патчер повторно скачает данные перевода.";
         if (detail.Contains("exact compatible original tuple", StringComparison.OrdinalIgnoreCase)
             || detail.Contains("pinned", StringComparison.OrdinalIgnoreCase))
-            return "Версия или файлы игры изменились. Нажмите «Проверить» при доступной сети; если точный профиль ещё не опубликован, дождитесь обновления данных перевода.";
+            return "Проверенные исходные файлы или состояние игры изменились. Нажмите «Проверить»: патчер продолжит только для точного профиля или строго совместимой ревизии с английским резервом.";
         return detail.StartsWith("ERROR: ", StringComparison.OrdinalIgnoreCase) ? detail[7..].Trim() : detail;
     }
 
@@ -663,6 +842,7 @@ internal sealed class MainForm : Form
             || exception is UnauthorizedAccessException
             || exception is Win32Exception;
     }
+
 
     private void OnFormClosing(object? sender, FormClosingEventArgs eventArgs)
     {

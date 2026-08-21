@@ -208,6 +208,7 @@ try {
     try {
         $properties = @(
             '-p:EnableSupervisedInstallWrites=true',
+            '-p:EnableOfflineCommunityRuntimeCacheWrites=true',
             "-p:TrustedCompatibilityPath=$legacyCompatibility",
             "-p:TrustedRuntimeCacheCompatibilityPath=$profilePath",
             '-p:SignedUpdateChannelConfigPath=',

@@ -18,7 +18,7 @@ The Windows player contains two adjacent applications:
 - `InvokersRu.Gui.exe` — the graphical shell;
 - `InvokersRu.Cli.exe` — file inspection, LOC1 composition, transactional apply, restore, and recovery.
 
-A normal `dotnet build` compiles Core without the production capability to mutate the game. That capability is selected only by the special Release build in `scripts\publish-windows-preview.ps1`. The script supplies guarded MSBuild properties, embeds an exact compatibility profile, and probes the published CLI before it creates the payload manifest.
+A normal `dotnet build` compiles Core without the production capability to mutate the game. That capability is selected only by the special Release build in `scripts\publish-windows-preview.ps1`. The script supplies guarded MSBuild properties, embeds the bootstrap exact profile and compatible-revision trust boundary, and probes the published CLI before it creates the payload manifest.
 
 Self-contained means the player does not require a separately installed .NET Runtime. It is a normal multi-file directory, not a packed single-file executable. Copying only the two EXE files and discarding their neighboring DLL/JSON files creates an incomplete application.
 
@@ -31,7 +31,8 @@ Two independent signatures are relevant:
 
 Required:
 
-- x64 Windows;
+- x64 Windows 10 build 14393 (version 1607, including Enterprise 2016 LTSC) or
+  newer, or Windows 11 x64;
 - Git;
 - the .NET SDK selected by the root `global.json` — currently `10.0.302`;
 - Windows PowerShell 5.1 or PowerShell 7 (`pwsh`).
@@ -120,7 +121,7 @@ None of the commands in this section access the game localization cache or insta
 Choose a unique local version and a new output directory. The script intentionally refuses to overwrite an existing result.
 
 ```powershell
-$version = '3.1.0-local.1'
+$version = '3.1.1-local.1'
 $payload = ".\work\publish\windows-$version"
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
@@ -204,7 +205,7 @@ Identify the kind of change before rebuilding:
 
 - **GUI/CLI code only:** republish the player and installer with a new version, then repeat smoke, packaging, and hash checks.
 - **Russian catalog only:** the old embedded exact profile no longer matches because it pins catalog SHA-256, final LOC1 SHA-256, and composition counts. Create a new signed data release or recertify the embedded profile; simply replacing `ru_RU.jsonl` should make the build fail.
-- **New game version:** capture a new blocked profile, reproduce composition on the private EN/UK corpus, verify hashes/counts, and publish a signed exact profile. A compatible already installed EXE then needs no rebuild.
+- **New game version:** try the built-in `compatible-revision` path first. For a supported raw LOC1 schema-4 family, a fresh signed catalog is normally enough: exact EN+UK matches are applied and all other rows remain English. Publish an exact profile when complete reproducible coverage for that tuple is required; rebuild the EXE only when code or the format/trust boundary changes.
 - **New update key, endpoint, URL policy, or LOC1 writer:** a new EXE is required because the trust boundary or code has changed.
 
 Do not clean an old output in place or copy build files manually. Compare `BUILD-RECEIPT.json`, `PAYLOAD-SHA256.json`, SHA-256 values, and the source commit between two separate output directories.
@@ -245,7 +246,7 @@ See [windows-release-safety.md](windows-release-safety.md) for the complete rele
 
 There is no private key in the repository, payload, or installer. A source build using the official config accepts the same signed catalogs and exact compatibility profiles as the official patcher. It does not need the official private key.
 
-A remote manifest cannot replace the embedded endpoint or public key. The patcher verifies the signature, lifetime, monotonic `sequence`, revocations, compressed and uncompressed size/SHA-256, minimum patcher version, and the exact installed-game profile. Verified data is stored in a content-addressed cache below `%LOCALAPPDATA%\InvokersRu\updates`. On a network failure, only a previously verified last-known-good bundle or the embedded fallback may be used.
+A remote manifest cannot replace the embedded endpoint or public key. The patcher verifies the signature, lifetime, monotonic `sequence`, revocations, compressed and uncompressed size/SHA-256, minimum patcher version, and either the selected exact profile or the authenticated content-family authority used to materialize a locally pinned compatible-revision profile. Verified data is stored in a content-addressed cache below `%LOCALAPPDATA%\InvokersRu\updates`. On a network failure, only a previously verified last-known-good bundle or the embedded bootstrap catalog/profile may be used under the expiry and installed-state rules.
 
 For an independent experimental channel, test the release utility first, then generate a key in a **new external directory outside the repository and any synchronized/shared folder**:
 
@@ -310,7 +311,7 @@ Public `translations\ru_RU.jsonl` is a source-free JSON Lines overlay. Conceptua
 - `translation` is Russian plaintext; the overlay contains no English or Ukrainian plaintext;
 - `status` (`draft`, `reviewed`, or `approved`) and the other fields carry provenance, risk, and review state.
 
-`hint_sha256` does not replace `source_sha256`: runtime composition is bound to EN, while an exact profile additionally pins the entire UK base and final raw LOC1. Release preparation should validate with the Ukrainian hint package so a context change cannot pass unnoticed.
+`hint_sha256` does not replace `source_sha256`: compatible-revision composition requires both exact matches, while an exact profile additionally pins the entire UK base and final raw LOC1. Release preparation should validate with the Ukrainian hint package so a context change cannot pass unnoticed.
 
 Composition walks the ordered UK base entries:
 
@@ -320,9 +321,11 @@ Composition walks the ordered UK base entries:
 4. The writer preserves the UK header, locale identity, and key order; it rebuilds values and the required data-section length, then parses the result again.
 5. The exact profile pins EN, UK, and stamp SHA-256, catalog SHA-256, expected raw output SHA-256, and every composition count. Any mismatch blocks the write.
 
+In `compatible-revision` mode, the complete observed tuple, ordered keyset, selected catalog, locally materialized output, and counts are also pinned before the transaction, but rows are admitted independently. A new or changed row therefore becomes English fallback instead of receiving stale Russian text.
+
 The only persistent target inside the game cache is `dl_uk_UA.bin`; `dl_en_US.bin` and the stamp are read but not modified. A transaction can briefly create strictly named temp/displaced/rollback files beside the target. On a race or failure they are retained for controlled recovery instead of being hidden. The patcher does not inject into a process, install a hook/driver/service, or change game executables, DLLs, memory, accounts, the network protocol, or the signed application package. Immutable backups, state, and transaction journals are kept separately below `%LOCALAPPDATA%\InvokersRussian\runtime-cache`.
 
-## 11. A new game version and a new exact profile
+## 11. A new game version: compatible mode and an optional exact profile
 
 After a game update, select Ukrainian, wait for the download, and close the game. An ordinary CLI build can safely capture a read-only profile:
 

@@ -858,6 +858,56 @@ namespace InvokersRu.Core.Patching
             }
         }
 
+        internal static void EnsureVerifiedBoundedBackup(
+            string sourcePath,
+            string backupPath,
+            string expectedHash,
+            long maximumBytes,
+            string purpose)
+        {
+            RejectExistingReparseComponents(backupPath, "immutable backup path");
+            if (File.Exists(backupPath))
+            {
+                string existingHash = BoundedArtifactReader.Sha256File(backupPath, maximumBytes, $"existing {purpose}");
+                if (!Hashing.FixedEqualsHex(existingHash, expectedHash))
+                    throw new IOException("Existing immutable backup hash is invalid.");
+                return;
+            }
+
+            byte[] sourceSnapshot = BoundedArtifactReader.ReadFile(sourcePath, maximumBytes, purpose);
+            if (!Hashing.FixedEqualsHex(Hashing.Sha256Bytes(sourceSnapshot), expectedHash))
+                throw new IOException("Bounded backup source does not match its verified SHA-256 pin.");
+
+            string directory = Path.GetDirectoryName(backupPath)
+                ?? throw new InvalidDataException("Backup path has no parent directory.");
+            Directory.CreateDirectory(directory);
+            RejectExistingReparseComponents(backupPath, "immutable backup path");
+            string temp = Path.Combine(directory, $".{Path.GetFileName(backupPath)}.{Guid.NewGuid():N}.tmp");
+            try
+            {
+                WriteDurably(temp, sourceSnapshot);
+                string stagedHash = BoundedArtifactReader.Sha256File(temp, maximumBytes, $"staged {purpose}");
+                if (!Hashing.FixedEqualsHex(stagedHash, expectedHash))
+                    throw new IOException("New bounded backup hash does not match the verified source.");
+                File.Move(temp, backupPath);
+            }
+            catch (IOException)
+            {
+                if (!File.Exists(backupPath)
+                    || !Hashing.FixedEqualsHex(
+                        BoundedArtifactReader.Sha256File(backupPath, maximumBytes, $"raced {purpose}"),
+                        expectedHash))
+                {
+                    throw;
+                }
+                // Another verified process won the content-addressed backup race.
+            }
+            finally
+            {
+                if (File.Exists(temp)) File.Delete(temp);
+            }
+        }
+
         internal static void Advance(string statePath, PatchJournal journal, string phase)
         {
             journal.Phase = phase;

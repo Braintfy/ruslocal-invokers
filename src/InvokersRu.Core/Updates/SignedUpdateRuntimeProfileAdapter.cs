@@ -25,34 +25,16 @@ namespace InvokersRu.Core.Updates
         /// </summary>
         public static string ComputeOrderedKeysetSha256(Loc1Document target)
         {
-            ArgumentNullException.ThrowIfNull(target);
-            using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            Span<byte> line = stackalloc byte[17];
-            line[16] = (byte)'\n';
-
-            ulong previous = 0;
-            for (int index = 0; index < target.Entries.Count; index++)
+            try
             {
-                Loc1Entry entry = target.Entries[index]
-                    ?? throw new InvalidDataException("LOC1 target contains a null entry.");
-                if (entry.Index != index || (index > 0 && entry.KeyHash <= previous))
-                {
-                    throw new InvalidDataException("LOC1 target key order is not canonical and strictly increasing.");
-                }
-
-                previous = entry.KeyHash;
-                ulong value = entry.KeyHash;
-                for (int digit = 15; digit >= 0; digit--)
-                {
-                    int nibble = (int)(value & 0xFUL);
-                    line[digit] = (byte)(nibble < 10 ? '0' + nibble : 'A' + nibble - 10);
-                    value >>= 4;
-                }
-
-                hash.AppendData(line);
+                return Loc1Compatibility.ComputeOrderedKeysetSha256(target);
             }
-
-            return Convert.ToHexString(hash.GetHashAndReset());
+            catch (Loc1FormatException exception)
+            {
+                // This adapter is a signed-data trust boundary.  Keep its public failure contract in
+                // InvalidDataException rather than leaking a parser-specific exception type to callers.
+                throw new InvalidDataException("Signed runtime-cache target has a non-canonical LOC1 key set.", exception);
+            }
         }
 
         /// <summary>
@@ -106,6 +88,7 @@ namespace InvokersRu.Core.Updates
                 BaseLocaleRevision = ParseRevision(signedProfile.Base.LocaleRevisionHex, "base.locale_revision_hex"),
                 BaseReleaseRevision = signedProfile.Base.ReleaseRevision,
                 EntryCount = signedProfile.Base.EntryCount,
+                OrderedKeysetSha256 = signedProfile.OrderedKeysetSha256,
                 Readiness = "ready",
                 Certified = true,
                 BlockedReason = null,
@@ -173,6 +156,33 @@ namespace InvokersRu.Core.Updates
             }
 
             return adapted!;
+        }
+
+        /// <summary>
+        /// Authorizes only a content GUID that occurs in an otherwise fully validated compatibility
+        /// profile of this authenticated manifest. Compatible-revision materialization deliberately does
+        /// not inherit hashes or output pins from that older exact profile; it uses the GUID only as the
+        /// stable LOC1 family boundary and pins every observed byte in a new ephemeral profile.
+        /// </summary>
+        public static bool AuthorizesContentFamily(
+            VerifiedSignedUpdateManifest manifest,
+            string observedContentGuid)
+        {
+            ArgumentNullException.ThrowIfNull(manifest);
+            if (!Guid.TryParseExact(observedContentGuid, "D", out Guid contentGuid)
+                || !string.Equals(contentGuid.ToString("D"), observedContentGuid, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            ValidateManifestProfiles(manifest);
+            foreach (VerifiedSignedUpdateCompatibilityProfile candidate in manifest.Compatibility)
+            {
+                if (string.Equals(candidate.ContentGuid, observedContentGuid, StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
         }
 
         private static void ValidateManifestProfiles(VerifiedSignedUpdateManifest manifest)

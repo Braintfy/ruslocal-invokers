@@ -2,12 +2,14 @@ using InvokersRu.Core;
 using InvokersRu.Core.Loc1;
 using InvokersRu.Core.Patching;
 using InvokersRu.Core.Translations;
+using InvokersRu.Core.Updates;
 using InvokersRu.Cli;
 using InvokersRu.Gui;
 using System;
 using System.Buffers.Binary;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -27,6 +29,8 @@ namespace InvokersRu.SmokeTests
             CurrentProfileStrictParsingCheck(profilePath);
             passed("0.60.1247 profile strict parsing, community policy, and fallback pins");
 
+            EmbeddedHistoricalAuthorityCheck();
+
             CliJsonContractCheck(profilePath);
             passed("CLI cache-plan JSON contract is consumable without a GUI reference");
 
@@ -36,6 +40,9 @@ namespace InvokersRu.SmokeTests
             StrictTranslationResultImportCheck();
             passed("model-result JSONL uses the exact seven-field schema before draft merge");
 
+            CompatibleRevisionMaterializationCheck();
+            passed("compatible revisions require raw schema/GUID/locale/key identity and exact source+hint rows");
+
             if (MutationCapability.IsTestWriteBuild)
             {
                 SupersededOfficialUpdateInspectionCheck();
@@ -43,6 +50,9 @@ namespace InvokersRu.SmokeTests
 
                 CatalogSupersededMigrationCheck();
                 passed("allowlisted catalog upgrade applies/restores/recovers atomically and rejects tamper");
+
+                CompatibleRevisionTransactionAndUpdaterCheck();
+                passed("compatible revision persists exact snapshots, survives restart/update, and rejects stale/tampered state");
             }
         }
 
@@ -61,7 +71,8 @@ namespace InvokersRu.SmokeTests
                 bool expired,
                 bool lkg,
                 string? installedBuildId = null,
-                bool exactInstalledArtifact = false)
+                bool exactInstalledArtifact = false,
+                bool remoteProblemBlocksApply = false)
             {
                 return RuntimeUpdateAuthorization.CanApply(
                     remoteProblem,
@@ -79,14 +90,21 @@ namespace InvokersRu.SmokeTests
                     exactInstalledArtifact ? baseSha256 : new string('D', 64),
                     exactInstalledArtifact ? outputSha256 : new string('E', 64),
                     exactInstalledArtifact ? catalogSha256 : new string('F', 64),
-                    exactInstalledArtifact ? appliedTranslations : appliedTranslations - 1);
+                    exactInstalledArtifact ? appliedTranslations : appliedTranslations - 1,
+                    remoteProblemBlocksApply);
             }
 
             Require(Authorized(false, false, false, false, false, false),
                 "The embedded offline bootstrap was rejected without an accepted channel authority.");
+            Require(Authorized(true, false, false, false, false, false),
+                "A mere first-run network failure blocked the independently trusted embedded bootstrap.");
+            Require(!Authorized(true, false, false, false, false, false, remoteProblemBlocksApply: true),
+                "A corrupt authenticated-channel/config fallback was mislabeled as a benign offline bootstrap.");
+            Require(Authorized(true, true, true, false, false, false, remoteProblemBlocksApply: false),
+                "A typed non-blocking warning disabled an otherwise current authenticated bundle.");
             Require(!Authorized(false, true, false, false, false, false),
                 "An authenticated channel head without an authorized bundle was accepted.");
-            Require(!Authorized(true, true, true, false, false, false, profileId),
+            Require(!Authorized(true, true, true, false, false, false, profileId, remoteProblemBlocksApply: true),
                 "A resolver/channel error did not block signed-data installation.");
             Require(!Authorized(false, true, true, true, false, false, profileId),
                 "A below-minimum patcher was allowed to apply signed data.");
@@ -108,6 +126,18 @@ namespace InvokersRu.SmokeTests
                 && !RuntimeUpdateAuthorization.CanRestoreOrRecover(hasExactRestorableInspection: false),
                 "Restore/recovery authorization is not tied to an exact restorable inspection.");
             var authorizationProfile = new RuntimeCacheCompatibility { Id = profileId };
+            var unauthenticatedRecovery = new RuntimeUpdateResolution
+            {
+                Profile = authorizationProfile,
+                Inspection = new RuntimeCacheInspection
+                {
+                    Status = InstallationStatus.RecoveryRequired,
+                    Profile = authorizationProfile
+                },
+                CatalogPath = string.Empty
+            };
+            Require(!RuntimeUpdateAuthorization.CanRestoreOrRecover(unauthenticatedRecovery),
+                "A generic parseable journal status authorized recovery without an exact installed recovery profile.");
             var embeddedRestoreWithChannelProblem = new RuntimeUpdateResolution
             {
                 Profile = authorizationProfile,
@@ -280,22 +310,28 @@ namespace InvokersRu.SmokeTests
             string json = new UTF8Encoding(false, true).GetString(File.ReadAllBytes(profilePath)).TrimStart('\uFEFF');
             RuntimeCacheCompatibility profile = RuntimeCacheCompatibility.Parse(json);
 
-            Require(profile.Id == "runtime-cache-win64-0.60.1247-prod68"
+            Require(profile.Id == "runtime-cache-win64-0.60.1247-prod71"
                 && profile.GameVersion == "0.60.1247"
                 && profile.StampValue == profile.GameVersion
+                && profile.EnglishContentVersion == "Prod_0.60.0_68"
+                && profile.BaseContentVersion == "Prod_0.60.0_71"
+                && profile.BaseReleaseRevision == 71
                 && profile.EntryCount == 41_292
                 && profile.ExpectedAppliedTranslations == 41_037
                 && profile.ExpectedEnglishFallbacks == 1
                 && profile.ExpectedBaseFallbacks == 254
                 && profile.ExpectedNeedsReviewFallbacks == 0
                 && profile.TranslationPolicy == "community-preview-all-drafts"
-                && profile.SupersededArtifacts.Length == 1
-                && profile.SupersededArtifacts[0].OutputSha256 == "4E3AC2FBF663DA1D3EBF4B2EAEBFAADF5BC2A80AE7E424463582919F07B644CD"
-                && profile.SupersededArtifacts[0].TranslationCatalogSha256 == "CBF5211BDCB8E940829F305154CE9A92C0D202BCC6B49617A4B92BA25166600C"
+                && profile.SupersededArtifacts.Length == 2
+                && profile.SupersededArtifacts[0].OutputSha256 == "105B6A9047E6FB0E2C34B774CAE273CC024831C06896C56C4F65F92D2F920541"
+                && profile.SupersededArtifacts[0].TranslationCatalogSha256 == "C9E6281FC7918886F1A8943FD39C41B7146230F6D526AB65EA1AAFE5BF10358B"
                 && profile.SupersededArtifacts[0].AppliedTranslations == 41_037
                 && profile.SupersededArtifacts[0].EnglishFallbacks == 1
                 && profile.SupersededArtifacts[0].BaseFallbacks == 254
                 && profile.SupersededArtifacts[0].NeedsReviewFallbacks == 0
+                && profile.SupersededArtifacts[1].OutputSha256 == "4E3AC2FBF663DA1D3EBF4B2EAEBFAADF5BC2A80AE7E424463582919F07B644CD"
+                && profile.SupersededArtifacts[1].TranslationCatalogSha256 == "CBF5211BDCB8E940829F305154CE9A92C0D202BCC6B49617A4B92BA25166600C"
+                && profile.SupersededArtifacts[1].AppliedTranslations == 41_037
                 && profile.Certified
                 && profile.Readiness == "ready",
                 "The current runtime-cache release profile lost one or more exact compatibility/composition pins.");
@@ -372,14 +408,46 @@ namespace InvokersRu.SmokeTests
                 };
                 profile.Validate();
 
-                byte[] previousOfficialBase = Encoding.UTF8.GetBytes("immutable previous official cache");
+                byte[] previousOfficialBase = CreateLoc1(8, 67, 0xD7A0FEFA, new[] { "Відкрити", "Вихід" });
                 string previousOriginalHash = Hashing.Sha256Bytes(previousOfficialBase);
-                string backupPath = Path.Combine(stateRoot, "backups", "retired-runtime-cache", $"{previousOriginalHash}.dl_uk_UA.bin");
+                string retiredBuildId = "retired-runtime-cache";
+                var predecessor = new RuntimeCacheCompatibility
+                {
+                    Id = retiredBuildId,
+                    GameVersion = profile.GameVersion,
+                    ContentGuid = ContentGuid,
+                    EnglishContentVersion = ContentVersion,
+                    BaseContentVersion = ContentVersion,
+                    EnglishSha256 = profile.EnglishSha256,
+                    BaseSha256 = previousOriginalHash,
+                    StampSha256 = profile.StampSha256,
+                    StampValue = profile.StampValue,
+                    EnglishLocaleId = 1,
+                    EnglishLocaleRevision = 0x1234ABCD,
+                    EnglishReleaseRevision = 68,
+                    BaseLocaleId = 8,
+                    BaseLocaleRevision = 0xD7A0FEFA,
+                    BaseReleaseRevision = 67,
+                    EntryCount = 2,
+                    Readiness = "ready",
+                    Certified = true,
+                    TranslationCatalogSha256 = new string('D', 64),
+                    ExpectedOutputSha256 = new string('C', 64),
+                    MinimumAppliedTranslations = 1,
+                    ExpectedAppliedTranslations = 1,
+                    ExpectedEnglishFallbacks = 0,
+                    ExpectedBaseFallbacks = 1,
+                    ExpectedNeedsReviewFallbacks = 0,
+                    TranslationPolicy = "community-preview-all-drafts"
+                };
+                predecessor.Validate();
+                string retiredBackupDirectory = $"{retiredBuildId}-{Hashing.Sha256Text(retiredBuildId).Substring(0, 12)}";
+                string backupPath = Path.Combine(stateRoot, "backups", retiredBackupDirectory, $"{previousOriginalHash}.dl_uk_UA.bin");
                 Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
                 File.WriteAllBytes(backupPath, previousOfficialBase);
                 var oldState = new PatchState
                 {
-                    BuildId = "retired-runtime-cache",
+                    BuildId = retiredBuildId,
                     GameRoot = Path.GetFullPath(cacheRoot),
                     TargetPath = Path.GetFullPath(targetPath),
                     BackupPath = Path.GetFullPath(backupPath),
@@ -392,17 +460,767 @@ namespace InvokersRu.SmokeTests
                 Directory.CreateDirectory(stateRoot);
                 File.WriteAllText(statePath, JsonSerializer.Serialize(oldState), new UTF8Encoding(false));
 
-                RuntimeCacheInspection superseded = RuntimeCacheService.Inspect(cacheRoot, profile, statePath);
+                RuntimeCacheInspection superseded = RuntimeCacheService.Inspect(cacheRoot, profile, statePath, predecessor);
                 Require(superseded.Status == InstallationStatus.PatchSupersededByOfficialUpdate
                     && superseded.State != null
                     && superseded.Message.Contains("game update replaced", StringComparison.OrdinalIgnoreCase),
                     "An exact official tuple with a valid old state/backup was not classified as superseded by an official update.");
 
                 File.WriteAllBytes(backupPath, Encoding.UTF8.GetBytes("corrupted stale backup"));
-                RuntimeCacheInspection invalidBackup = RuntimeCacheService.Inspect(cacheRoot, profile, statePath);
+                RuntimeCacheInspection invalidBackup = RuntimeCacheService.Inspect(cacheRoot, profile, statePath, predecessor);
                 Require(invalidBackup.Status == InstallationStatus.InconsistentState
-                    && invalidBackup.Message.Contains("backup is missing or invalid", StringComparison.OrdinalIgnoreCase),
+                    && File.ReadAllBytes(targetPath).SequenceEqual(officialBase),
                     "An exact official tuple with an invalid stale backup was allowed to reapply.");
+            }
+            finally
+            {
+                if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+            }
+        }
+
+        private static void EmbeddedHistoricalAuthorityCheck()
+        {
+            RuntimeCacheCompatibility[] history = EmbeddedRuntimeCacheHistory.CreateProfiles().ToArray();
+            Require(history.Length == 1, "The compiled exact-profile recovery history is ambiguous.");
+            RuntimeCacheCompatibility prod68 = history[0];
+            Require(prod68.Id == "runtime-cache-win64-0.60.1247-prod68"
+                && prod68.Mode == "exact"
+                && prod68.BaseContentVersion == "Prod_0.60.0_68"
+                && prod68.BaseSha256 == "D32B038163DCA0D9830C764234AE2D5EACB5F07CD2FEBD2D2EF14B9F529E0B43"
+                && prod68.TranslationCatalogSha256 == "C9E6281FC7918886F1A8943FD39C41B7146230F6D526AB65EA1AAFE5BF10358B"
+                && prod68.ExpectedOutputSha256 == "105B6A9047E6FB0E2C34B774CAE273CC024831C06896C56C4F65F92D2F920541"
+                && prod68.OrderedKeysetSha256 == "3B29E4AC11AC3EAF41E79B3C856E93B3DE2BEF4E6442AAC5D8F9EBA9EAAFDFB8"
+                && prod68.ExpectedAppliedTranslations == 41_037
+                && prod68.SupersededArtifacts.Length == 1,
+                "The compiled prod68 recovery authority lost an immutable tuple/artifact pin.");
+        }
+
+        private static void CompatibleRevisionMaterializationCheck()
+        {
+            string root = Path.Combine(Path.GetTempPath(), $"invokersru-compatible-revision-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+                string[] englishValues =
+                {
+                    "Open",
+                    "Exit",
+                    "Gain 10%",
+                    "Value {0}",
+                    "<b>Open</b>",
+                    "Line1\nLine2",
+                    "Brand new"
+                };
+                string[] baseValues =
+                {
+                    "Відкрити",
+                    "Вийти",
+                    "Отримати 10%",
+                    "Значення {0}",
+                    "<b>Відкрити</b>",
+                    "Рядок1\nРядок2",
+                    "Зовсім нове"
+                };
+                byte[] englishRaw = CreateLoc1(1, 169, 0x1234ABCD, englishValues, "Prod_synthetic_169");
+                byte[] baseRaw = CreateLoc1(8, 169, 0xD7A0FEFB, baseValues, "Prod_synthetic_169");
+                byte[] stampRaw = Encoding.UTF8.GetBytes("0.61.synthetic.169");
+                string englishPath = Path.Combine(root, "dl_en_US.bin");
+                string basePath = Path.Combine(root, "dl_uk_UA.bin");
+                string stampPath = Path.Combine(root, "dl_uk_UA.bin.ver");
+                string catalogPath = Path.Combine(root, "adaptive.jsonl");
+                File.WriteAllBytes(englishPath, englishRaw);
+                File.WriteAllBytes(basePath, baseRaw);
+                File.WriteAllBytes(stampPath, stampRaw);
+
+                Loc1Document english = Loc1Codec.Parse(englishRaw);
+                Loc1Document ukrainian = Loc1Codec.Parse(baseRaw);
+                TranslationRecord Record(int index, string translation, string? hintOverride = null) => new TranslationRecord
+                {
+                    Id = english.Entries[index].Id,
+                    SourceSha256 = Hashing.Sha256Text(english.Entries[index].Value!),
+                    HintSha256 = Hashing.Sha256Text(hintOverride ?? ukrainian.Entries[index].Value!),
+                    Translation = translation,
+                    Status = "draft",
+                    Model = "compatible-smoke",
+                    PromptVersion = "compatible-v1",
+                    Confidence = "high",
+                    NeedsReview = false,
+                    RiskFlags = TranslationValidator.ClassifyRisks(english.Entries[index].Value!).ToArray(),
+                    ReviewStage = "synthetic",
+                    UpdatedAt = DateTimeOffset.Parse("2026-08-21T00:00:00Z", CultureInfo.InvariantCulture)
+                };
+                var records = new[]
+                {
+                    Record(0, "Открыть"),
+                    Record(1, "Выйти", hintOverride: "изменённая подсказка"),
+                    Record(2, "Получить 20%"),
+                    Record(3, "Значение"),
+                    Record(4, "<b>Открыть"),
+                    Record(5, "Строка1 Строка2"),
+                    new TranslationRecord
+                    {
+                        Id = "FFFFFFFFFFFFFFFE",
+                        SourceSha256 = Hashing.Sha256Text("Removed source"),
+                        HintSha256 = Hashing.Sha256Text("Видалене джерело"),
+                        Translation = "Удалённая строка",
+                        Status = "draft",
+                        Model = "compatible-smoke",
+                        PromptVersion = "compatible-v1",
+                        Confidence = "high",
+                        RiskFlags = Array.Empty<string>(),
+                        ReviewStage = "synthetic",
+                        UpdatedAt = DateTimeOffset.Parse("2026-08-21T00:00:00Z", CultureInfo.InvariantCulture)
+                    }
+                };
+                TranslationCatalog.WriteJsonLines(catalogPath, records);
+                byte[] catalogBytes = File.ReadAllBytes(catalogPath);
+
+                string oversizedCatalogPath = Path.Combine(root, "oversized-catalog.jsonl");
+                using (FileStream oversized = File.Create(oversizedCatalogPath))
+                    oversized.SetLength(SignedUpdateLimits.MaxUncompressedCatalogBytes + 1);
+                ExpectCompatibleRejected(() => BoundedArtifactReader.ReadCatalog(
+                    oversizedCatalogPath,
+                    Hashing.Sha256Bytes(catalogBytes),
+                    "synthetic oversized catalog"));
+
+                string swappedCatalogPath = Path.Combine(root, "same-length-swapped.jsonl");
+                byte[] expectedCatalog = Encoding.UTF8.GetBytes("same-length-A");
+                File.WriteAllBytes(swappedCatalogPath, Encoding.UTF8.GetBytes("same-length-B"));
+                ExpectCompatibleRejected(() => BoundedArtifactReader.ReadCatalog(
+                    swappedCatalogPath,
+                    Hashing.Sha256Bytes(expectedCatalog),
+                    "synthetic same-length catalog swap"));
+
+                string oversizedLoc1Path = Path.Combine(root, "oversized-runtime.loc1");
+                using (FileStream oversized = File.Create(oversizedLoc1Path))
+                    oversized.SetLength(BoundedArtifactReader.MaximumRuntimeLoc1Bytes + 1);
+                ExpectCompatibleRejected(() => BoundedArtifactReader.ReadRuntimeLoc1(
+                    oversizedLoc1Path,
+                    "synthetic oversized runtime LOC1"));
+                ExpectCompatibleRejected(() => RuntimeCacheService.DescribeTuple(
+                    oversizedLoc1Path,
+                    basePath,
+                    stampPath,
+                    "oversized-observed"));
+                ExpectCompatibleRejected(() => BoundedArtifactReader.Sha256File(
+                    oversizedLoc1Path,
+                    BoundedArtifactReader.MaximumRuntimeLoc1Bytes,
+                    "synthetic oversized runtime hash"));
+
+                string oversizedBackupPath = Path.Combine(root, "oversized-backup.loc1");
+                ExpectCompatibleRejected(() => PatchService.EnsureVerifiedBoundedBackup(
+                    oversizedLoc1Path,
+                    oversizedBackupPath,
+                    Hashing.Sha256Bytes(baseRaw),
+                    BoundedArtifactReader.MaximumRuntimeLoc1Bytes,
+                    "synthetic oversized backup source"));
+                Require(!File.Exists(oversizedBackupPath),
+                    "Oversized bounded backup source created a destination file.");
+
+                string existingOversizedBackup = Path.Combine(root, "existing-oversized-backup.loc1");
+                using (FileStream oversized = File.Create(existingOversizedBackup))
+                    oversized.SetLength(BoundedArtifactReader.MaximumRuntimeLoc1Bytes + 1);
+                ExpectCompatibleRejected(() => PatchService.EnsureVerifiedBoundedBackup(
+                    basePath,
+                    existingOversizedBackup,
+                    Hashing.Sha256Bytes(baseRaw),
+                    BoundedArtifactReader.MaximumRuntimeLoc1Bytes,
+                    "synthetic existing oversized backup"));
+
+                string oversizedStampPath = Path.Combine(root, "oversized-runtime.ver");
+                using (FileStream oversized = File.Create(oversizedStampPath))
+                    oversized.SetLength(BoundedArtifactReader.MaximumRuntimeStampBytes + 1);
+                ExpectCompatibleRejected(() => RuntimeCacheService.DescribeTuple(
+                    englishPath,
+                    basePath,
+                    oversizedStampPath,
+                    "oversized-stamp-observed"));
+
+                var excessiveCatalog = new StringBuilder(capacity: 18_000_000);
+                string sourcePin = new string('A', 64);
+                for (int index = 0; index <= SignedUpdateLimits.MaxCatalogRecords; index++)
+                {
+                    excessiveCatalog.Append("{\"id\":\"")
+                        .Append(index.ToString("X16", CultureInfo.InvariantCulture))
+                        .Append("\",\"source_sha256\":\"")
+                        .Append(sourcePin)
+                        .Append("\",\"translation\":\"x\",\"status\":\"draft\"}\n");
+                }
+                byte[] excessiveCatalogBytes = Encoding.UTF8.GetBytes(excessiveCatalog.ToString());
+                ExpectCompatibleRejected(() => TranslationCatalog.LoadJsonLinesBytes(
+                    excessiveCatalogBytes,
+                    SignedUpdateLimits.MaxCatalogRecords));
+
+                var family = new RuntimeCacheCompatibility
+                {
+                    Id = "trusted-synthetic-family",
+                    GameVersion = "0.60.synthetic",
+                    ContentGuid = ContentGuid,
+                    EnglishContentVersion = ContentVersion,
+                    BaseContentVersion = ContentVersion,
+                    EnglishSha256 = Hashing.Sha256Bytes(CreateLoc1(1, 68, 0x11111111, new[] { "old" })),
+                    BaseSha256 = Hashing.Sha256Bytes(CreateLoc1(8, 68, 0x22222222, new[] { "старе" })),
+                    StampSha256 = Hashing.Sha256Bytes(Encoding.UTF8.GetBytes("0.60.synthetic")),
+                    StampValue = "0.60.synthetic",
+                    EnglishLocaleId = 1,
+                    EnglishLocaleRevision = 0x11111111,
+                    EnglishReleaseRevision = 68,
+                    BaseLocaleId = 8,
+                    BaseLocaleRevision = 0x22222222,
+                    BaseReleaseRevision = 68,
+                    EntryCount = 1,
+                    MinimumAppliedTranslations = 1,
+                    Readiness = "blocked",
+                    Certified = false,
+                    TranslationPolicy = "community-preview-all-drafts"
+                };
+                family.Validate();
+
+                CompatibleRevisionProfileBuild built = CompatibleRevisionProfileBuilder.Build(
+                    englishPath,
+                    basePath,
+                    stampPath,
+                    family,
+                    catalogBytes,
+                    Hashing.Sha256Bytes(catalogBytes),
+                    "community-preview-all-drafts");
+                Require(built.Profile.Mode == CompatibleRevisionProfileBuilder.Mode
+                    && built.Profile.EntryCount == englishValues.Length
+                    && built.Composition.AppliedTranslations == 1
+                    && built.Composition.StaleHintRecords == 1
+                    && built.Composition.RejectedCatalogRecords == 4
+                    && built.Composition.EnglishFallbacks == 6
+                    && built.Composition.BaseFallbacks == 0
+                    && built.Validation.ErrorCount > 0,
+                    "Compatible-revision projection did not deterministically fallback unknown/stale/invalid rows.");
+
+                byte[] projected = Loc1Codec.BuildRaw(Loc1Codec.Parse(baseRaw));
+                TranslationCatalog projectionCatalog = TranslationCatalog.LoadJsonLines(catalogPath);
+                Loc1Document projectionEnglish = Loc1Codec.Parse(englishRaw);
+                Loc1Document projectionBase = Loc1Codec.Parse(baseRaw);
+                CompositionSummary projectedSummary = TranslationComposer.Apply(
+                    projectionEnglish,
+                    projectionBase,
+                    projectionCatalog,
+                    includeDraft: true,
+                    allowPerLocaleContentVersion: true,
+                    requireExactHint: true);
+                projected = Loc1Codec.BuildRaw(projectionBase);
+                Require(Hashing.FixedEqualsHex(Hashing.Sha256Bytes(projected), built.Profile.ExpectedOutputSha256!)
+                    && projectedSummary.AppliedTranslations == built.Profile.ExpectedAppliedTranslations
+                    && projectionBase.Entries[0].Value == "Открыть"
+                    && projectionBase.Entries[1].Value == englishValues[1]
+                    && projectionBase.Entries[2].Value == englishValues[2]
+                    && projectionBase.Entries[3].Value == englishValues[3]
+                    && projectionBase.Entries[4].Value == englishValues[4]
+                    && projectionBase.Entries[5].Value == englishValues[5]
+                    && projectionBase.Entries[6].Value == englishValues[6],
+                    "Compatible-revision builder and runtime projection diverged or applied an unsafe pair.");
+
+                byte[] exactBounded = Loc1Codec.BuildRawBounded(Loc1Codec.Parse(baseRaw), baseRaw.LongLength);
+                Require(exactBounded.SequenceEqual(baseRaw),
+                    "Bounded LOC1 writer rejected or changed an output exactly at its byte budget.");
+                Loc1Document overBudget = Loc1Codec.Parse(baseRaw);
+                overBudget.Entries[0].Value = new string('x', checked((int)baseRaw.LongLength));
+                ExpectCompatibleRejected(() => Loc1Codec.BuildRawBounded(overBudget, baseRaw.LongLength));
+
+                Loc1Document nullEnglish = Loc1Codec.Parse(englishRaw);
+                Loc1Document nullBase = Loc1Codec.Parse(baseRaw);
+                nullBase.Entries[0].Value = null;
+                nullEnglish.Entries[1].Value = null;
+                CompositionSummary nullSummary = TranslationComposer.Apply(
+                    nullEnglish,
+                    nullBase,
+                    projectionCatalog,
+                    includeDraft: true,
+                    allowPerLocaleContentVersion: true,
+                    requireExactHint: true);
+                Require(nullBase.Entries[0].Value == null
+                    && nullBase.Entries[1].Value == baseValues[1]
+                    && nullSummary.BaseFallbacks >= 2,
+                    "Compatible fallback filled an official null sentinel or replaced a base row whose English source is null.");
+
+                TranslationRecord releaseRejected = Record(0, "Открыть");
+                releaseRejected.Status = "approved";
+                TranslationRecord releaseReady = Record(1, "Выйти");
+                releaseReady.Status = "approved";
+                releaseReady.ReviewerIds = new[] { "reviewer-1" };
+                releaseReady.ReviewedAt = DateTimeOffset.Parse("2026-08-21T01:00:00Z", CultureInfo.InvariantCulture);
+                releaseReady.ReviewRevision = "release-smoke-v1";
+                TranslationRecord unresolvedRelease = Record(2, "Получить 10%");
+                unresolvedRelease.Status = "approved";
+                unresolvedRelease.ReviewerIds = new[] { "reviewer-1" };
+                unresolvedRelease.ReviewedAt = DateTimeOffset.Parse("2026-08-21T01:00:00Z", CultureInfo.InvariantCulture);
+                unresolvedRelease.ReviewRevision = "release-smoke-v1";
+                unresolvedRelease.IssueCodes = new[] { "ambiguous_context" };
+                Require(!TranslationValidator.IsReleaseReady(
+                        unresolvedRelease,
+                        english.Entries[2].Value!,
+                        out string unresolvedReason)
+                    && unresolvedReason == "unresolved-issue-codes",
+                    "Release eligibility ignored an unresolved issue code on otherwise approved text.");
+                string releaseCatalogPath = Path.Combine(root, "release.jsonl");
+                TranslationCatalog.WriteJsonLines(releaseCatalogPath, new[]
+                    { releaseRejected, releaseReady, unresolvedRelease });
+                byte[] releaseCatalogBytes = File.ReadAllBytes(releaseCatalogPath);
+                CompatibleRevisionProfileBuild releaseBuilt = CompatibleRevisionProfileBuilder.Build(
+                    englishPath,
+                    basePath,
+                    stampPath,
+                    family,
+                    releaseCatalogBytes,
+                    Hashing.Sha256Bytes(releaseCatalogBytes),
+                    "release-approved");
+                Require(releaseBuilt.Composition.AppliedTranslations == 1
+                    && releaseBuilt.Composition.PolicyFallbacks == 2
+                    && releaseBuilt.Composition.EnglishFallbacks == 6
+                    && releaseBuilt.Validation.Issues.Any(issue =>
+                        issue.Id == unresolvedRelease.Id
+                        && issue.Code == "unresolved-issue-codes"
+                        && issue.Severity == ValidationSeverity.Error),
+                    "Release-approved compatible projection applied a row with missing review metadata or unresolved issues.");
+
+                byte[] compressedEnglish = Loc1Codec.Compress(englishRaw);
+                File.WriteAllBytes(englishPath, compressedEnglish);
+                ExpectCompatibleRejected(() => CompatibleRevisionProfileBuilder.Build(
+                    englishPath, basePath, stampPath, family, catalogBytes,
+                    Hashing.Sha256Bytes(catalogBytes), "community-preview-all-drafts"));
+                File.WriteAllBytes(englishPath, englishRaw);
+
+                byte[] wrongLocale = CreateLoc1(9, 169, 0xD7A0FEFB, baseValues, "Prod_synthetic_169");
+                File.WriteAllBytes(basePath, wrongLocale);
+                ExpectCompatibleRejected(() => CompatibleRevisionProfileBuilder.Build(
+                    englishPath, basePath, stampPath, family, catalogBytes,
+                    Hashing.Sha256Bytes(catalogBytes), "community-preview-all-drafts"));
+                File.WriteAllBytes(basePath, baseRaw);
+
+                byte[] changedKeys = CreateLoc1(8, 169, 0xD7A0FEFB, baseValues.Concat(new[] { "Новий ключ" }).ToArray(), "Prod_synthetic_169");
+                File.WriteAllBytes(basePath, changedKeys);
+                ExpectCompatibleRejected(() => CompatibleRevisionProfileBuilder.Build(
+                    englishPath, basePath, stampPath, family, catalogBytes,
+                    Hashing.Sha256Bytes(catalogBytes), "community-preview-all-drafts"));
+
+                File.WriteAllBytes(basePath, baseRaw);
+                byte[] excessiveHeader = (byte[])englishRaw.Clone();
+                WriteUInt32(excessiveHeader, 0x1C, checked((uint)(Loc1Codec.MaximumEntryCount + 1)));
+                File.WriteAllBytes(englishPath, excessiveHeader);
+                ExpectCompatibleRejected(() => CompatibleRevisionProfileBuilder.Build(
+                    englishPath, basePath, stampPath, family, catalogBytes,
+                    Hashing.Sha256Bytes(catalogBytes), "community-preview-all-drafts"));
+            }
+            finally
+            {
+                if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+            }
+        }
+
+        private static void ExpectCompatibleRejected(Action action)
+        {
+            try
+            {
+                action();
+                throw new InvalidOperationException("Unsafe compatible-revision tuple was accepted.");
+            }
+            catch (Exception exception) when (exception is InvalidDataException
+                or InvalidOperationException
+                or Loc1FormatException)
+            {
+                if (exception is InvalidOperationException invalid
+                    && invalid.Message == "Unsafe compatible-revision tuple was accepted.")
+                    throw;
+            }
+        }
+
+        private static void CompatibleRevisionTransactionAndUpdaterCheck()
+        {
+            string root = Path.Combine(Path.GetTempPath(), $"invokersru-compatible-transaction-{Guid.NewGuid():N}");
+            string cacheRoot = Path.Combine(root, "cache");
+            string stateRoot = Path.Combine(root, "state");
+            string statePath = Path.Combine(stateRoot, "state.v1.json");
+            string catalogPath = Path.Combine(root, "ru_RU.jsonl");
+            Directory.CreateDirectory(cacheRoot);
+            Directory.CreateDirectory(stateRoot);
+            try
+            {
+                (string englishPath, string targetPath, string stampPath) = RuntimeCacheService.ResolveTuplePaths(cacheRoot);
+                byte[] englishA = CreateLoc1(1, 169, 0x11112222, new[] { "Open", "Exit" }, "Prod_synthetic_169");
+                byte[] baseA = CreateLoc1(8, 169, 0x33334444, new[] { "Відкрити", "Вийти" }, "Prod_synthetic_169");
+                byte[] stampA = Encoding.UTF8.GetBytes("0.61.synthetic.169");
+                byte[] englishB = CreateLoc1(1, 270, 0x55556666, new[] { "Open", "Exit", "New" }, "Prod_synthetic_270");
+                byte[] baseB = CreateLoc1(8, 270, 0x77778888, new[] { "Відкрити", "Вийти", "Нове" }, "Prod_synthetic_270");
+                byte[] stampB = Encoding.UTF8.GetBytes("0.70.synthetic.270");
+                File.WriteAllBytes(englishPath, englishA);
+                File.WriteAllBytes(targetPath, baseA);
+                File.WriteAllBytes(stampPath, stampA);
+
+                Loc1Document parsedEnglishA = Loc1Codec.Parse(englishA);
+                Loc1Document parsedBaseA = Loc1Codec.Parse(baseA);
+                TranslationRecord Record(int index, string translation) => new TranslationRecord
+                {
+                    Id = parsedEnglishA.Entries[index].Id,
+                    SourceSha256 = Hashing.Sha256Text(parsedEnglishA.Entries[index].Value!),
+                    HintSha256 = Hashing.Sha256Text(parsedBaseA.Entries[index].Value!),
+                    Translation = translation,
+                    Status = "draft",
+                    Model = "compatible-transaction-smoke",
+                    PromptVersion = "compatible-v1",
+                    Confidence = "high",
+                    NeedsReview = false,
+                    RiskFlags = Array.Empty<string>(),
+                    ReviewStage = "synthetic",
+                    UpdatedAt = DateTimeOffset.Parse("2026-08-21T00:00:00Z", CultureInfo.InvariantCulture)
+                };
+                TranslationCatalog.WriteJsonLines(catalogPath, new[]
+                {
+                    Record(0, "Открыть"),
+                    Record(1, "Выйти")
+                });
+                byte[] catalogBytes = File.ReadAllBytes(catalogPath);
+                string catalogSha256 = Hashing.Sha256Bytes(catalogBytes);
+                var family = new RuntimeCacheCompatibility
+                {
+                    Id = "trusted-compatible-transaction-family",
+                    GameVersion = "0.60.synthetic",
+                    ContentGuid = ContentGuid,
+                    EnglishContentVersion = ContentVersion,
+                    BaseContentVersion = ContentVersion,
+                    EnglishSha256 = Hashing.Sha256Bytes(CreateLoc1(1, 68, 0x11111111, new[] { "old" })),
+                    BaseSha256 = Hashing.Sha256Bytes(CreateLoc1(8, 68, 0x22222222, new[] { "старе" })),
+                    StampSha256 = Hashing.Sha256Bytes(Encoding.UTF8.GetBytes("0.60.synthetic")),
+                    StampValue = "0.60.synthetic",
+                    EnglishLocaleId = 1,
+                    EnglishLocaleRevision = 0x11111111,
+                    EnglishReleaseRevision = 68,
+                    BaseLocaleId = 8,
+                    BaseLocaleRevision = 0x22222222,
+                    BaseReleaseRevision = 68,
+                    EntryCount = 1,
+                    MinimumAppliedTranslations = 1,
+                    Readiness = "blocked",
+                    Certified = false,
+                    TranslationPolicy = "community-preview-all-drafts"
+                };
+                family.Validate();
+                CompatibleRevisionProfileBuild builtA = CompatibleRevisionProfileBuilder.Build(
+                    englishPath,
+                    targetPath,
+                    stampPath,
+                    family,
+                    catalogBytes,
+                    catalogSha256,
+                    "community-preview-all-drafts");
+                Require(builtA.Composition.AppliedTranslations == 2
+                    && builtA.Composition.EnglishFallbacks == 0,
+                    "Compatible revision A did not materialize its exact source+hint rows.");
+
+                string backupPath = Path.Combine(
+                    stateRoot,
+                    "backups",
+                    $"{builtA.Profile.Id}-{Hashing.Sha256Text(builtA.Profile.Id).Substring(0, 12)}",
+                    $"{builtA.Profile.BaseSha256}.dl_uk_UA.bin");
+                Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
+                File.WriteAllBytes(backupPath, baseA);
+                (string englishSnapshot, string stampSnapshot) =
+                    RuntimeCacheService.ResolveCompatibleSourceSnapshotPaths(backupPath);
+
+                PatchJournal Prepared(string transactionId) => new PatchJournal
+                {
+                    TransactionId = transactionId,
+                    Operation = "runtime-cache-apply",
+                    Phase = "Prepared",
+                    BuildId = builtA.Profile.Id,
+                    GameRoot = Path.GetFullPath(cacheRoot),
+                    TargetPath = Path.GetFullPath(targetPath),
+                    BackupPath = Path.GetFullPath(backupPath),
+                    QuarantinePath = Path.Combine(cacheRoot, $".dl_uk_UA.bin.{transactionId}.displaced"),
+                    RollbackPath = Path.Combine(cacheRoot, $".dl_uk_UA.bin.{transactionId}.rollback"),
+                    SourceSha256 = builtA.Profile.BaseSha256,
+                    ExpectedOutputSha256 = builtA.Profile.ExpectedOutputSha256!,
+                    TranslationsSha256 = builtA.Profile.TranslationCatalogSha256!,
+                    AppliedTranslations = builtA.Profile.ExpectedAppliedTranslations,
+                    CreatedAt = DateTimeOffset.UtcNow
+                };
+
+                MutationPolicy.BindTestRuntimePaths(cacheRoot, statePath);
+                PatchJournal foreign = Prepared("40404040404040404040404040404040");
+                foreign.BuildId = "foreign-compatible-profile";
+                string foreignBackup = Path.Combine(
+                    stateRoot,
+                    "backups",
+                    $"{foreign.BuildId}-{Hashing.Sha256Text(foreign.BuildId).Substring(0, 12)}",
+                    $"{builtA.Profile.BaseSha256}.dl_uk_UA.bin");
+                Directory.CreateDirectory(Path.GetDirectoryName(foreignBackup)!);
+                File.WriteAllBytes(foreignBackup, baseA);
+                foreign.BackupPath = foreignBackup;
+                PatchJournalStore.Save(statePath, foreign);
+                RuntimeUpdateResolution unauthenticatedJournal = RuntimeUpdateResolver.Resolve(
+                    cacheRoot, statePath, builtA.Profile, catalogPath, coordinator: null);
+                Require(unauthenticatedJournal.Inspection.Status == InstallationStatus.InconsistentState
+                    && unauthenticatedJournal.InstalledInspection == null
+                    && unauthenticatedJournal.LocalProblem == "journal-authentication"
+                    && !RuntimeUpdateAuthorization.CanRestoreOrRecover(unauthenticatedJournal),
+                    "A parseable foreign journal was exposed as an authenticated recovery operation.");
+                PatchJournalStore.Delete(statePath, foreign.TransactionId);
+                File.WriteAllBytes(englishSnapshot, englishA);
+                PatchJournalStore.Save(statePath, Prepared("41414141414141414141414141414141"));
+                RuntimeUpdateResolution partialEnglish = RuntimeUpdateResolver.Resolve(
+                    cacheRoot,
+                    statePath,
+                    builtA.Profile,
+                    catalogPath,
+                    coordinator: null);
+                Require(partialEnglish.Inspection.Status == InstallationStatus.RecoveryRequired
+                    && RuntimeCacheService.TryAuthenticateRecovery(cacheRoot, statePath, partialEnglish.Profile, out _),
+                    "Prepared compatible apply with only the EN snapshot could not authenticate from the exact live tuple.");
+                RuntimeCacheService.Recover(statePath, partialEnglish.Profile);
+                Require(PatchJournalStore.FindActive(statePath) == null && !File.Exists(stampSnapshot),
+                    "Prepared compatible apply recovery trusted or created its missing stamp snapshot.");
+
+                File.Delete(englishSnapshot);
+                File.WriteAllBytes(stampSnapshot, stampA);
+                PatchJournalStore.Save(statePath, Prepared("42424242424242424242424242424242"));
+                RuntimeUpdateResolution partialStamp = RuntimeUpdateResolver.Resolve(
+                    cacheRoot,
+                    statePath,
+                    builtA.Profile,
+                    catalogPath,
+                    coordinator: null);
+                Require(partialStamp.Inspection.Status == InstallationStatus.RecoveryRequired
+                    && RuntimeCacheService.TryAuthenticateRecovery(cacheRoot, statePath, partialStamp.Profile, out _),
+                    "Prepared compatible apply with only the stamp snapshot could not authenticate from the exact live tuple.");
+                RuntimeCacheService.Recover(statePath, partialStamp.Profile);
+
+                File.Delete(stampSnapshot);
+                PatchJournalStore.Save(statePath, Prepared("43434343434343434343434343434343"));
+                RuntimeUpdateResolution baseOnly = RuntimeUpdateResolver.Resolve(
+                    cacheRoot, statePath, builtA.Profile, catalogPath, coordinator: null);
+                Require(baseOnly.Inspection.Status == InstallationStatus.RecoveryRequired
+                    && RuntimeCacheService.TryAuthenticateRecovery(cacheRoot, statePath, baseOnly.Profile, out _),
+                    "Prepared compatible apply with only the immutable base could not authenticate from the exact live tuple.");
+                RuntimeCacheService.Recover(statePath, baseOnly.Profile);
+
+                File.WriteAllBytes(englishSnapshot, englishA);
+                File.WriteAllBytes(stampSnapshot, stampA);
+                PatchJournalStore.Save(statePath, Prepared("44444444444444444444444444444444"));
+                RuntimeUpdateResolution completeSnapshotsPrepared = RuntimeUpdateResolver.Resolve(
+                    cacheRoot, statePath, builtA.Profile, catalogPath, coordinator: null);
+                Require(completeSnapshotsPrepared.Inspection.Status == InstallationStatus.RecoveryRequired
+                    && RuntimeCacheService.TryAuthenticateRecovery(cacheRoot, statePath, completeSnapshotsPrepared.Profile, out _),
+                    "Complete compatible source snapshots before BackupVerified could not authenticate the still-Prepared transaction.");
+                RuntimeCacheService.Recover(statePath, completeSnapshotsPrepared.Profile);
+
+                foreach ((string Phase, bool Quarantine, bool DisplacedVerified, string Id) scenario in new[]
+                {
+                    ("PreCommitVerified", false, false, "45454545454545454545454545454545"),
+                    ("ReplacementCommitted", true, false, "46464646464646464646464646464646"),
+                    ("DisplacedVerified", true, true, "47474747474747474747474747474747")
+                })
+                {
+                    PatchJournal missingTargetJournal = Prepared(scenario.Id);
+                    missingTargetJournal.Phase = scenario.Phase;
+                    if (scenario.Quarantine)
+                        File.WriteAllBytes(missingTargetJournal.QuarantinePath, baseA);
+                    if (scenario.DisplacedVerified)
+                        missingTargetJournal.DisplacedSha256 = builtA.Profile.BaseSha256;
+                    PatchJournalStore.Save(statePath, missingTargetJournal);
+                    File.Delete(targetPath);
+                    RuntimeUpdateResolution missingTarget = RuntimeUpdateResolver.Resolve(
+                        cacheRoot, statePath, builtA.Profile, catalogPath, coordinator: null);
+                    Require(missingTarget.Inspection.Status == InstallationStatus.InconsistentState
+                        && missingTarget.InstalledInspection == null
+                        && !RuntimeUpdateAuthorization.CanRestoreOrRecover(missingTarget),
+                        $"A {scenario.Phase} journal with no exact live target was mislabeled as signed-data failure or recoverable.");
+                    PatchJournalStore.Delete(statePath, scenario.Id);
+                    if (File.Exists(missingTargetJournal.QuarantinePath))
+                        File.Delete(missingTargetJournal.QuarantinePath);
+                    File.WriteAllBytes(targetPath, baseA);
+                }
+
+                RuntimeCacheInspection originalA = RuntimeCacheService.Inspect(cacheRoot, builtA.Profile, statePath);
+                Require(originalA.Status == InstallationStatus.CompatibleOriginal,
+                    "Compatible revision A was not ready after idempotent partial-snapshot recovery.");
+                PatchApplyResult appliedA = RuntimeCacheService.Apply(originalA, catalogPath, statePath);
+                Require(File.Exists(englishSnapshot) && File.Exists(stampSnapshot)
+                    && Hashing.FixedEqualsHex(Hashing.Sha256File(englishSnapshot), builtA.Profile.EnglishSha256)
+                    && Hashing.FixedEqualsHex(Hashing.Sha256File(stampSnapshot), builtA.Profile.StampSha256)
+                    && RuntimeCacheService.Inspect(cacheRoot, builtA.Profile, statePath).Status == InstallationStatus.PatchedByThisTool,
+                    "Compatible apply did not persist and authenticate both exact immutable source snapshots.");
+
+                RuntimeUpdateResolution restartedA = RuntimeUpdateResolver.Resolve(
+                    cacheRoot,
+                    statePath,
+                    builtA.Profile,
+                    catalogPath,
+                    coordinator: null);
+                Require(restartedA.Profile.Mode == CompatibleRevisionProfileBuilder.Mode
+                    && restartedA.Inspection.Status == InstallationStatus.PatchedByThisTool
+                    && Hashing.FixedEqualsHex(restartedA.Profile.ExpectedOutputSha256!, appliedA.State.PatchedSha256),
+                    "Compatible installed state was not reconstructed exactly after restart.");
+
+                // Same bytes may legitimately have different composition counts (for example an applied
+                // translation equal to English versus an English fallback).  Rebind only state metadata,
+                // then prove restore no longer depends on the predecessor catalog.
+                RuntimeCacheService.Restore(statePath, builtA.Profile);
+                string catalogX = Path.Combine(root, "equivalent-x.jsonl");
+                string catalogY = Path.Combine(root, "equivalent-y.jsonl");
+                TranslationCatalog.WriteJsonLines(catalogX, new[] { Record(0, "Открыть"), Record(1, "Exit") });
+                TranslationCatalog.WriteJsonLines(catalogY, new[] { Record(0, "Открыть") });
+                byte[] catalogXBytes = File.ReadAllBytes(catalogX);
+                byte[] catalogYBytes = File.ReadAllBytes(catalogY);
+                CompatibleRevisionProfileBuild profileX = CompatibleRevisionProfileBuilder.Build(
+                    englishPath, targetPath, stampPath, family, catalogXBytes,
+                    Hashing.Sha256Bytes(catalogXBytes), "community-preview-all-drafts");
+                CompatibleRevisionProfileBuild profileY = CompatibleRevisionProfileBuilder.Build(
+                    englishPath, targetPath, stampPath, family, catalogYBytes,
+                    Hashing.Sha256Bytes(catalogYBytes), "community-preview-all-drafts");
+                Require(profileX.Profile.ExpectedAppliedTranslations == 2
+                    && profileY.Profile.ExpectedAppliedTranslations == 1
+                    && Hashing.FixedEqualsHex(profileX.Profile.ExpectedOutputSha256!, profileY.Profile.ExpectedOutputSha256!),
+                    "Equivalent-output smoke catalogs did not create the intended differing-count profiles.");
+                RuntimeCacheInspection xOriginal = RuntimeCacheService.Inspect(cacheRoot, profileX.Profile, statePath);
+                RuntimeCacheService.Apply(xOriginal, catalogX, statePath);
+                RuntimeCacheInspection xInstalled = RuntimeCacheService.Inspect(cacheRoot, profileX.Profile, statePath);
+                byte[] xStateBeforeRejectedRebind = File.ReadAllBytes(statePath);
+                File.WriteAllBytes(stampPath, Encoding.UTF8.GetBytes("0.61.synthetic.changed-during-rebind"));
+                ExpectCompatibleRejected(() => RuntimeCacheService.RebindEquivalentCatalogState(
+                    xInstalled, profileY.Profile, catalogY, statePath));
+                Require(File.ReadAllBytes(statePath).SequenceEqual(xStateBeforeRejectedRebind),
+                    "Static tuple change during equivalent metadata rebind changed patch state.");
+                File.WriteAllBytes(stampPath, stampA);
+                MutationTestHooks.BeforeEquivalentCatalogCommit = path =>
+                    File.WriteAllBytes(path, Encoding.UTF8.GetBytes("catalog changed under lock"));
+                try
+                {
+                    ExpectCompatibleRejected(() => RuntimeCacheService.RebindEquivalentCatalogState(
+                        xInstalled, profileY.Profile, catalogY, statePath));
+                }
+                finally
+                {
+                    MutationTestHooks.BeforeEquivalentCatalogCommit = null;
+                    File.WriteAllBytes(catalogY, catalogYBytes);
+                }
+                Require(File.ReadAllBytes(statePath).SequenceEqual(xStateBeforeRejectedRebind),
+                    "Catalog TOCTOU during equivalent metadata rebind changed patch state.");
+                PatchApplyResult rebound = RuntimeCacheService.RebindEquivalentCatalogState(
+                    xInstalled, profileY.Profile, catalogY, statePath);
+                File.Delete(catalogX);
+                Require(rebound.State.AppliedTranslations == 1
+                    && RuntimeCacheService.Inspect(cacheRoot, profileY.Profile, statePath).Status == InstallationStatus.PatchedByThisTool,
+                    "Equivalent-output catalog metadata was not rebound durably to the selected catalog/counts.");
+                RuntimeCacheService.Restore(statePath, profileY.Profile);
+                RuntimeCacheInspection originalAAgain = RuntimeCacheService.Inspect(cacheRoot, builtA.Profile, statePath);
+                appliedA = RuntimeCacheService.Apply(originalAAgain, catalogPath, statePath);
+
+                byte[] patchedA = File.ReadAllBytes(targetPath);
+                File.WriteAllBytes(targetPath, baseA);
+                RuntimeUpdateResolution repairedA = RuntimeUpdateResolver.Resolve(
+                    cacheRoot,
+                    statePath,
+                    builtA.Profile,
+                    catalogPath,
+                    coordinator: null);
+                Require(repairedA.Inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate
+                    && string.Equals(repairedA.Profile.Id, builtA.Profile.Id, StringComparison.Ordinal),
+                    "Launcher repair of only the official Ukrainian cache was not safely recognized for same-revision reapply.");
+                File.WriteAllBytes(targetPath, patchedA);
+
+                File.WriteAllBytes(englishPath, englishB);
+                File.WriteAllBytes(stampPath, stampB);
+                RuntimeUpdateResolution staleTarget = RuntimeUpdateResolver.Resolve(
+                    cacheRoot,
+                    statePath,
+                    builtA.Profile,
+                    catalogPath,
+                    coordinator: null);
+                Require(staleTarget.Inspection.Status != InstallationStatus.PatchSupersededByOfficialUpdate
+                    && staleTarget.Inspection.Status != InstallationStatus.CompatibleOriginal
+                    && Hashing.Sha256File(targetPath) == Hashing.Sha256Bytes(patchedA),
+                    "Changed EN/stamp with the old patched target was not kept fail-closed.");
+
+                File.WriteAllBytes(targetPath, baseB);
+                byte[] exactState = File.ReadAllBytes(statePath);
+                PatchState forged = PatchPlanner.TryLoadState(statePath)
+                    ?? throw new InvalidOperationException("Compatible A state disappeared before updater reconciliation.");
+                forged.TranslationsSha256 = new string('F', 64);
+                File.WriteAllText(statePath, JsonSerializer.Serialize(forged), new UTF8Encoding(false));
+                RuntimeUpdateResolution forgedResolution = RuntimeUpdateResolver.Resolve(
+                    cacheRoot,
+                    statePath,
+                    builtA.Profile,
+                    catalogPath,
+                    coordinator: null);
+                Require(forgedResolution.Inspection.Status != InstallationStatus.PatchSupersededByOfficialUpdate
+                    && Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), Hashing.Sha256Bytes(baseB)),
+                    "Forged old compatible state authorized official-update reconciliation or changed the target.");
+                File.WriteAllBytes(statePath, exactState);
+
+                byte[] exactEnglishSnapshot = File.ReadAllBytes(englishSnapshot);
+                File.WriteAllBytes(englishSnapshot, Encoding.UTF8.GetBytes("tampered snapshot"));
+                RuntimeUpdateResolution tamperedSnapshot = RuntimeUpdateResolver.Resolve(
+                    cacheRoot,
+                    statePath,
+                    builtA.Profile,
+                    catalogPath,
+                    coordinator: null);
+                Require(tamperedSnapshot.Inspection.Status != InstallationStatus.PatchSupersededByOfficialUpdate
+                    && Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), Hashing.Sha256Bytes(baseB)),
+                    "Tampered compatible source snapshot authorized official-update reconciliation.");
+                File.WriteAllBytes(englishSnapshot, exactEnglishSnapshot);
+
+                RuntimeUpdateResolution updatedB = RuntimeUpdateResolver.Resolve(
+                    cacheRoot,
+                    statePath,
+                    builtA.Profile,
+                    catalogPath,
+                    coordinator: null);
+                Require(updatedB.Profile.Mode == CompatibleRevisionProfileBuilder.Mode
+                    && updatedB.Inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate
+                    && updatedB.Profile.EntryCount == 3
+                    && updatedB.Profile.ExpectedAppliedTranslations == 2
+                    && updatedB.Profile.ExpectedEnglishFallbacks == 1,
+                    "Official future revision did not reconcile only the exact old state/snapshots and current source+hint coverage.");
+
+                foreach (string tamper in new[] { "patched", "catalog", "applied" })
+                {
+                    MutationTestHooks.BeforeSupersededStateArchive = path =>
+                    {
+                        PatchState changed = PatchPlanner.TryLoadState(path)
+                            ?? throw new InvalidOperationException("Synthetic predecessor state disappeared before archive tamper.");
+                        if (tamper == "patched") changed.PatchedSha256 = new string('A', 64);
+                        else if (tamper == "catalog") changed.TranslationsSha256 = new string('B', 64);
+                        else changed.AppliedTranslations--;
+                        File.WriteAllText(path, JsonSerializer.Serialize(changed), new UTF8Encoding(false));
+                    };
+                    try
+                    {
+                        ExpectCompatibleRejected(() => RuntimeCacheService.Apply(
+                            updatedB.Inspection,
+                            updatedB.CatalogPath,
+                            statePath));
+                    }
+                    finally
+                    {
+                        MutationTestHooks.BeforeSupersededStateArchive = null;
+                        File.WriteAllBytes(statePath, exactState);
+                    }
+
+                    string supersededHistory = Path.Combine(stateRoot, "history", "superseded");
+                    Require(Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), Hashing.Sha256Bytes(baseB))
+                        && PatchJournalStore.FindActive(statePath) == null
+                        && (!Directory.Exists(supersededHistory)
+                            || Directory.GetFiles(supersededHistory, "*.json").Length == 0),
+                        $"Under-lock {tamper} predecessor-state tamper changed target/history/journal before refusal.");
+                }
+
+                PatchApplyResult appliedB = RuntimeCacheService.Apply(updatedB.Inspection, updatedB.CatalogPath, statePath);
+                Require(Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), appliedB.State.PatchedSha256)
+                    && !string.Equals(appliedA.State.BuildId, appliedB.State.BuildId, StringComparison.Ordinal)
+                    && Directory.GetFiles(Path.Combine(stateRoot, "history", "superseded"), "*.json").Length == 1,
+                    "Compatible official-update apply did not preserve the old state and commit the new exact artifact.");
+                RuntimeCacheService.Restore(statePath, updatedB.Profile);
+                Require(!File.Exists(statePath)
+                    && Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), Hashing.Sha256Bytes(baseB)),
+                    "Compatible future revision did not restore its own immutable official backup.");
             }
             finally
             {
@@ -789,7 +1607,7 @@ namespace InvokersRu.SmokeTests
 
             using JsonDocument document = JsonDocument.Parse(standardOut.ToString());
             JsonElement response = document.RootElement;
-            Require(response.GetProperty("schema").GetInt32() == 2
+            Require(response.GetProperty("schema").GetInt32() == 3
                 && response.GetProperty("patcher_version").ValueKind == JsonValueKind.String
                 && !response.GetProperty("installation_writes_enabled").GetBoolean()
                 && response.GetProperty("status").ValueKind == JsonValueKind.String
@@ -802,7 +1620,13 @@ namespace InvokersRu.SmokeTests
                 && response.GetProperty("catalog").TryGetProperty("exact_match", out _)
                 && response.GetProperty("catalog").GetProperty("source").GetString() == "embedded"
                 && response.GetProperty("update").ValueKind == JsonValueKind.Null
+                && response.GetProperty("channel_authority").ValueKind == JsonValueKind.Null
+                && !response.GetProperty("translation_update_available").GetBoolean()
+                && response.GetProperty("translation_update_kind").GetString() == "none"
                 && response.GetProperty("update_problem").ValueKind == JsonValueKind.Null
+                && response.GetProperty("local_problem").ValueKind == JsonValueKind.Null
+                && !response.GetProperty("update_problem_blocks_apply").GetBoolean()
+                && !response.GetProperty("restore_recovery_authorized").GetBoolean()
                 && response.GetProperty("state").ValueKind is JsonValueKind.Null or JsonValueKind.Object
                 && response.GetProperty("journal").ValueKind is JsonValueKind.Null or JsonValueKind.Object
                 && response.GetProperty("process_conflicts").ValueKind == JsonValueKind.Array
@@ -813,7 +1637,8 @@ namespace InvokersRu.SmokeTests
                 "CLI cache-plan JSON lost a required top-level field or field type.");
 
             JsonElement profile = response.GetProperty("profile");
-            Require(profile.GetProperty("id").GetString() == "runtime-cache-win64-0.60.1247-prod68"
+            Require(profile.GetProperty("id").GetString() == "runtime-cache-win64-0.60.1247-prod71"
+                && profile.GetProperty("mode").GetString() == "exact"
                 && profile.GetProperty("game_version").GetString() == "0.60.1247"
                 && profile.GetProperty("translation_policy").GetString() == "community-preview-all-drafts"
                 && profile.GetProperty("entry_count").GetInt32() == 41_292
@@ -826,9 +1651,19 @@ namespace InvokersRu.SmokeTests
 
         internal static byte[] CreateLoc1(uint localeId, uint releaseRevision, uint localeRevision, string[] values)
         {
+            return CreateLoc1(localeId, releaseRevision, localeRevision, values, ContentVersion);
+        }
+
+        internal static byte[] CreateLoc1(
+            uint localeId,
+            uint releaseRevision,
+            uint localeRevision,
+            string[] values,
+            string contentVersion)
+        {
             const int headerSize = 160;
             byte[] guid = Encoding.UTF8.GetBytes(ContentGuid);
-            byte[] version = Encoding.UTF8.GetBytes(ContentVersion);
+            byte[] version = Encoding.UTF8.GetBytes(contentVersion);
             byte[][] encodedValues = new byte[values.Length][];
             int dataLength = 0;
             for (int index = 0; index < values.Length; index++)

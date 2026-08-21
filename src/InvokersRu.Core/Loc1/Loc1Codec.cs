@@ -11,13 +11,25 @@ namespace InvokersRu.Core.Loc1
     public static class Loc1Codec
     {
         private const int FixedHeaderMinimum = 0x52;
-        private const long MaximumExpandedBytes = 256L * 1024L * 1024L;
+        internal const uint MaximumEntryCount = 100_000;
+        internal const long MaximumExpandedBytes = 256L * 1024L * 1024L;
         private static readonly byte[] Magic = Encoding.ASCII.GetBytes("LOC1");
         private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
         public static Loc1Document ReadFile(string path)
         {
             return Parse(ReadContainer(path));
+        }
+
+        public static Loc1Document ReadRawFile(string path)
+        {
+            byte[] bytes = File.ReadAllBytes(path);
+            if (!HasMagic(bytes))
+            {
+                throw new Loc1FormatException("Compatible-revision mode requires an uncompressed raw LOC1 file.");
+            }
+
+            return Parse(bytes);
         }
 
         public static byte[] ReadContainer(string path)
@@ -77,7 +89,7 @@ namespace InvokersRu.Core.Loc1
                 throw new Loc1FormatException("LOC1 header/index/data boundaries are inconsistent.");
             }
 
-            if (declaredEntryCount > int.MaxValue)
+            if (declaredEntryCount > MaximumEntryCount)
             {
                 throw new Loc1FormatException("LOC1 entry count exceeds supported bounds.");
             }
@@ -158,22 +170,39 @@ namespace InvokersRu.Core.Loc1
             return new Loc1Document(header, formatVersion, localeId, releaseRevision, localeRevision, dataOffsetRaw, dataLengthRaw, contentGuid, contentVersion, entries);
         }
 
-        public static byte[] BuildRaw(Loc1Document document)
+        public static byte[] BuildRaw(Loc1Document document) => BuildRawBounded(document, int.MaxValue);
+
+        internal static byte[] BuildRawBounded(Loc1Document document, long maximumOutputBytes)
         {
+            ArgumentNullException.ThrowIfNull(document);
+            if (maximumOutputBytes < 1 || maximumOutputBytes > int.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(maximumOutputBytes));
             if ((ulong)document.Header.Length + ((ulong)document.Entries.Count * 16UL) != document.DataOffset)
             {
                 throw new Loc1FormatException("Entry count would change the fixed LOC1 data offset.");
             }
 
             var assigned = new Dictionary<int, (uint Offset, uint Length)>();
-            using var data = new MemoryStream();
-
             IEnumerable<Loc1Entry> originalLayout = document.Entries
                 .Where(entry => !entry.WasNull)
                 .OrderBy(entry => entry.OriginalOffset);
+            long dataLength = 0;
             foreach (Loc1Entry entry in originalLayout)
             {
-                AssignValue(entry, data, assigned);
+                if (entry.Value == null) continue;
+                int valueLength;
+                try
+                {
+                    valueLength = StrictUtf8.GetByteCount(entry.Value);
+                }
+                catch (EncoderFallbackException exception)
+                {
+                    throw new Loc1FormatException($"Value {entry.Id} is not valid UTF-8 text: {exception.Message}");
+                }
+                if (dataLength > uint.MaxValue || dataLength + valueLength > uint.MaxValue)
+                    throw new Loc1FormatException("Generated LOC1 value offset exceeds 32-bit bounds.");
+                assigned.Add(entry.Index, (checked((uint)dataLength), checked((uint)valueLength)));
+                dataLength = checked(dataLength + valueLength);
             }
 
             Loc1Entry? newlyFilledSentinel = document.Entries.FirstOrDefault(entry => entry.WasNull && entry.Value != null);
@@ -182,14 +211,13 @@ namespace InvokersRu.Core.Loc1
                 throw new Loc1FormatException($"Conservative MVP writer refuses to fill empty sentinel {newlyFilledSentinel.Id}.");
             }
 
-            if (data.Length > uint.MaxValue)
-            {
-                throw new Loc1FormatException("Generated LOC1 data section exceeds 4 GiB.");
-            }
+            long totalLengthLong = checked((long)document.DataOffset + dataLength);
+            if (totalLengthLong > maximumOutputBytes)
+                throw new Loc1FormatException($"Generated LOC1 output exceeds the supported limit of {maximumOutputBytes} bytes.");
 
             byte[] header = (byte[])document.Header.Clone();
-            WriteUInt64(header, 0x30, checked((ulong)data.Length));
-            int totalLength = checked((int)document.DataOffset + (int)data.Length);
+            WriteUInt64(header, 0x30, checked((ulong)dataLength));
+            int totalLength = checked((int)totalLengthLong);
             byte[] output = new byte[totalLength];
             Buffer.BlockCopy(header, 0, output, 0, header.Length);
 
@@ -210,8 +238,25 @@ namespace InvokersRu.Core.Loc1
                 }
             }
 
-            byte[] dataBytes = data.ToArray();
-            Buffer.BlockCopy(dataBytes, 0, output, checked((int)document.DataOffset), dataBytes.Length);
+            foreach (Loc1Entry entry in originalLayout)
+            {
+                if (entry.Value == null) continue;
+                (uint offset, uint length) = assigned[entry.Index];
+                Span<byte> destination = output.AsSpan(
+                    checked((int)document.DataOffset + (int)offset),
+                    checked((int)length));
+                int written;
+                try
+                {
+                    written = StrictUtf8.GetBytes(entry.Value.AsSpan(), destination);
+                }
+                catch (EncoderFallbackException exception)
+                {
+                    throw new Loc1FormatException($"Value {entry.Id} is not valid UTF-8 text: {exception.Message}");
+                }
+                if (written != destination.Length)
+                    throw new Loc1FormatException($"Value {entry.Id} changed length while building LOC1 output.");
+            }
             return output;
         }
 
@@ -229,25 +274,6 @@ namespace InvokersRu.Core.Loc1
         public static void WriteCompressed(string path, byte[] raw)
         {
             File.WriteAllBytes(path, Compress(raw));
-        }
-
-        private static void AssignValue(Loc1Entry entry, MemoryStream data, Dictionary<int, (uint Offset, uint Length)> assigned)
-        {
-            if (entry.Value == null)
-            {
-                return;
-            }
-
-            byte[] valueBytes = StrictUtf8.GetBytes(entry.Value);
-            if (data.Position > uint.MaxValue || valueBytes.LongLength > uint.MaxValue || data.Position + valueBytes.LongLength > uint.MaxValue)
-            {
-                throw new Loc1FormatException("Generated LOC1 value offset exceeds 32-bit bounds.");
-            }
-
-            uint offset = checked((uint)data.Position);
-            uint length = checked((uint)valueBytes.Length);
-            data.Write(valueBytes, 0, valueBytes.Length);
-            assigned.Add(entry.Index, (offset, length));
         }
 
         private static void ValidateOriginalLayout(IReadOnlyList<Loc1Entry> entries, ulong dataLength)

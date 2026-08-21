@@ -121,6 +121,14 @@ namespace InvokersRu.Core.Translations
 
                 int errorsBefore = report.ErrorCount;
                 ValidatePair(record.Id, source, record.Translation, report.Issues);
+                if (profile == ValidationProfile.Release && record.IssueCodes.Length != 0)
+                {
+                    report.Issues.Add(new TranslationIssue(
+                        record.Id,
+                        "unresolved-issue-codes",
+                        ValidationSeverity.Error,
+                        "Approved release text still carries unresolved issue codes."));
+                }
                 string[] expectedSourceRisks = ClassifyRisks(source).OrderBy(value => value, StringComparer.Ordinal).ToArray();
                 string[] recordedSourceRisks = record.RiskFlags
                     .Where(value => !string.Equals(value, "context_required", StringComparison.Ordinal))
@@ -223,6 +231,78 @@ namespace InvokersRu.Core.Translations
             return string.Equals(risk, "legal_or_privacy", StringComparison.Ordinal)
                 || string.Equals(risk, "account_or_payment", StringComparison.Ordinal)
                 || string.Equals(risk, "legacy_control", StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Per-record release gate used by compatible-revision projection. Aggregate release validation
+        /// may report harmless coverage/unknown/stale rows that deliberately fall back to English, so the
+        /// writer needs this exact local predicate for the one fresh source+hint row it is considering.
+        /// </summary>
+        public static bool IsReleaseReady(TranslationRecord record, string source, out string reason)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+            ArgumentNullException.ThrowIfNull(source);
+            if (!record.Status.Equals("approved", StringComparison.OrdinalIgnoreCase))
+            {
+                reason = "status-not-approved";
+                return false;
+            }
+
+            if (record.IssueCodes.Length != 0)
+            {
+                reason = "unresolved-issue-codes";
+                return false;
+            }
+
+            var pairIssues = new List<TranslationIssue>();
+            ValidatePair(record.Id, source, record.Translation, pairIssues);
+            if (pairIssues.Any(issue => issue.Severity == ValidationSeverity.Error))
+            {
+                reason = "pair-validation";
+                return false;
+            }
+
+            string[] expectedRisks = ClassifyRisks(source).OrderBy(value => value, StringComparer.Ordinal).ToArray();
+            string[] recordedRisks = record.RiskFlags
+                .Where(value => !string.Equals(value, "context_required", StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(value => value, StringComparer.Ordinal)
+                .ToArray();
+            if (!expectedRisks.SequenceEqual(recordedRisks, StringComparer.Ordinal))
+            {
+                reason = "risk-metadata";
+                return false;
+            }
+
+            string[] reviewers = record.ReviewerIds
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Select(value => value.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (record.NeedsReview
+                || reviewers.Length != record.ReviewerIds.Length
+                || reviewers.Length == 0
+                || record.ReviewedAt == null
+                || string.IsNullOrWhiteSpace(record.ReviewRevision))
+            {
+                reason = "human-review-metadata";
+                return false;
+            }
+
+            if (record.RiskFlags.Contains("context_required", StringComparer.Ordinal) && !record.ScreenshotQa)
+            {
+                reason = "screenshot-qa";
+                return false;
+            }
+
+            if (expectedRisks.Any(IsSensitiveRisk) && (!record.LegalApproved || reviewers.Length < 2))
+            {
+                reason = "sensitive-review";
+                return false;
+            }
+
+            reason = string.Empty;
+            return true;
         }
 
         public static void ValidatePair(string id, string source, string translation, ICollection<TranslationIssue> issues)

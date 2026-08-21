@@ -7,11 +7,12 @@
     <LangVersion>14.0</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AssemblyName>InvokersRu.Cli</AssemblyName>
-    <Version>3.1.0-preview</Version>
+    <Version>3.1.1-preview</Version>
     <Company>Invokers Russian Community</Company>
     <Product>InvokersRu localization patcher</Product>
     <Description>Version-aware community localization tooling for Invokers: Titan Legacy.</Description>
     <EnableSupervisedInstallWrites Condition="'$(EnableSupervisedInstallWrites)' == ''">false</EnableSupervisedInstallWrites>
+    <EnableOfflineCommunityRuntimeCacheWrites Condition="'$(EnableOfflineCommunityRuntimeCacheWrites)' == ''">false</EnableOfflineCommunityRuntimeCacheWrites>
   </PropertyGroup>
   <PropertyGroup Condition="'$(EnableSupervisedInstallWrites)' == 'true'">
     <DefineConstants>$(DefineConstants);INVOKERSRU_SUPERVISED_WRITES</DefineConstants>
@@ -32,6 +33,10 @@
     <Error Condition="'$(TrustedCompatibilityPath)' == ''" Text="A supervised write build requires /p:TrustedCompatibilityPath=ABSOLUTE_PATH." />
     <Error Condition="'$(TrustedCompatibilityPath)' != '' and !$([System.IO.Path]::IsPathFullyQualified('$(TrustedCompatibilityPath)'))" Text="TrustedCompatibilityPath must be an absolute path: $(TrustedCompatibilityPath)" />
     <Error Condition="'$(TrustedCompatibilityPath)' != '' and !Exists('$(TrustedCompatibilityPath)')" Text="TrustedCompatibilityPath does not exist: $(TrustedCompatibilityPath)" />
+    <Error Condition="'$(TrustedRuntimeCacheCompatibilityPath)' != '' and '$(SignedUpdateChannelConfigPath)' == '' and '$(EnableOfflineCommunityRuntimeCacheWrites)' != 'true'" Text="A runtime-cache write build requires /p:SignedUpdateChannelConfigPath=ABSOLUTE_PATH or the explicit offline community build mode." />
+    <Error Condition="'$(EnableOfflineCommunityRuntimeCacheWrites)' == 'true' and ('$(TrustedRuntimeCacheCompatibilityPath)' == '' or '$(SignedUpdateChannelConfigPath)' != '')" Text="Offline community runtime-cache writes require an embedded profile and no signed-update channel." />
+    <Error Condition="'$(TrustedRuntimeCacheCompatibilityPath)' != '' and '$(SignedUpdateChannelConfigPath)' != '' and !$([System.IO.Path]::IsPathFullyQualified('$(SignedUpdateChannelConfigPath)'))" Text="SignedUpdateChannelConfigPath must be an absolute path: $(SignedUpdateChannelConfigPath)" />
+    <Error Condition="'$(TrustedRuntimeCacheCompatibilityPath)' != '' and '$(SignedUpdateChannelConfigPath)' != '' and !Exists('$(SignedUpdateChannelConfigPath)')" Text="SignedUpdateChannelConfigPath does not exist: $(SignedUpdateChannelConfigPath)" />
   </Target>
   <Target Name="ValidateOptionalRuntimeCacheWriteProfile" BeforeTargets="CoreCompile" Condition="'$(EnableSupervisedInstallWrites)' == 'true' and '$(TrustedRuntimeCacheCompatibilityPath)' != ''">
     <Error Condition="!$([System.IO.Path]::IsPathFullyQualified('$(TrustedRuntimeCacheCompatibilityPath)'))" Text="TrustedRuntimeCacheCompatibilityPath must be an absolute path: $(TrustedRuntimeCacheCompatibilityPath)" />

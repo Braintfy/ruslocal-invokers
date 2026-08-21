@@ -31,12 +31,12 @@ payload.
 
 The publishing script accepts only repository inputs and a new output below
 `work`. It rejects reparse points and all known game, launcher and patch-state
-directories. The catalog must match the SHA-256 pin in the certified profile,
-and the published CLI must prove that it embeds that exact profile before the
-payload manifest is created.
+directories. The catalog must match the SHA-256 pin in the certified bootstrap
+profile, and the published CLI must prove that it embeds that profile plus the
+bounded `compatible-revision` trust rules before the payload manifest is created.
 
 The CLI also embeds one reviewed signed-update channel URL, key ID and P-256
-public key. Translation catalogs and exact compatibility profiles downloaded at
+public key. Translation catalogs and optional exact compatibility profiles downloaded at
 runtime are accepted only after the detached signature, monotonic sequence,
 size and SHA-256 pins have been verified. The private data-signing key is never
 part of the repository or player payload. This data signature is independent of
@@ -95,8 +95,9 @@ behavior merely to suppress a warning.
 4. For a future signed release, first verify the signed player payload with
    `-ExpectedSignerThumbprint`, then compile with the configured Inno Authenticode
    hook and confirm the final signature plus RFC 3161 timestamp.
-5. Test install, version detection, blocked unknown version, apply, restore and
-   uninstall in a disposable Windows user profile.
+5. Test install, exact version detection, a compatible-revision update with
+   English fallback, refusal of an incompatible LOC1 family, apply, restore,
+   recovery and uninstall in a disposable Windows user profile.
 6. Upload the installer and its `.sha256` sidecar to the same GitHub Release.
 7. Have at least one second community maintainer verify the downloaded hash and,
    when Authenticode is used, the publisher before posting the link in Discord.

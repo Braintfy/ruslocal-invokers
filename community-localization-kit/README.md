@@ -37,7 +37,7 @@ Use a directory below repository `work/`; it is already ignored. The platform pa
 - Python 3.10 or newer for `scripts/pipeline.py`.
 - PowerShell 5.1 or newer for the Windows package builder.
 - On macOS: Apple Silicon, Xcode command-line tools, and `hdiutil` for the local DMG builder.
-- Optional on Windows: Inno Setup 6 (`ISCC.exe`) for a Setup EXE. Without it, the builder still creates a complete ZIP.
+- Optional on Windows: Inno Setup 6.3 or newer (`ISCC.exe`) for a Setup EXE. Without it, the builder still creates a complete ZIP.
 
 Build the read-only CLI first:
 

@@ -51,6 +51,9 @@ namespace InvokersRu.SmokeTests
             VerifiedSignedUpdateManifest manifest = VerifySnapshot(CreateManifest(sourceProfile));
             VerifiedSignedUpdateCompatibilityProfile verifiedProfile = manifest.Compatibility[0];
             RuntimeCacheCompatibility adapted = SignedUpdateRuntimeProfileAdapter.AdaptExact(manifest, verifiedProfile, target);
+            Require(
+                string.Equals(adapted.OrderedKeysetSha256, digest, StringComparison.Ordinal),
+                "The exact adapter did not preserve the authenticated ordered key-set pin.");
             Require(adapted.Certified
                 && adapted.Readiness == "ready"
                 && adapted.BlockedReason == null

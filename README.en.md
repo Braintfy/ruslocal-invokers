@@ -55,7 +55,15 @@ Everything is on the [releases page](https://github.com/Braintfy/ruslocal-invoke
 | Android phone, no root | `Rusifikator-Invokers-ANDROID.zip` — a computer helper; the phone app is inside |
 | Android phone with root | `Rusifikator-Invokers-Android-….apk` — the app alone |
 
-The Mac version can update itself. The Android computer helper fetches the current translation from the project. Windows 3.1 ships an offline bootstrap translation and can fetch newer **signed translation data and exact game-version profiles** from the fixed GitHub channel without replacing the EXE. It detects the game version and blocks installation when the profile is missing, incompatible, expired, or requires a newer patcher.
+The Mac version can update itself. The Android computer helper fetches the current translation from the project. Windows 3.1.1 ships an offline bootstrap translation and can fetch newer signed translation data and optional exact game profiles from the fixed GitHub channel without replacing the EXE. When an exact profile is unavailable, it can build a byte-pinned local compatible-revision profile for a supported LOC1 family. Only rows whose English source and Ukrainian hint both match exactly are translated; new or changed rows remain English.
+
+The 3.1.1 Windows installer accepts x64 Windows 10 build 14393 (version 1607,
+including Enterprise 2016 LTSC) and newer, plus Windows 11. It is self-contained,
+so players do not install .NET separately. Microsoft's .NET 10 support on
+Windows 10 is limited to maintained Enterprise/LTSC branches; running on an
+out-of-support edition does not extend that edition's lifecycle. The preview is
+not Authenticode-signed yet; Windows can show SmartScreen or `Unknown publisher`,
+so compare its SHA-256 with the GitHub Release.
 
 The Mac game is the iPhone/iPad application. The App Store installs those applications only on Apple Silicon Macs (M1 or newer), so the game cannot be installed on an Intel Mac. The localizer itself is universal: on Intel it explains this limitation, and it can still help install the localization on a connected Android phone.
 
@@ -104,7 +112,7 @@ See [docs/android-client.md](docs/android-client.md) for the technical rationale
 
 ## Windows PC installation
 
-This path is for a game installed on the PC itself. The patcher finds the standard localization cache, detects the exact client version, and permits installation only when the certified profile and all SHA-256 values match.
+This path is for a game installed on the PC itself. The patcher finds the standard localization cache, detects the observed client version and selects either a published exact profile or a locally pinned compatible-revision plan for a supported LOC1 family.
 
 > **Before localization:** select **Ukrainian** in the game, wait for its text to download, then fully quit both the game and launcher, including the launcher's system-tray icon.
 
@@ -113,7 +121,7 @@ This path is for a game installed on the PC itself. The patcher finds the standa
 3. Fully close the game and launcher, including the launcher icon in the system tray.
 4. Start **InvokersRu** from the Start menu, select **Check**, then **Install localization**.
 
-The patcher shows the detected/supported game versions, translated and English-fallback counts, and backup state. An unknown version, running game/launcher, mismatched catalog, stale patcher, or interrupted transaction blocks all writes. There is no force mode.
+The patcher shows the detected version, selected mode, translated and English-fallback counts, catalog provenance, and backup state. On a mismatch it names the component and its current and expected values — for example EN/UK content and revision — and distinguishes stale translation data from a structural boundary or inconsistent local state. A version number alone is not a blocker. Writes are blocked by a running game/launcher, untrusted or damaged data, an interrupted transaction, or an incompatible cache path, LOC1 schema, locale slot, content family, or key layout. There is no force or fuzzy-matching mode.
 
 The exact original Ukrainian file is stored below `%LOCALAPPDATA%\InvokersRussian\runtime-cache`. Restore original accepts only the verified backup associated with the current recorded state.
 
@@ -133,17 +141,32 @@ Selecting any language makes the client download that language file again and re
 
 ## Updates, and updating the game
 
-**Windows 3.1** checks one pinned GitHub data-channel URL. Translation catalogs and exact profiles for newer game builds are authenticated by a separate project ECDSA P-256 key; the patcher verifies the signature, the monotonic release sequence, expiry, size limits, download origin and SHA-256 of every artifact before use, so a compatible catalog or profile update needs no new EXE. Without a network it falls back to its embedded bootstrap or authenticated last-known-good data under documented expiry rules, and never treats an unsigned file or arbitrary URL as an update.
+### Windows 3.1.1 signed data channel
 
-If you still run Windows 3.0, replace it once with 3.1: 3.0 does not implement the data-channel protocol. The patcher reports its own staleness separately and points at [Releases](https://github.com/Braintfy/ruslocal-invokers/releases/latest). A new installer is also required when code must change — a different LOC1 schema, locale slot or cache path cannot be expressed by signed data alone.
+The Windows application checks one pinned GitHub data-channel URL. Translation catalogs and optional exact profiles are authenticated by a separate project ECDSA P-256 key. The patcher verifies the signature, monotonically increasing release sequence, expiry, size limits, download origin, and SHA-256 of every artifact before using it. It prefers an exact profile; otherwise a supported raw LOC1 schema-4 family can use a locally pinned compatible-revision plan with exact per-row EN+UK matching. A normal compatible data update therefore does not require a new EXE.
 
-The data signature is not Authenticode. An unsigned Windows EXE can still show `Unknown publisher` or a SmartScreen reputation warning until a publisher certificate is added.
+If you installed the old Windows 3.0 patcher or the already published 3.1.0
+preview, replace it with 3.1.1 once. Version 3.0 does not implement the signed
+data-channel protocol; 3.1.0 lacks the Windows 10 1607 fix and the new compatible
+revision mode. After that migration, normal compatible translation updates do
+not require another EXE. Offline, the authenticated embedded bootstrap can serve
+an exact or structurally compatible revision; last-known-good data remains limited
+by expiry and installed-state rules. The data signature is separate from
+Authenticode, so an unsigned EXE can still show SmartScreen or `Unknown publisher`.
 
 **macOS** fetches a newer translation and updateable driver by itself, accepting a download only when it matches the published checksum. Reinstalling the app and granting disk access again is normally unnecessary because that driver lives outside the bundle. A new DMG is needed only when the app says its fixed launcher changed; then Full Disk Access must be granted to the new build — remove the old row with `−`, press `+`, and add the app again.
 
-Disable self-update with `touch ~/Library/Application\ Support/InvokersRu/no-self-update`
+Disable self-update with:
 
-**After the game itself updates**, the official language file usually comes back. Select Ukrainian again, wait for the download, fully close the game, and install the translation once more. On Windows, pressing Check is enough: if an exact signed profile has been published the patcher fetches the data and offers Update localization, and if not, writes stay blocked until it is — without reinstalling the patcher.
+```sh
+touch ~/Library/Application\ Support/InvokersRu/no-self-update
+```
+
+## After a game update
+
+A game update usually restores the official language file. On Windows, select Ukrainian again, wait for the download, fully quit the game and launcher, and choose Check. The patcher prefers a published signed exact profile. If none exists but EN, UK, and the version stamp form a supported raw LOC1 schema-4 family with the expected locale slots and identical ordered keys, it builds a locally pinned compatible-revision plan and offers Update localization. Only exact `source_sha256` + `hint_sha256` matches become Russian; new, changed, or missing rows remain English and null/service entries keep their base value. A new EXE is needed only when the path, schema, locale slot, content GUID family, layout, or trust boundary changes.
+
+On macOS and Android, reinstall the localization after a compatible game update. If the update changed source strings, some text may remain English until the overlay is adapted.
 
 ## Restore the original
 
@@ -174,7 +197,7 @@ The macOS log is at `~/Library/Application Support/InvokersRu/patcher.log`.
 | “Could not create backup” on Mac | Disk access is missing. Grant it in settings; if the switch is already enabled, remove the row with `−` and add the app again. |
 | “Ukrainian text has not been downloaded” | Ukrainian was not selected or the file has not finished downloading. |
 | Localization disappeared | The language selector was opened or the game updated. Install the localization again. |
-| “Could not build localization for this game version” | The game updated and no exact adapted profile exists yet. |
+| “Could not build localization for this game version” | The tuple is outside the supported LOC1 family, no exact source+hint row remains usable, the selected catalog is unavailable, or the patcher itself is too old. Update Ukrainian data, fully close the game and launcher, then choose Check again. |
 | Android phone is not listed | Debugging is disabled, the phone authorization was not accepted, Samsung Auto Blocker is enabled, or a USB driver is missing. Try Wi-Fi. |
 | “Text file was already replaced by another tool” on Android | A different method changed the file and this tool has no matching original. Use option 3 so the game downloads an official copy. |
 | “Phone did not respond within five minutes” | The phone screen was locked. Unlock it and retry. |

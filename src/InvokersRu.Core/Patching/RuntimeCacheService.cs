@@ -1,5 +1,6 @@
 using InvokersRu.Core.Loc1;
 using InvokersRu.Core.Translations;
+using InvokersRu.Core.Updates;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -13,6 +14,8 @@ namespace InvokersRu.Core.Patching
         private const string EnglishFileName = "dl_en_US.bin";
         private const string TargetFileName = "dl_uk_UA.bin";
         private const string StampFileName = "dl_uk_UA.bin.ver";
+        private const string CompatibleEnglishSnapshotFileName = "source.dl_en_US.bin";
+        private const string CompatibleStampSnapshotFileName = "source.dl_uk_UA.bin.ver";
         private static readonly HashSet<string> LegalJournalPhases = new HashSet<string>(StringComparer.Ordinal)
         {
             "Prepared", "BackupVerified", "StagedVerified", "PreCommitVerified",
@@ -79,10 +82,22 @@ namespace InvokersRu.Core.Patching
 
         public static RuntimeCacheCompatibility DescribeTuple(string englishPath, string basePath, string stampPath, string? id)
         {
-            Loc1Document english = Loc1Codec.ReadFile(englishPath);
-            Loc1Document baseLocale = Loc1Codec.ReadFile(basePath);
+            return DescribeTuple(englishPath, basePath, stampPath, id, out _);
+        }
+
+        internal static RuntimeCacheCompatibility DescribeTuple(
+            string englishPath,
+            string basePath,
+            string stampPath,
+            string? id,
+            out Loc1Document baseLocale)
+        {
+            byte[] englishBytes = BoundedArtifactReader.ReadRuntimeLoc1(englishPath, "runtime-cache English LOC1");
+            byte[] baseBytes = BoundedArtifactReader.ReadRuntimeLoc1(basePath, "runtime-cache Ukrainian LOC1");
+            byte[] stampBytes = BoundedArtifactReader.ReadRuntimeStamp(stampPath, "runtime-cache version stamp");
+            Loc1Document english = Loc1Codec.Parse(englishBytes);
+            baseLocale = Loc1Codec.Parse(baseBytes);
             Loc1Compatibility.RequireComposableCorpus(english, baseLocale, allowPerLocaleContentVersion: true);
-            byte[] stampBytes = File.ReadAllBytes(stampPath);
             string stampValue = new UTF8Encoding(false, true).GetString(stampBytes);
             // The stamp is the game's own version marker and becomes this profile's identity, so a corrupted
             // or padded file must fail here rather than produce a profile that describes nothing real.
@@ -97,8 +112,8 @@ namespace InvokersRu.Core.Patching
                 ContentGuid = english.ContentGuid,
                 EnglishContentVersion = english.ContentVersion,
                 BaseContentVersion = baseLocale.ContentVersion,
-                EnglishSha256 = Hashing.Sha256File(englishPath),
-                BaseSha256 = Hashing.Sha256File(basePath),
+                EnglishSha256 = Hashing.Sha256Bytes(englishBytes),
+                BaseSha256 = Hashing.Sha256Bytes(baseBytes),
                 StampSha256 = Hashing.Sha256Bytes(stampBytes),
                 StampValue = stampValue,
                 EnglishLocaleId = english.LocaleId,
@@ -125,7 +140,17 @@ namespace InvokersRu.Core.Patching
 
         public static RuntimeCacheInspection Inspect(string cacheRoot, RuntimeCacheCompatibility profile, string statePath)
         {
+            return Inspect(cacheRoot, profile, statePath, authenticatedOfficialUpdatePredecessor: null);
+        }
+
+        internal static RuntimeCacheInspection Inspect(
+            string cacheRoot,
+            RuntimeCacheCompatibility profile,
+            string statePath,
+            RuntimeCacheCompatibility? authenticatedOfficialUpdatePredecessor)
+        {
             profile.Validate();
+            authenticatedOfficialUpdatePredecessor?.Validate();
             string root = Path.GetFullPath(cacheRoot);
             (string english, string target, string stamp) = ResolveFixedPaths(root);
             bool stateFileExists = File.Exists(statePath);
@@ -138,6 +163,7 @@ namespace InvokersRu.Core.Patching
                 TargetPath = target,
                 StampPath = stamp,
                 Profile = profile,
+                OfficialUpdatePredecessor = authenticatedOfficialUpdatePredecessor,
                 State = state,
                 Journal = journal
             };
@@ -162,21 +188,38 @@ namespace InvokersRu.Core.Patching
                 return result;
             }
 
-            result.EnglishSha256 = Hashing.Sha256File(english);
-            result.BaseSha256 = Hashing.Sha256File(target);
-            result.StampSha256 = Hashing.Sha256File(stamp);
-            result.StampValue = ReadObservedStampValue(stamp);
-            bool staticPinsMatch = Hashing.FixedEqualsHex(result.EnglishSha256, profile.EnglishSha256)
-                && StampMatches(stamp, profile);
+            bool staticPinsMatch = false;
             try
             {
-                Loc1Document englishDocument = Loc1Codec.ReadFile(english);
-                Loc1Document baseDocument = Loc1Codec.ReadFile(target);
+                byte[] englishBytes = BoundedArtifactReader.ReadRuntimeLoc1(english, "runtime-cache observed English LOC1");
+                byte[] baseBytes = BoundedArtifactReader.ReadRuntimeLoc1(target, "runtime-cache observed Ukrainian LOC1");
+                byte[] stampBytes = BoundedArtifactReader.ReadRuntimeStamp(stamp, "runtime-cache observed version stamp");
+                result.EnglishSha256 = Hashing.Sha256Bytes(englishBytes);
+                result.BaseSha256 = Hashing.Sha256Bytes(baseBytes);
+                result.StampSha256 = Hashing.Sha256Bytes(stampBytes);
+                result.StampValue = BoundedArtifactReader.DecodeObservedStamp(stampBytes);
+                staticPinsMatch = Hashing.FixedEqualsHex(result.EnglishSha256, profile.EnglishSha256)
+                    && StampMatches(stampBytes, profile);
+                Loc1Document englishDocument = Loc1Codec.Parse(englishBytes);
+                Loc1Document baseDocument = Loc1Codec.Parse(baseBytes);
                 result.EnglishContentVersion = englishDocument.ContentVersion;
                 result.BaseContentVersion = baseDocument.ContentVersion;
+                result.EnglishFormatVersion = englishDocument.FormatVersion;
+                result.BaseFormatVersion = baseDocument.FormatVersion;
+                result.EnglishContentGuid = englishDocument.ContentGuid;
+                result.BaseContentGuid = baseDocument.ContentGuid;
+                result.EnglishLocaleId = englishDocument.LocaleId;
+                result.EnglishLocaleRevision = englishDocument.LocaleRevision;
+                result.EnglishReleaseRevision = englishDocument.ReleaseRevision;
+                result.BaseLocaleId = baseDocument.LocaleId;
+                result.BaseLocaleRevision = baseDocument.LocaleRevision;
+                result.BaseReleaseRevision = baseDocument.ReleaseRevision;
+                result.EntryCount = baseDocument.Entries.Count;
+                result.OrderedKeysetSha256 = Loc1Compatibility.ComputeOrderedKeysetSha256(baseDocument);
                 VerifyDocuments(englishDocument, baseDocument, profile);
             }
-            catch (Exception exception) when (exception is IOException || exception is InvalidDataException || exception is Loc1FormatException || exception is InvalidOperationException)
+            catch (Exception exception) when (exception is IOException || exception is UnauthorizedAccessException
+                || exception is InvalidDataException || exception is Loc1FormatException || exception is InvalidOperationException)
             {
                 result.Status = state == null ? InstallationStatus.UnknownBuild : InstallationStatus.InconsistentState;
                 result.Message = $"Runtime-cache LOC1 identity is not trusted: {exception.Message}";
@@ -185,15 +228,27 @@ namespace InvokersRu.Core.Patching
 
             if (staticPinsMatch && Hashing.FixedEqualsHex(result.BaseSha256, profile.BaseSha256))
             {
+                RuntimeCacheCompatibility? effectivePredecessor = authenticatedOfficialUpdatePredecessor
+                    ?? (profile.Mode == "exact" ? profile : null);
+                string supersededProblem = "no exact authenticated predecessor descriptor was reconstructed";
                 if (state == null)
                 {
                     result.Status = InstallationStatus.CompatibleOriginal;
                     result.Message = $"Exact official runtime cache {profile.Id}.";
                 }
-                else if (TryValidateSupersededState(root, target, statePath, state, out string supersededProblem))
+                else if (effectivePredecessor != null
+                    && TryValidateOfficialUpdatePredecessor(
+                        root,
+                        target,
+                        statePath,
+                        state,
+                        profile,
+                        effectivePredecessor,
+                        out supersededProblem))
                 {
+                    result.OfficialUpdatePredecessor = effectivePredecessor;
                     result.Status = InstallationStatus.PatchSupersededByOfficialUpdate;
-                    result.Message = $"The game update replaced the previous patch with exact official cache {profile.Id}; the previous backup will be preserved.";
+                    result.Message = $"The game update replaced the previous authenticated patch with exact official cache {profile.Id}; its immutable backup will be preserved.";
                 }
                 else
                 {
@@ -267,7 +322,13 @@ namespace InvokersRu.Core.Patching
             PatchState? supersededCatalogState = null;
             if (supersededByOfficialUpdate)
             {
-                ArchiveSupersededStateUnderLock(cacheRoot, targetPath, statePath, profile);
+                MutationTestHooks.InvokeBeforeSupersededStateArchive(statePath);
+                ArchiveSupersededStateUnderLock(
+                    cacheRoot,
+                    targetPath,
+                    statePath,
+                    profile,
+                    inspection.OfficialUpdatePredecessor);
             }
             else if (supersededByCatalogUpdate)
             {
@@ -286,34 +347,40 @@ namespace InvokersRu.Core.Patching
             Loc1Document baseLocale;
             if (supersededCatalogState == null)
             {
-                VerifyExactTuple(cacheRoot, profile);
-                english = Loc1Codec.ReadFile(englishPath);
-                baseLocale = Loc1Codec.ReadFile(targetPath);
+                (english, baseLocale) = VerifyExactTuple(cacheRoot, profile);
             }
             else
             {
-                VerifyStaticTuple(cacheRoot, profile);
-                english = Loc1Codec.ReadFile(englishPath);
-                baseLocale = Loc1Codec.ReadFile(supersededCatalogState.BackupPath);
+                english = VerifyStaticTuple(cacheRoot, profile);
+                byte[] backupBytes = BoundedArtifactReader.ReadRuntimeLoc1(
+                    supersededCatalogState.BackupPath,
+                    "catalog-upgrade immutable Ukrainian backup");
+                if (!Hashing.FixedEqualsHex(Hashing.Sha256Bytes(backupBytes), profile.BaseSha256))
+                    throw new IOException("Catalog-upgrade immutable Ukrainian backup hash changed.");
+                baseLocale = Loc1Codec.Parse(backupBytes);
                 VerifyDocuments(english, baseLocale, profile);
             }
-            byte[] catalogBytes = File.ReadAllBytes(translationsPath);
+            if (string.IsNullOrWhiteSpace(profile.TranslationCatalogSha256))
+                throw new InvalidDataException("Runtime-cache profile has no authenticated translation catalog pin.");
+            byte[] catalogBytes = BoundedArtifactReader.ReadCatalog(
+                translationsPath,
+                profile.TranslationCatalogSha256,
+                "runtime-cache translation catalog");
             string catalogHash = Hashing.Sha256Bytes(catalogBytes);
-            if (string.IsNullOrWhiteSpace(profile.TranslationCatalogSha256)
-                || !Hashing.FixedEqualsHex(catalogHash, profile.TranslationCatalogSha256))
-            {
-                throw new InvalidDataException("Translation catalog is not the exact artifact pinned for this runtime cache.");
-            }
 
-            TranslationCatalog catalog = TranslationCatalog.LoadJsonLinesBytes(catalogBytes);
+            TranslationCatalog catalog = TranslationCatalog.LoadJsonLinesBytes(
+                catalogBytes,
+                SignedUpdateLimits.MaxCatalogRecords);
+            bool compatibleRevision = profile.Mode == CompatibleRevisionProfileBuilder.Mode;
             bool supervisedSafeDrafts = profile.TranslationPolicy == "supervised-safe-drafts";
+            bool releaseApproved = profile.TranslationPolicy == "release-approved";
             bool communityPreview = profile.TranslationPolicy == "community-preview-all-drafts";
             bool includeDraft = supervisedSafeDrafts || communityPreview;
             ValidationReport validation = TranslationValidator.Validate(
                 english, catalog, includeDraft, baseLocale,
-                includeDraft ? ValidationProfile.Preview : ValidationProfile.Release,
+                releaseApproved ? ValidationProfile.Release : ValidationProfile.Preview,
                 allowPerLocaleContentVersion: true);
-            if (validation.ErrorCount > 0)
+            if (validation.ErrorCount > 0 && !compatibleRevision)
             {
                 throw new InvalidDataException($"Translation catalog has {validation.ErrorCount} blocking validation errors.");
             }
@@ -326,7 +393,10 @@ namespace InvokersRu.Core.Patching
                 allowPerLocaleContentVersion: true,
                 eligibility: supervisedSafeDrafts
                     ? (record, source) => RuntimeSafeDraftPolicy.IsEligible(record, source, out _)
-                    : null);
+                    : releaseApproved
+                        ? (record, source) => TranslationValidator.IsReleaseReady(record, source, out _)
+                        : null,
+                requireExactHint: compatibleRevision);
             if (composition.AppliedTranslations < profile.MinimumAppliedTranslations)
             {
                 throw new InvalidDataException("Runtime-cache output is below the pinned minimum translation count.");
@@ -348,7 +418,7 @@ namespace InvokersRu.Core.Patching
                 throw new InvalidDataException($"Runtime-cache output has {composition.NeedsReviewFallbacks} review fallbacks; exact pin is {profile.ExpectedNeedsReviewFallbacks}.");
             }
 
-            byte[] patchedRaw = Loc1Codec.BuildRaw(baseLocale);
+            byte[] patchedRaw = Loc1Codec.BuildRawBounded(baseLocale, BoundedArtifactReader.MaximumRuntimeLoc1Bytes);
             string patchedHash = Hashing.Sha256Bytes(patchedRaw);
             if (string.IsNullOrWhiteSpace(profile.ExpectedOutputSha256)
                 || !Hashing.FixedEqualsHex(patchedHash, profile.ExpectedOutputSha256))
@@ -371,16 +441,25 @@ namespace InvokersRu.Core.Patching
                 PatchJournalStore.Save(statePath, journal);
                 if (supersededCatalogState == null)
                 {
-                    PatchService.EnsureVerifiedBackup(targetPath, backupPath, profile.BaseSha256);
+                    PatchService.EnsureVerifiedBoundedBackup(
+                        targetPath,
+                        backupPath,
+                        profile.BaseSha256,
+                        BoundedArtifactReader.MaximumRuntimeLoc1Bytes,
+                        "runtime-cache Ukrainian base");
                 }
                 else
                 {
                     VerifyExactImmutableBackup(backupPath, profile.BaseSha256, "catalog-upgrade runtime-cache backup");
                 }
+                EnsureCompatibleSourceSnapshots(profile, englishPath, stampPath, backupPath);
                 PatchService.Advance(statePath, journal, "BackupVerified");
                 PatchService.WriteDurably(tempPath, patchedRaw);
-                VerifyPatchedRaw(File.ReadAllBytes(tempPath), baseLocale, profile);
-                if (!Hashing.FixedEqualsHex(Hashing.Sha256File(tempPath), patchedHash)) throw new IOException("Staged raw cache hash changed.");
+                VerifyPatchedRaw(
+                    BoundedArtifactReader.ReadRuntimeLoc1(tempPath, "staged runtime-cache LOC1"),
+                    baseLocale,
+                    profile);
+                if (!Hashing.FixedEqualsHex(HashRuntimeLoc1(tempPath, "staged runtime-cache LOC1"), patchedHash)) throw new IOException("Staged raw cache hash changed.");
                 PatchService.Advance(statePath, journal, "StagedVerified");
                 EnsureNoProcessConflicts();
                 MutationPolicy.RequireRuntimeStatePath(statePath);
@@ -404,7 +483,7 @@ namespace InvokersRu.Core.Patching
                 PatchService.Advance(statePath, journal, "PreCommitVerified");
                 PatchService.AtomicReplacePreservingPreimage(tempPath, targetPath, sourcePreimageHash, statePath, journal);
                 committed = true;
-                if (!Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), patchedHash)) throw new IOException("Replaced raw cache hash changed.");
+                if (!Hashing.FixedEqualsHex(HashRuntimeLoc1(targetPath, "replaced runtime-cache LOC1"), patchedHash)) throw new IOException("Replaced raw cache hash changed.");
                 PatchService.Advance(statePath, journal, "PostCommitVerified");
                 var state = new PatchState
                 {
@@ -428,7 +507,7 @@ namespace InvokersRu.Core.Patching
             finally
             {
                 if (File.Exists(tempPath)) File.Delete(tempPath);
-                if (!committed && File.Exists(targetPath) && Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), sourcePreimageHash))
+                if (!committed && File.Exists(targetPath) && Hashing.FixedEqualsHex(HashRuntimeLoc1(targetPath, "runtime-cache rollback target"), sourcePreimageHash))
                 {
                     journal.Phase = "Aborted";
                     PatchJournalStore.Save(statePath, journal);
@@ -491,7 +570,7 @@ namespace InvokersRu.Core.Patching
             MutationPolicy.RequireRuntimeStatePath(statePath);
             MutationPolicy.RequireRuntimeBinding(lockRoot, statePath);
             PatchJournal journal = LoadAndValidateRuntimeJournalUnderLock(statePath, lockRoot, profile);
-            string currentHash = File.Exists(journal.TargetPath) ? Hashing.Sha256File(journal.TargetPath) : string.Empty;
+            string currentHash = File.Exists(journal.TargetPath) ? HashRuntimeLoc1(journal.TargetPath, "runtime-cache recovery target") : string.Empty;
             ValidateRecoveryStateUnderLock(statePath, journal, profile, currentHash);
             PatchService.ValidateRecoveryPhaseReadiness(journal, currentHash);
             if (journal.Phase == "Aborted")
@@ -511,7 +590,7 @@ namespace InvokersRu.Core.Patching
                 return $"Completed cleanup for interrupted {journal.Operation} transaction.";
             }
             ResolveOrRejectQuarantineUnderLock(statePath, journal, currentHash);
-            currentHash = File.Exists(journal.TargetPath) ? Hashing.Sha256File(journal.TargetPath) : string.Empty;
+            currentHash = File.Exists(journal.TargetPath) ? HashRuntimeLoc1(journal.TargetPath, "runtime-cache recovered target") : string.Empty;
             if (Hashing.FixedEqualsHex(currentHash, journal.SourceSha256))
             {
                 if (File.Exists(journal.QuarantinePath) || File.Exists(journal.RollbackPath))
@@ -553,6 +632,104 @@ namespace InvokersRu.Core.Patching
         }
 
         /// <summary>
+        /// Atomically rebinds an already installed compatible artifact to a newer authenticated catalog
+        /// when both catalogs materialize byte-for-byte identical output.  No game file is rewritten and
+        /// there is no multi-file crash window: the old complete state or the new complete state survives.
+        /// </summary>
+        internal static PatchApplyResult RebindEquivalentCatalogState(
+            RuntimeCacheInspection installedInspection,
+            RuntimeCacheCompatibility selectedProfile,
+            string selectedCatalogPath,
+            string statePath)
+        {
+            MutationPolicy.RequireEnabled();
+            MutationPolicy.RequireRuntimeStatePath(statePath);
+            MutationPolicy.RequireRuntimeRoot(installedInspection.CacheRoot);
+            installedInspection.Profile.Validate();
+            selectedProfile.Validate();
+            RuntimeCacheCompatibility installedProfile = installedInspection.Profile;
+            if (installedInspection.Status != InstallationStatus.PatchedByThisTool
+                || installedProfile.Mode != CompatibleRevisionProfileBuilder.Mode
+                || selectedProfile.Mode != CompatibleRevisionProfileBuilder.Mode
+                || !SameCompatibleSourceTuple(installedProfile, selectedProfile)
+                || installedProfile.ExpectedOutputSha256 == null
+                || selectedProfile.ExpectedOutputSha256 == null
+                || !Hashing.FixedEqualsHex(installedProfile.ExpectedOutputSha256, selectedProfile.ExpectedOutputSha256)
+                || installedProfile.TranslationCatalogSha256 == null
+                || selectedProfile.TranslationCatalogSha256 == null
+                || Hashing.FixedEqualsHex(installedProfile.TranslationCatalogSha256, selectedProfile.TranslationCatalogSha256))
+            {
+                throw new InvalidDataException("Equivalent catalog metadata rebind is not the exact same compatible artifact.");
+            }
+
+            byte[] catalogBytes = BoundedArtifactReader.ReadCatalog(
+                selectedCatalogPath,
+                selectedProfile.TranslationCatalogSha256,
+                "equivalent catalog metadata rebind catalog");
+
+            string root = Path.GetFullPath(installedInspection.CacheRoot);
+            (_, string targetPath, _) = ResolveFixedPaths(root);
+            using ExecutionGuard guard = ExecutionGuard.Acquire(root, statePath);
+            EnsureNoProcessConflicts();
+            if (PatchJournalStore.FindActive(statePath) != null)
+                throw new InvalidOperationException("Recovery is required before equivalent catalog metadata rebind.");
+
+            RuntimeCacheInspection reloaded = Inspect(root, installedProfile, statePath);
+            if (reloaded.Status != InstallationStatus.PatchedByThisTool || reloaded.State == null)
+                throw new InvalidDataException("Installed artifact changed before equivalent catalog metadata rebind.");
+            PatchState oldState = reloaded.State;
+            ValidateRecordedPaths(oldState, statePath, installedProfile);
+            VerifyStaticTuple(root, selectedProfile);
+            VerifyCompatibleSourceSnapshots(selectedProfile, oldState.BackupPath);
+            if (!Hashing.FixedEqualsHex(HashRuntimeLoc1(targetPath, "metadata-rebind runtime-cache target"), selectedProfile.ExpectedOutputSha256))
+                throw new InvalidDataException("Equivalent catalog metadata rebind target changed under lock.");
+            MutationTestHooks.InvokeBeforeEquivalentCatalogCommit(selectedCatalogPath);
+            _ = BoundedArtifactReader.ReadCatalog(
+                selectedCatalogPath,
+                selectedProfile.TranslationCatalogSha256,
+                "equivalent catalog metadata rebind catalog under lock");
+
+            var rebound = new PatchState
+            {
+                Schema = 1,
+                BuildId = selectedProfile.Id,
+                GameRoot = oldState.GameRoot,
+                TargetPath = oldState.TargetPath,
+                BackupPath = oldState.BackupPath,
+                OriginalSha256 = oldState.OriginalSha256,
+                PatchedSha256 = selectedProfile.ExpectedOutputSha256,
+                TranslationsSha256 = selectedProfile.TranslationCatalogSha256,
+                AppliedAt = oldState.AppliedAt,
+                AppliedTranslations = selectedProfile.ExpectedAppliedTranslations
+            };
+            try
+            {
+                PatchService.WriteStateAtomically(statePath, rebound);
+                RuntimeCacheInspection verified = Inspect(root, selectedProfile, statePath);
+                if (verified.Status != InstallationStatus.PatchedByThisTool)
+                    throw new InvalidDataException("Equivalent catalog metadata rebind did not produce an exact restorable state.");
+            }
+            catch
+            {
+                PatchService.WriteStateAtomically(statePath, oldState);
+                throw;
+            }
+
+            return new PatchApplyResult
+            {
+                State = rebound,
+                Composition = new CompositionSummary
+                {
+                    AppliedTranslations = selectedProfile.ExpectedAppliedTranslations,
+                    EnglishFallbacks = selectedProfile.ExpectedEnglishFallbacks,
+                    BaseFallbacks = selectedProfile.ExpectedBaseFallbacks,
+                    NeedsReviewFallbacks = selectedProfile.ExpectedNeedsReviewFallbacks
+                },
+                Validation = new ValidationReport()
+            };
+        }
+
+        /// <summary>
         /// Authenticates an interrupted runtime-cache transaction without changing any files. The resolver
         /// uses this only to select the one exact signed profile that is allowed to recover the journal;
         /// <see cref="Recover"/> repeats every check after acquiring the execution lock before it mutates.
@@ -570,7 +747,7 @@ namespace InvokersRu.Core.Patching
                 PatchJournal journal = LoadAndValidateRuntimeJournal(statePath, root, profile);
                 VerifyStaticTuple(root, profile);
                 string currentHash = File.Exists(journal.TargetPath)
-                    ? Hashing.Sha256File(journal.TargetPath)
+                    ? HashRuntimeLoc1(journal.TargetPath, "runtime-cache authenticated recovery target")
                     : string.Empty;
                 ValidateRecoveryStateUnderLock(statePath, journal, profile, currentHash);
                 PatchService.ValidateRecoveryPhaseReadiness(journal, currentHash);
@@ -594,18 +771,18 @@ namespace InvokersRu.Core.Patching
             bool catalogSuperseded)
         {
             if (!File.Exists(state.TargetPath)) throw new FileNotFoundException("Runtime-cache target is missing.");
-            string currentHash = Hashing.Sha256File(state.TargetPath);
+            string currentHash = HashRuntimeLoc1(state.TargetPath, "runtime-cache restore target");
             if (Hashing.FixedEqualsHex(currentHash, state.OriginalSha256))
             {
                 EnsureNoProcessConflicts();
                 PatchService.EnsureSupportedMutationPaths(state.GameRoot, state.TargetPath, statePath);
-                if (!Hashing.FixedEqualsHex(Hashing.Sha256File(state.TargetPath), state.OriginalSha256))
+                if (!Hashing.FixedEqualsHex(HashRuntimeLoc1(state.TargetPath, "runtime-cache already-restored target"), state.OriginalSha256))
                     throw new IOException("Original runtime-cache target changed before no-op restore cleanup.");
                 File.Delete(statePath);
                 return;
             }
             if (!Hashing.FixedEqualsHex(currentHash, state.PatchedSha256)) throw new IOException("Runtime-cache target no longer matches recorded patch.");
-            if (!File.Exists(state.BackupPath) || !Hashing.FixedEqualsHex(Hashing.Sha256File(state.BackupPath), state.OriginalSha256))
+            if (!File.Exists(state.BackupPath) || !Hashing.FixedEqualsHex(HashRuntimeLoc1(state.BackupPath, "runtime-cache immutable restore backup"), state.OriginalSha256))
                 throw new IOException("Immutable runtime-cache backup is missing or invalid.");
             string directory = Path.GetDirectoryName(state.TargetPath) ?? throw new InvalidDataException("Runtime-cache target has no directory.");
             string tempPath = Path.Combine(directory, $".{TargetFileName}.restore-{Guid.NewGuid():N}.tmp");
@@ -616,18 +793,23 @@ namespace InvokersRu.Core.Patching
             try
             {
                 PatchJournalStore.Save(statePath, journal);
-                PatchService.WriteDurably(tempPath, File.ReadAllBytes(state.BackupPath));
-                if (!Hashing.FixedEqualsHex(Hashing.Sha256File(tempPath), state.OriginalSha256)) throw new IOException("Staged cache restore hash is invalid.");
+                byte[] restoreBytes = BoundedArtifactReader.ReadRuntimeLoc1(
+                    state.BackupPath,
+                    "immutable runtime-cache restore backup");
+                if (!Hashing.FixedEqualsHex(Hashing.Sha256Bytes(restoreBytes), state.OriginalSha256))
+                    throw new IOException("Immutable runtime-cache restore backup hash changed while reading.");
+                PatchService.WriteDurably(tempPath, restoreBytes);
+                if (!Hashing.FixedEqualsHex(HashRuntimeLoc1(tempPath, "staged runtime-cache restore"), state.OriginalSha256)) throw new IOException("Staged cache restore hash is invalid.");
                 PatchService.Advance(statePath, journal, "StagedVerified");
                 EnsureNoProcessConflicts();
                 VerifyStaticTuple(state.GameRoot, profile);
                 PatchService.EnsureSupportedMutationPaths(state.GameRoot, state.TargetPath, statePath);
                 PatchService.RejectExistingReparseComponents(state.BackupPath, "immutable runtime-cache backup");
-                if (!Hashing.FixedEqualsHex(Hashing.Sha256File(state.TargetPath), state.PatchedSha256)) throw new IOException("Runtime-cache target changed before restore.");
+                if (!Hashing.FixedEqualsHex(HashRuntimeLoc1(state.TargetPath, "runtime-cache pre-restore target"), state.PatchedSha256)) throw new IOException("Runtime-cache target changed before restore.");
                 PatchService.Advance(statePath, journal, "PreCommitVerified");
                 PatchService.AtomicReplacePreservingPreimage(tempPath, state.TargetPath, state.PatchedSha256, statePath, journal);
                 committed = true;
-                if (!Hashing.FixedEqualsHex(Hashing.Sha256File(state.TargetPath), state.OriginalSha256)) throw new IOException("Restored runtime cache hash is invalid.");
+                if (!Hashing.FixedEqualsHex(HashRuntimeLoc1(state.TargetPath, "restored runtime-cache target"), state.OriginalSha256)) throw new IOException("Restored runtime cache hash is invalid.");
                 PatchService.Advance(statePath, journal, "PostCommitVerified");
                 File.Delete(statePath);
                 PatchService.Advance(statePath, journal, "StateCommitted");
@@ -638,7 +820,7 @@ namespace InvokersRu.Core.Patching
             finally
             {
                 if (File.Exists(tempPath)) File.Delete(tempPath);
-                if (!committed && File.Exists(state.TargetPath) && Hashing.FixedEqualsHex(Hashing.Sha256File(state.TargetPath), state.PatchedSha256))
+                if (!committed && File.Exists(state.TargetPath) && Hashing.FixedEqualsHex(HashRuntimeLoc1(state.TargetPath, "runtime-cache restore rollback target"), state.PatchedSha256))
                 {
                     journal.Phase = "Aborted";
                     PatchJournalStore.Save(statePath, journal);
@@ -647,14 +829,18 @@ namespace InvokersRu.Core.Patching
             }
         }
 
-        private static void VerifyExactTuple(string root, RuntimeCacheCompatibility profile)
+        private static (Loc1Document English, Loc1Document Target) VerifyExactTuple(
+            string root,
+            RuntimeCacheCompatibility profile)
         {
-            (string englishPath, string targetPath, string stampPath) = ResolveFixedPaths(root);
-            VerifyStaticTuple(root, profile);
-            if (!Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), profile.BaseSha256)) throw new IOException("Pinned dl_uk_UA.bin changed.");
-            Loc1Document english = Loc1Codec.ReadFile(englishPath);
-            Loc1Document target = Loc1Codec.ReadFile(targetPath);
+            (_, string targetPath, _) = ResolveFixedPaths(root);
+            Loc1Document english = VerifyStaticTuple(root, profile);
+            byte[] targetBytes = BoundedArtifactReader.ReadRuntimeLoc1(targetPath, "pinned runtime-cache Ukrainian LOC1");
+            if (!Hashing.FixedEqualsHex(Hashing.Sha256Bytes(targetBytes), profile.BaseSha256))
+                throw new IOException("Pinned dl_uk_UA.bin changed.");
+            Loc1Document target = Loc1Codec.Parse(targetBytes);
             VerifyDocuments(english, target, profile);
+            return (english, target);
         }
 
         private static bool TryValidateSupersededState(
@@ -686,11 +872,16 @@ namespace InvokersRu.Core.Patching
                     ?? throw new InvalidDataException("runtime state has no parent directory");
                 string backupRoot = Path.Combine(stateRoot, "backups");
                 string backupPath = Path.GetFullPath(state.BackupPath);
-                string backupPrefix = Path.GetFullPath(backupRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-                if (!backupPath.StartsWith(backupPrefix, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("recorded backup is outside the dedicated backup store");
+                string expectedBackup = Path.Combine(
+                    backupRoot,
+                    SafeProfileId(state.BuildId),
+                    $"{state.OriginalSha256}.{TargetFileName}");
+                if (!PathEquals(backupPath, expectedBackup))
+                    throw new InvalidDataException("recorded backup is not the exact content-addressed path");
                 PatchService.RejectExistingReparseComponents(backupPath, "superseded runtime-cache backup");
-                if (!File.Exists(backupPath) || !Hashing.FixedEqualsHex(Hashing.Sha256File(backupPath), state.OriginalSha256))
+                if (!File.Exists(backupPath)
+                    || (File.GetAttributes(backupPath) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0
+                    || !Hashing.FixedEqualsHex(HashRuntimeLoc1(backupPath, "superseded runtime-cache backup"), state.OriginalSha256))
                     throw new InvalidDataException("recorded immutable backup is missing or invalid");
                 return true;
             }
@@ -702,16 +893,89 @@ namespace InvokersRu.Core.Patching
             }
         }
 
+        private static bool TryValidateOfficialUpdatePredecessor(
+            string cacheRoot,
+            string targetPath,
+            string statePath,
+            PatchState state,
+            RuntimeCacheCompatibility currentProfile,
+            RuntimeCacheCompatibility predecessor,
+            out string problem)
+        {
+            problem = string.Empty;
+            try
+            {
+                if (currentProfile.Mode is not ("exact" or CompatibleRevisionProfileBuilder.Mode)
+                    || predecessor.Mode is not ("exact" or CompatibleRevisionProfileBuilder.Mode)
+                    || !string.Equals(currentProfile.ContentGuid, predecessor.ContentGuid, StringComparison.Ordinal)
+                    || predecessor.ExpectedOutputSha256 == null
+                    || Hashing.FixedEqualsHex(currentProfile.BaseSha256, predecessor.ExpectedOutputSha256))
+                {
+                    throw new InvalidDataException("compatible-revision predecessor/current family or identity is invalid");
+                }
+
+                ValidateRecordedPathsReadOnly(
+                    state.GameRoot,
+                    state.TargetPath,
+                    state.BackupPath,
+                    statePath,
+                    predecessor);
+                if (state.Schema != 1
+                    || !string.Equals(state.BuildId, predecessor.Id, StringComparison.Ordinal)
+                    || !Hashing.FixedEqualsHex(state.OriginalSha256, predecessor.BaseSha256)
+                    || predecessor.ExpectedOutputSha256 == null
+                    || !Hashing.FixedEqualsHex(state.PatchedSha256, predecessor.ExpectedOutputSha256)
+                    || predecessor.TranslationCatalogSha256 == null
+                    || !Hashing.FixedEqualsHex(state.TranslationsSha256, predecessor.TranslationCatalogSha256)
+                    || state.AppliedTranslations != predecessor.ExpectedAppliedTranslations
+                    || state.AppliedTranslations is < 1 or > 100_000
+                    || !PathEquals(cacheRoot, state.GameRoot)
+                    || !PathEquals(targetPath, state.TargetPath)
+                    || state.AppliedAt == default)
+                {
+                    throw new InvalidDataException("compatible-revision predecessor paths or timestamp are invalid");
+                }
+
+                // Compatible predecessors additionally carry immutable EN/stamp snapshots because their
+                // profile was derived locally.  An exact predecessor is instead a complete embedded or
+                // signed descriptor; its exact state pins and immutable base backup are sufficient and
+                // must remain usable for users upgrading from pre-snapshot releases.
+                VerifyCompatibleSourceSnapshots(predecessor, state.BackupPath);
+                VerifyExactImmutableBackup(state.BackupPath, predecessor.BaseSha256,
+                    "official-update predecessor backup");
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException || exception is UnauthorizedAccessException
+                || exception is InvalidDataException || exception is InvalidOperationException
+                || exception is Loc1FormatException)
+            {
+                problem = exception.Message;
+                return false;
+            }
+        }
+
         private static void ArchiveSupersededStateUnderLock(
             string cacheRoot,
             string targetPath,
             string statePath,
-            RuntimeCacheCompatibility profile)
+            RuntimeCacheCompatibility profile,
+            RuntimeCacheCompatibility? authenticatedPredecessor)
         {
             VerifyExactTuple(cacheRoot, profile);
             PatchState state = PatchPlanner.TryLoadState(statePath)
                 ?? throw new InvalidDataException("Superseded runtime-cache state disappeared or became unreadable after locking.");
-            if (!TryValidateSupersededState(cacheRoot, targetPath, statePath, state, out string problem))
+            string problem = "no authenticated compatible-revision predecessor was supplied";
+            bool valid = authenticatedPredecessor != null
+                ? TryValidateOfficialUpdatePredecessor(
+                        cacheRoot,
+                        targetPath,
+                        statePath,
+                        state,
+                        profile,
+                        authenticatedPredecessor,
+                        out problem)
+                : false;
+            if (!valid)
                 throw new InvalidDataException($"Superseded runtime-cache state is not safe to archive: {problem}");
 
             string stateRoot = Path.GetDirectoryName(Path.GetFullPath(statePath))
@@ -733,14 +997,20 @@ namespace InvokersRu.Core.Patching
                 throw new InvalidDataException($"{label} is not SHA-256.");
         }
 
-        private static void VerifyStaticTuple(string root, RuntimeCacheCompatibility profile)
+        private static Loc1Document VerifyStaticTuple(string root, RuntimeCacheCompatibility profile)
         {
             (string englishPath, _, string stampPath) = ResolveFixedPaths(root);
-            if (!File.Exists(englishPath) || !Hashing.FixedEqualsHex(Hashing.Sha256File(englishPath), profile.EnglishSha256))
+            byte[] englishBytes = BoundedArtifactReader.ReadRuntimeLoc1(
+                englishPath,
+                "pinned runtime-cache English LOC1");
+            byte[] stampBytes = BoundedArtifactReader.ReadRuntimeStamp(
+                stampPath,
+                "pinned runtime-cache version stamp");
+            if (!Hashing.FixedEqualsHex(Hashing.Sha256Bytes(englishBytes), profile.EnglishSha256))
                 throw new IOException("Pinned dl_en_US.bin is missing or changed.");
-            if (!File.Exists(stampPath) || !StampMatches(stampPath, profile))
+            if (!StampMatches(stampBytes, profile))
                 throw new IOException("Pinned dl_uk_UA.bin.ver is missing or changed.");
-            Loc1Document english = Loc1Codec.ReadFile(englishPath);
+            Loc1Document english = Loc1Codec.Parse(englishBytes);
             if (english.FormatVersion != 4 || english.ContentGuid != profile.ContentGuid
                 || english.ContentVersion != profile.EnglishContentVersion
                 || english.LocaleId != profile.EnglishLocaleId
@@ -748,6 +1018,13 @@ namespace InvokersRu.Core.Patching
                 || english.ReleaseRevision != profile.EnglishReleaseRevision
                 || english.Entries.Count != profile.EntryCount)
                 throw new InvalidDataException("Pinned English runtime-cache LOC1 identity changed.");
+            if (profile.Mode == CompatibleRevisionProfileBuilder.Mode
+                && (profile.OrderedKeysetSha256 == null
+                    || !Hashing.FixedEqualsHex(
+                        Loc1Compatibility.ComputeOrderedKeysetSha256(english),
+                        profile.OrderedKeysetSha256)))
+                throw new InvalidDataException("Pinned compatible-revision English ordered key set changed.");
+            return english;
         }
 
         private static void VerifyDocuments(Loc1Document english, Loc1Document target, RuntimeCacheCompatibility profile)
@@ -762,6 +1039,12 @@ namespace InvokersRu.Core.Patching
                 || target.LocaleId != profile.BaseLocaleId || target.LocaleRevision != profile.BaseLocaleRevision
                 || target.ReleaseRevision != profile.BaseReleaseRevision || target.Entries.Count != profile.EntryCount)
                 throw new InvalidDataException("Runtime-cache LOC1 tuple does not match its exact content pins.");
+            if (profile.Mode == CompatibleRevisionProfileBuilder.Mode
+                && (profile.OrderedKeysetSha256 == null
+                    || !Hashing.FixedEqualsHex(
+                        Loc1Compatibility.ComputeOrderedKeysetSha256(target),
+                        profile.OrderedKeysetSha256)))
+                throw new InvalidDataException("Runtime-cache compatible-revision ordered key set changed.");
         }
 
         private static void VerifyPatchedRaw(byte[] raw, Loc1Document sourceBase, RuntimeCacheCompatibility profile)
@@ -774,6 +1057,12 @@ namespace InvokersRu.Core.Patching
                 || parsed.ReleaseRevision != profile.BaseReleaseRevision || parsed.Entries.Count != profile.EntryCount
                 || !parsed.Entries.Select(entry => entry.KeyHash).SequenceEqual(sourceBase.Entries.Select(entry => entry.KeyHash)))
                 throw new InvalidDataException("Generated raw runtime cache did not preserve the exact base header/corpus identity.");
+            if (profile.Mode == CompatibleRevisionProfileBuilder.Mode
+                && (profile.OrderedKeysetSha256 == null
+                    || !Hashing.FixedEqualsHex(
+                        Loc1Compatibility.ComputeOrderedKeysetSha256(parsed),
+                        profile.OrderedKeysetSha256)))
+                throw new InvalidDataException("Generated compatible-revision raw cache changed the ordered key set.");
         }
 
         private static bool HeaderIdentityMatches(byte[] actual, byte[] expected)
@@ -788,30 +1077,11 @@ namespace InvokersRu.Core.Patching
             return true;
         }
 
-        private static bool StampMatches(string stampPath, RuntimeCacheCompatibility profile)
+        private static bool StampMatches(byte[] stampBytes, RuntimeCacheCompatibility profile)
         {
             byte[] expected = new UTF8Encoding(false, true).GetBytes(profile.StampValue);
-            return Hashing.FixedEqualsHex(Hashing.Sha256File(stampPath), profile.StampSha256)
-                && File.ReadAllBytes(stampPath).SequenceEqual(expected);
-        }
-
-        private static string? ReadObservedStampValue(string stampPath)
-        {
-            long length = new FileInfo(stampPath).Length;
-            if (length is < 1 or > 64) return null;
-            byte[] bytes = File.ReadAllBytes(stampPath);
-            try
-            {
-                string value = new UTF8Encoding(false, true).GetString(bytes);
-                return value.All(character => char.IsAsciiLetterOrDigit(character)
-                    || character is '.' or '-' or '_')
-                    ? value
-                    : null;
-            }
-            catch (DecoderFallbackException)
-            {
-                return null;
-            }
+            return Hashing.FixedEqualsHex(Hashing.Sha256Bytes(stampBytes), profile.StampSha256)
+                && stampBytes.SequenceEqual(expected);
         }
 
         public static (string English, string Target, string Stamp) ResolveTuplePaths(string root)
@@ -846,6 +1116,7 @@ namespace InvokersRu.Core.Patching
                 || !Hashing.FixedEqualsHex(state.TranslationsSha256, profile.TranslationCatalogSha256)
                 || state.AppliedTranslations != profile.ExpectedAppliedTranslations)
                 throw new InvalidDataException("Runtime-cache state does not match the trusted profile.");
+            VerifyCompatibleSourceSnapshots(profile, state.BackupPath);
         }
 
         private static bool TryValidatePatchedState(
@@ -876,7 +1147,7 @@ namespace InvokersRu.Core.Patching
             {
                 PatchService.RejectExistingReparseComponents(expectedBackup, "immutable runtime-cache backup");
                 if (!File.Exists(expectedBackup)
-                    || !Hashing.FixedEqualsHex(Hashing.Sha256File(expectedBackup), profile.BaseSha256))
+                    || !Hashing.FixedEqualsHex(HashRuntimeLoc1(expectedBackup, "authenticated runtime-cache backup"), profile.BaseSha256))
                 {
                     problem = "immutable original backup is missing or invalid";
                     return false;
@@ -889,6 +1160,72 @@ namespace InvokersRu.Core.Patching
             }
             problem = string.Empty;
             return true;
+        }
+
+        internal static (string English, string Stamp) ResolveCompatibleSourceSnapshotPaths(string backupPath)
+        {
+            string directory = Path.GetDirectoryName(Path.GetFullPath(backupPath))
+                ?? throw new InvalidDataException("Compatible-revision backup has no parent directory.");
+            return (
+                Path.Combine(directory, CompatibleEnglishSnapshotFileName),
+                Path.Combine(directory, CompatibleStampSnapshotFileName));
+        }
+
+        private static void EnsureCompatibleSourceSnapshots(
+            RuntimeCacheCompatibility profile,
+            string englishPath,
+            string stampPath,
+            string backupPath)
+        {
+            if (profile.Mode != CompatibleRevisionProfileBuilder.Mode) return;
+            (string englishSnapshot, string stampSnapshot) = ResolveCompatibleSourceSnapshotPaths(backupPath);
+            PatchService.EnsureVerifiedBoundedBackup(
+                englishPath,
+                englishSnapshot,
+                profile.EnglishSha256,
+                BoundedArtifactReader.MaximumRuntimeLoc1Bytes,
+                "compatible-revision English source");
+            PatchService.EnsureVerifiedBoundedBackup(
+                stampPath,
+                stampSnapshot,
+                profile.StampSha256,
+                BoundedArtifactReader.MaximumRuntimeStampBytes,
+                "compatible-revision version stamp");
+            VerifyCompatibleSourceSnapshots(profile, backupPath);
+        }
+
+        private static void VerifyCompatibleSourceSnapshots(
+            RuntimeCacheCompatibility profile,
+            string backupPath)
+        {
+            if (profile.Mode != CompatibleRevisionProfileBuilder.Mode) return;
+            (string englishSnapshot, string stampSnapshot) = ResolveCompatibleSourceSnapshotPaths(backupPath);
+            foreach (string path in new[] { englishSnapshot, backupPath, stampSnapshot })
+            {
+                PatchService.RejectExistingReparseComponents(path, "compatible-revision immutable source snapshot");
+                if (!File.Exists(path)
+                    || (File.GetAttributes(path) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                    throw new IOException("Compatible-revision immutable source snapshot is missing or unsafe.");
+            }
+
+            byte[] englishBytes = BoundedArtifactReader.ReadRuntimeLoc1(
+                englishSnapshot,
+                "compatible-revision immutable English snapshot");
+            byte[] baseBytes = BoundedArtifactReader.ReadRuntimeLoc1(
+                backupPath,
+                "compatible-revision immutable Ukrainian snapshot");
+            byte[] stampBytes = BoundedArtifactReader.ReadRuntimeStamp(
+                stampSnapshot,
+                "compatible-revision immutable version snapshot");
+            if (!Hashing.FixedEqualsHex(Hashing.Sha256Bytes(englishBytes), profile.EnglishSha256)
+                || !Hashing.FixedEqualsHex(Hashing.Sha256Bytes(baseBytes), profile.BaseSha256)
+                || !Hashing.FixedEqualsHex(Hashing.Sha256Bytes(stampBytes), profile.StampSha256)
+                || !StampMatches(stampBytes, profile))
+                throw new IOException("Compatible-revision immutable source snapshot hash changed.");
+
+            Loc1Document english = Loc1Codec.Parse(englishBytes);
+            Loc1Document baseLocale = Loc1Codec.Parse(baseBytes);
+            VerifyDocuments(english, baseLocale, profile);
         }
 
         private static bool TryValidateCatalogSupersededState(
@@ -926,9 +1263,19 @@ namespace InvokersRu.Core.Patching
             try
             {
                 VerifyExactImmutableBackup(expectedBackup, profile.BaseSha256, "catalog-upgrade runtime-cache backup");
-                Loc1Document backup = Loc1Codec.ReadFile(expectedBackup);
-                Loc1Document current = Loc1Codec.ReadFile(target);
-                Loc1Document english = Loc1Codec.ReadFile(ResolveFixedPaths(root).English);
+                VerifyCompatibleSourceSnapshots(profile, expectedBackup);
+                byte[] backupBytes = BoundedArtifactReader.ReadRuntimeLoc1(
+                    expectedBackup,
+                    "catalog-upgrade immutable Ukrainian backup");
+                byte[] currentBytes = BoundedArtifactReader.ReadRuntimeLoc1(
+                    target,
+                    "catalog-upgrade installed Ukrainian LOC1");
+                byte[] englishBytes = BoundedArtifactReader.ReadRuntimeLoc1(
+                    ResolveFixedPaths(root).English,
+                    "catalog-upgrade English LOC1");
+                Loc1Document backup = Loc1Codec.Parse(backupBytes);
+                Loc1Document current = Loc1Codec.Parse(currentBytes);
+                Loc1Document english = Loc1Codec.Parse(englishBytes);
                 VerifyDocuments(english, backup, profile);
                 VerifyDocuments(english, current, profile);
             }
@@ -954,7 +1301,7 @@ namespace InvokersRu.Core.Patching
                 ?? throw new InvalidDataException("Superseded catalog state disappeared or became unreadable after locking.");
             if (!File.Exists(targetPath))
                 throw new FileNotFoundException("Superseded catalog target disappeared after locking.", targetPath);
-            string targetHash = Hashing.Sha256File(targetPath);
+            string targetHash = HashRuntimeLoc1(targetPath, "superseded runtime-cache target");
             if (!TryValidateCatalogSupersededState(
                     cacheRoot,
                     targetPath,
@@ -978,13 +1325,43 @@ namespace InvokersRu.Core.Patching
             FileAttributes attributes = File.GetAttributes(backupPath);
             if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
                 throw new InvalidDataException("Immutable runtime-cache backup is not a regular file.");
-            if (!Hashing.FixedEqualsHex(Hashing.Sha256File(backupPath), expectedHash))
+            if (!Hashing.FixedEqualsHex(HashRuntimeLoc1(backupPath, label), expectedHash))
                 throw new InvalidDataException("Immutable runtime-cache backup does not match the pinned official base hash.");
         }
+
+        private static string HashRuntimeLoc1(string path, string purpose) =>
+            BoundedArtifactReader.Sha256File(
+                path,
+                BoundedArtifactReader.MaximumRuntimeLoc1Bytes,
+                purpose);
 
         private static bool IsRecordedHash(string? value)
         {
             return value != null && value.Length == 64 && value.All(Uri.IsHexDigit);
+        }
+
+        private static bool SameCompatibleSourceTuple(
+            RuntimeCacheCompatibility left,
+            RuntimeCacheCompatibility right)
+        {
+            return string.Equals(left.Id, right.Id, StringComparison.Ordinal)
+                && string.Equals(left.GameVersion, right.GameVersion, StringComparison.Ordinal)
+                && string.Equals(left.ContentGuid, right.ContentGuid, StringComparison.Ordinal)
+                && string.Equals(left.EnglishContentVersion, right.EnglishContentVersion, StringComparison.Ordinal)
+                && string.Equals(left.BaseContentVersion, right.BaseContentVersion, StringComparison.Ordinal)
+                && Hashing.FixedEqualsHex(left.EnglishSha256, right.EnglishSha256)
+                && Hashing.FixedEqualsHex(left.BaseSha256, right.BaseSha256)
+                && Hashing.FixedEqualsHex(left.StampSha256, right.StampSha256)
+                && left.EnglishLocaleId == right.EnglishLocaleId
+                && left.EnglishLocaleRevision == right.EnglishLocaleRevision
+                && left.EnglishReleaseRevision == right.EnglishReleaseRevision
+                && left.BaseLocaleId == right.BaseLocaleId
+                && left.BaseLocaleRevision == right.BaseLocaleRevision
+                && left.BaseReleaseRevision == right.BaseReleaseRevision
+                && left.EntryCount == right.EntryCount
+                && left.OrderedKeysetSha256 != null
+                && right.OrderedKeysetSha256 != null
+                && Hashing.FixedEqualsHex(left.OrderedKeysetSha256, right.OrderedKeysetSha256);
         }
 
         private static bool IsSafeSupersededPatchHash(string? value, RuntimeCacheCompatibility profile)
@@ -1035,6 +1412,7 @@ namespace InvokersRu.Core.Patching
                 {
                     return false;
                 }
+                VerifyCompatibleSourceSnapshots(profile, expectedBackup);
 
                 VerifyExactImmutableBackup(expectedBackup, profile.BaseSha256, "current runtime-cache recovery backup");
                 return true;
@@ -1257,16 +1635,16 @@ namespace InvokersRu.Core.Patching
         {
             if (File.Exists(journal.RollbackPath))
             {
-                if (!Hashing.FixedEqualsHex(Hashing.Sha256File(journal.RollbackPath), journal.ExpectedOutputSha256))
+                if (!Hashing.FixedEqualsHex(HashRuntimeLoc1(journal.RollbackPath, "runtime-cache rollback artifact"), journal.ExpectedOutputSha256))
                     throw new IOException("Preserved rollback output hash is invalid.");
                 if (string.IsNullOrWhiteSpace(journal.DisplacedSha256)
-                    || !Hashing.FixedEqualsHex(Hashing.Sha256File(journal.TargetPath), journal.DisplacedSha256))
+                    || !Hashing.FixedEqualsHex(HashRuntimeLoc1(journal.TargetPath, "runtime-cache displaced target"), journal.DisplacedSha256))
                     throw new IOException("Restored competing runtime-cache target no longer matches the journaled displaced preimage; rollback output was preserved.");
                 throw new IOException("A competing target was restored after an atomic race; both sides remain preserved for manual recovery.");
             }
 
             if (!File.Exists(journal.QuarantinePath)) return;
-            string displacedHash = Hashing.Sha256File(journal.QuarantinePath);
+            string displacedHash = HashRuntimeLoc1(journal.QuarantinePath, "runtime-cache quarantine artifact");
             if (!string.IsNullOrWhiteSpace(journal.DisplacedSha256)
                 && !Hashing.FixedEqualsHex(displacedHash, journal.DisplacedSha256))
                 throw new IOException("Displaced-file quarantine changed after it was journaled.");

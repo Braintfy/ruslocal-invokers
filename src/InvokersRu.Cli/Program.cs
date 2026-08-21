@@ -570,8 +570,11 @@ namespace InvokersRu.Cli
             }
 
             RuntimeCacheCompatibility profile = RuntimeCacheService.DescribeTuple(
-                englishPath, basePath, stampPath, options.Optional("id", string.Empty));
-            Loc1Document baseDocument = Loc1Codec.ReadFile(basePath);
+                englishPath,
+                basePath,
+                stampPath,
+                options.Optional("id", string.Empty),
+                out Loc1Document baseDocument);
             string orderedKeysetSha256 = SignedUpdateRuntimeProfileAdapter.ComputeOrderedKeysetSha256(baseDocument);
             var serializerOptions = new JsonSerializerOptions { WriteIndented = true };
             File.WriteAllText(outputPath, JsonSerializer.Serialize(profile, serializerOptions) + Environment.NewLine);
@@ -716,7 +719,8 @@ namespace InvokersRu.Cli
                     embeddedProfile,
                     embeddedCatalog.Path ?? string.Empty,
                     coordinator: null,
-                    remoteProblem: updateProblem);
+                    remoteProblem: updateProblem,
+                    remoteProblemBlocksApply: true);
             }
             finally
             {
@@ -726,44 +730,69 @@ namespace InvokersRu.Cli
             RuntimeCacheCompatibility profile = resolution.Profile;
             RuntimeCacheInspection inspection = resolution.Inspection;
             RuntimeCatalogPlanInfo catalog = InspectRuntimeCatalog(resolution.CatalogPath, profile);
+            RuntimePlanDiagnostic diagnostic = BuildRuntimePlanDiagnostic(
+                inspection,
+                profile,
+                catalog,
+                resolution.LocalProblem);
             IReadOnlyList<string> conflicts = plan
                 ? PatchService.FindRuntimeCacheProcessConflicts()
                 : Array.Empty<string>();
             bool remoteApplyAuthorized = RuntimeUpdateAuthorization.CanApply(resolution, DateTimeOffset.UtcNow);
             bool restorationAuthorized = RuntimeUpdateAuthorization.CanRestoreOrRecover(resolution);
+            bool translationUpdateAvailable = resolution.TranslationUpdateAvailable
+                || inspection.Status == InstallationStatus.PatchSupersededByCatalogUpdate;
             string action = GetRuntimeCachePlanAction(
                 inspection.Status,
                 conflicts.Count,
                 profile,
                 catalog.ExactMatch,
-                resolution.TranslationUpdateAvailable,
+                translationUpdateAvailable,
                 remoteApplyAuthorized,
                 restorationAuthorized);
             if (options.Has("json"))
             {
-                VerifiedSignedUpdate? selectedUpdate = resolution.Bundle?.Update ?? resolution.ChannelAuthority;
+                VerifiedSignedUpdate? selectedUpdate = resolution.Bundle?.Update;
                 VerifiedSignedUpdate? channelAuthority = resolution.ChannelAuthority;
-                object? signedUpdate = selectedUpdate == null || channelAuthority == null ? null : new
+                object? signedUpdate = selectedUpdate == null ? null : new
                 {
                     source = resolution.Bundle?.Source.ToString() ?? "ChannelHead",
                     sequence = selectedUpdate.Manifest.Sequence,
                     payload_sha256 = selectedUpdate.PayloadSha256,
                     release_id = selectedUpdate.Manifest.ReleaseId,
                     artifact_id = selectedUpdate.Manifest.Catalog.ArtifactId,
+                    catalog_sha256 = selectedUpdate.Manifest.Catalog.UncompressedSha256,
+                    catalog_policy = selectedUpdate.Manifest.Catalog.TranslationPolicy,
                     issued_utc = selectedUpdate.IssuedUtc,
                     expires_utc = selectedUpdate.ExpiresUtc,
                     expired = selectedUpdate.IsExpiredAt(DateTimeOffset.UtcNow),
+                    patcher_disposition = selectedUpdate.PatcherDisposition.ToString(),
+                    minimum_patcher_version = selectedUpdate.Manifest.Patcher.MinimumVersion,
+                    latest_patcher_version = selectedUpdate.Manifest.Patcher.LatestVersion,
+                    download_page = selectedUpdate.Manifest.Patcher.DownloadPage,
+                    notes_ru = selectedUpdate.Manifest.NotesRu
+                };
+                object? signedChannelAuthority = channelAuthority == null ? null : new
+                {
+                    source = "ChannelHead",
+                    sequence = channelAuthority.Manifest.Sequence,
+                    payload_sha256 = channelAuthority.PayloadSha256,
+                    release_id = channelAuthority.Manifest.ReleaseId,
+                    artifact_id = channelAuthority.Manifest.Catalog.ArtifactId,
+                    catalog_sha256 = channelAuthority.Manifest.Catalog.UncompressedSha256,
+                    catalog_policy = channelAuthority.Manifest.Catalog.TranslationPolicy,
+                    issued_utc = channelAuthority.IssuedUtc,
+                    expires_utc = channelAuthority.ExpiresUtc,
+                    expired = channelAuthority.IsExpiredAt(DateTimeOffset.UtcNow),
                     patcher_disposition = channelAuthority.PatcherDisposition.ToString(),
                     minimum_patcher_version = channelAuthority.Manifest.Patcher.MinimumVersion,
                     latest_patcher_version = channelAuthority.Manifest.Patcher.LatestVersion,
                     download_page = channelAuthority.Manifest.Patcher.DownloadPage,
-                    exact_game_profile_found = !string.Equals(resolution.Source, "embedded", StringComparison.Ordinal),
-                    translation_update_available = resolution.TranslationUpdateAvailable,
-                    notes_ru = selectedUpdate.Manifest.NotesRu
+                    notes_ru = channelAuthority.Manifest.NotesRu
                 };
                 Console.WriteLine(JsonSerializer.Serialize(new
                 {
-                    schema = 2,
+                    schema = 3,
                     patcher_version = GetPatcherVersion(),
                     installation_writes_enabled = InstallationWritesEnabled,
                     status = inspection.Status.ToString(),
@@ -776,7 +805,19 @@ namespace InvokersRu.Cli
                         stamp_sha256 = inspection.StampSha256,
                         game_version = inspection.StampValue,
                         english_content = inspection.EnglishContentVersion,
-                        base_content = inspection.BaseContentVersion
+                        base_content = inspection.BaseContentVersion,
+                        english_schema = inspection.EnglishFormatVersion,
+                        base_schema = inspection.BaseFormatVersion,
+                        english_content_guid = inspection.EnglishContentGuid,
+                        base_content_guid = inspection.BaseContentGuid,
+                        english_locale_id = inspection.EnglishLocaleId,
+                        english_locale_revision = inspection.EnglishLocaleRevision,
+                        english_release_revision = inspection.EnglishReleaseRevision,
+                        base_locale_id = inspection.BaseLocaleId,
+                        base_locale_revision = inspection.BaseLocaleRevision,
+                        base_release_revision = inspection.BaseReleaseRevision,
+                        entry_count = inspection.EntryCount,
+                        ordered_keyset_sha256 = inspection.OrderedKeysetSha256
                     },
                     catalog = new
                     {
@@ -789,10 +830,24 @@ namespace InvokersRu.Cli
                     profile = new
                     {
                         id = profile.Id,
+                        mode = profile.Mode,
                         game_version = profile.GameVersion,
                         readiness = profile.Readiness,
                         certified = profile.Certified,
                         translation_policy = profile.TranslationPolicy,
+                        content_guid = profile.ContentGuid,
+                        loc1_schema = 4,
+                        english_content = profile.EnglishContentVersion,
+                        base_content = profile.BaseContentVersion,
+                        english_sha256 = profile.EnglishSha256,
+                        stamp_sha256 = profile.StampSha256,
+                        english_locale_id = profile.EnglishLocaleId,
+                        english_locale_revision = profile.EnglishLocaleRevision,
+                        english_release_revision = profile.EnglishReleaseRevision,
+                        base_locale_id = profile.BaseLocaleId,
+                        base_locale_revision = profile.BaseLocaleRevision,
+                        base_release_revision = profile.BaseReleaseRevision,
+                        ordered_keyset_sha256 = profile.OrderedKeysetSha256,
                         base_sha256 = profile.BaseSha256,
                         catalog_sha256 = profile.TranslationCatalogSha256,
                         expected_output_sha256 = profile.ExpectedOutputSha256,
@@ -802,8 +857,23 @@ namespace InvokersRu.Cli
                         base_fallbacks = profile.ExpectedBaseFallbacks,
                         needs_review_fallbacks = profile.ExpectedNeedsReviewFallbacks
                     },
+                    diagnostic = new
+                    {
+                        kind = diagnostic.Kind,
+                        component = diagnostic.Component,
+                        current = diagnostic.Current,
+                        expected = diagnostic.Expected
+                    },
+                    local_problem = resolution.LocalProblem,
                     update = signedUpdate,
+                    channel_authority = signedChannelAuthority,
+                    translation_update_available = translationUpdateAvailable,
+                    translation_update_kind = resolution.EquivalentCatalogMetadataUpdate
+                        ? "metadata-only"
+                        : translationUpdateAvailable ? "content" : "none",
                     update_problem = resolution.RemoteProblem ?? updateProblem,
+                    update_problem_blocks_apply = resolution.RemoteProblemBlocksApply,
+                    restore_recovery_authorized = restorationAuthorized,
                     state = inspection.State == null ? null : new
                     {
                         build_id = inspection.State.BuildId,
@@ -821,7 +891,7 @@ namespace InvokersRu.Cli
                     },
                     process_conflicts = conflicts,
                     plan = plan ? action : null,
-                    can_apply = plan && (resolution.TranslationUpdateAvailable
+                    can_apply = plan && (translationUpdateAvailable
                         || inspection.Status == InstallationStatus.CompatibleOriginal
                         || inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate
                         || inspection.Status == InstallationStatus.PatchSupersededByCatalogUpdate)
@@ -900,6 +970,140 @@ namespace InvokersRu.Cli
 
         private sealed record RuntimeCatalogPlanInfo(string? Path, bool Present, bool RegularFile, string? Sha256, bool ExactMatch);
 
+        private sealed record RuntimePlanDiagnostic(
+            string Kind,
+            string Component,
+            string? Current,
+            string? Expected);
+
+        private static RuntimePlanDiagnostic BuildRuntimePlanDiagnostic(
+            RuntimeCacheInspection inspection,
+            RuntimeCacheCompatibility profile,
+            RuntimeCatalogPlanInfo catalog,
+            string? localProblem)
+        {
+            static RuntimePlanDiagnostic Value(string kind, string component, string? current, string? expected) =>
+                new RuntimePlanDiagnostic(kind, component, current, expected);
+
+            if (inspection.Status == InstallationStatus.MissingFiles)
+                return Value("structural-boundary", "missing-files", "missing", "fixed EN/UK/stamp tuple");
+            if (inspection.Status == InstallationStatus.InconsistentState
+                && string.Equals(localProblem, "journal-authentication", StringComparison.Ordinal))
+            {
+                return Value(
+                    "local-state",
+                    "journal-authentication",
+                    "untrusted",
+                    "uniquely authenticated recovery journal");
+            }
+            if (inspection.Status == InstallationStatus.InconsistentState)
+            {
+                if (inspection.Journal != null)
+                    return Value("local-state", "journal", inspection.Journal.Phase, "authenticated recovery journal");
+                if (inspection.State == null)
+                    return Value(
+                        "local-state",
+                        "patch-state",
+                        inspection.BaseSha256 ?? "unreadable",
+                        inspection.State?.PatchedSha256 ?? profile.ExpectedOutputSha256);
+            }
+            if (inspection.Status == InstallationStatus.RecoveryRequired)
+                return Value("local-state", "journal", inspection.Journal?.Phase, "authenticated recovery journal");
+
+            if (inspection.Status is InstallationStatus.UnknownBuild or InstallationStatus.InconsistentState)
+            {
+                if (inspection.EnglishFormatVersion != 4 || inspection.BaseFormatVersion != 4)
+                    return Value("structural-boundary", "loc1-schema",
+                        $"EN={inspection.EnglishFormatVersion?.ToString(CultureInfo.InvariantCulture) ?? "unreadable"};UK={inspection.BaseFormatVersion?.ToString(CultureInfo.InvariantCulture) ?? "unreadable"}",
+                        "EN=4;UK=4");
+                if (!string.Equals(inspection.EnglishContentGuid, profile.ContentGuid, StringComparison.Ordinal)
+                    || !string.Equals(inspection.BaseContentGuid, profile.ContentGuid, StringComparison.Ordinal))
+                    return Value("structural-boundary", "content-guid",
+                        $"EN={inspection.EnglishContentGuid ?? "unreadable"};UK={inspection.BaseContentGuid ?? "unreadable"}",
+                        $"EN={profile.ContentGuid};UK={profile.ContentGuid}");
+                if (inspection.EnglishLocaleId != profile.EnglishLocaleId
+                    || inspection.BaseLocaleId != profile.BaseLocaleId)
+                    return Value("structural-boundary", "locale-slot",
+                        $"EN={inspection.EnglishLocaleId?.ToString(CultureInfo.InvariantCulture) ?? "unreadable"};UK={inspection.BaseLocaleId?.ToString(CultureInfo.InvariantCulture) ?? "unreadable"}",
+                        $"EN={profile.EnglishLocaleId.ToString(CultureInfo.InvariantCulture)};UK={profile.BaseLocaleId.ToString(CultureInfo.InvariantCulture)}");
+                if (inspection.EntryCount != profile.EntryCount
+                    || (profile.OrderedKeysetSha256 != null
+                        && !Hashing.FixedEqualsHex(inspection.OrderedKeysetSha256 ?? string.Empty, profile.OrderedKeysetSha256)))
+                    return Value("structural-boundary", "ordered-keyset",
+                        $"entries={inspection.EntryCount?.ToString(CultureInfo.InvariantCulture) ?? "unreadable"};sha256={inspection.OrderedKeysetSha256 ?? "unreadable"}",
+                        $"entries={profile.EntryCount.ToString(CultureInfo.InvariantCulture)};sha256={profile.OrderedKeysetSha256 ?? "not-pinned"}");
+                if (!Hashing.FixedEqualsHex(inspection.EnglishSha256 ?? string.Empty, profile.EnglishSha256)
+                    || !string.Equals(inspection.EnglishContentVersion, profile.EnglishContentVersion, StringComparison.Ordinal)
+                    || inspection.EnglishLocaleRevision != profile.EnglishLocaleRevision
+                    || inspection.EnglishReleaseRevision != profile.EnglishReleaseRevision)
+                    return Value("translation-data", "english-source",
+                        FormatObservedCorpus(inspection.EnglishContentVersion, inspection.EnglishReleaseRevision,
+                            inspection.EnglishLocaleRevision, inspection.EnglishSha256),
+                        FormatExpectedCorpus(profile.EnglishContentVersion, profile.EnglishReleaseRevision,
+                            profile.EnglishLocaleRevision, profile.EnglishSha256));
+                if (!Hashing.FixedEqualsHex(inspection.BaseSha256 ?? string.Empty, profile.BaseSha256)
+                    || !string.Equals(inspection.BaseContentVersion, profile.BaseContentVersion, StringComparison.Ordinal)
+                    || inspection.BaseLocaleRevision != profile.BaseLocaleRevision
+                    || inspection.BaseReleaseRevision != profile.BaseReleaseRevision)
+                    return Value("translation-data", "ukrainian-base",
+                        FormatObservedCorpus(inspection.BaseContentVersion, inspection.BaseReleaseRevision,
+                            inspection.BaseLocaleRevision, inspection.BaseSha256),
+                        FormatExpectedCorpus(profile.BaseContentVersion, profile.BaseReleaseRevision,
+                            profile.BaseLocaleRevision, profile.BaseSha256));
+                if (!Hashing.FixedEqualsHex(inspection.StampSha256 ?? string.Empty, profile.StampSha256)
+                    || !string.Equals(inspection.StampValue, profile.StampValue, StringComparison.Ordinal))
+                    return Value("translation-data", "version-stamp",
+                        $"value={inspection.StampValue ?? "unreadable"};sha256={inspection.StampSha256 ?? "unreadable"}",
+                        $"value={profile.StampValue};sha256={profile.StampSha256}");
+            }
+
+            if (inspection.Status == InstallationStatus.InconsistentState)
+                return Value(
+                    "local-state",
+                    "patch-state",
+                    inspection.BaseSha256 ?? "unreadable",
+                    inspection.State?.PatchedSha256 ?? profile.ExpectedOutputSha256);
+
+            if (!catalog.ExactMatch)
+                return Value("translation-data", "catalog-sha256", catalog.Sha256 ?? "missing",
+                    profile.TranslationCatalogSha256);
+            if (inspection.Status == InstallationStatus.PatchSupersededByCatalogUpdate)
+                return Value("translation-data", "catalog-sha256",
+                    inspection.State?.TranslationsSha256, profile.TranslationCatalogSha256);
+            if (inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate)
+                return Value("translation-data", "official-base-refresh",
+                    inspection.BaseSha256, inspection.State?.PatchedSha256);
+            if (profile.Mode == CompatibleRevisionProfileBuilder.Mode
+                && profile.ExpectedEnglishFallbacks > 0)
+            {
+                int sourceRows = checked(profile.ExpectedAppliedTranslations + profile.ExpectedEnglishFallbacks);
+                return Value(profile.ExpectedAppliedTranslations > 0 ? "compatible-coverage" : "translation-data",
+                    "source-hint-coverage",
+                    $"{profile.ExpectedAppliedTranslations.ToString(CultureInfo.InvariantCulture)}/{sourceRows.ToString(CultureInfo.InvariantCulture)}",
+                    $"{sourceRows.ToString(CultureInfo.InvariantCulture)}/{sourceRows.ToString(CultureInfo.InvariantCulture)}");
+            }
+
+            return Value("none", "none", null, null);
+        }
+
+        private static string FormatObservedCorpus(
+            string? content,
+            uint? release,
+            uint? localeRevision,
+            string? sha256)
+        {
+            return $"content={content ?? "unreadable"};release={release?.ToString(CultureInfo.InvariantCulture) ?? "unreadable"};locale_revision={localeRevision?.ToString("X8", CultureInfo.InvariantCulture) ?? "unreadable"};sha256={sha256 ?? "unreadable"}";
+        }
+
+        private static string FormatExpectedCorpus(
+            string content,
+            uint release,
+            uint localeRevision,
+            string sha256)
+        {
+            return $"content={content};release={release.ToString(CultureInfo.InvariantCulture)};locale_revision={localeRevision.ToString("X8", CultureInfo.InvariantCulture)};sha256={sha256}";
+        }
+
         private static string GetPatcherVersion()
         {
             Version? version = typeof(Program).Assembly.GetName().Version;
@@ -917,12 +1121,15 @@ namespace InvokersRu.Cli
             bool remoteApplyAuthorized,
             bool restorationAuthorized)
         {
+            if (status is InstallationStatus.UnknownBuild or InstallationStatus.InconsistentState
+                or InstallationStatus.MissingFiles)
+                return "REFUSE_UNKNOWN_OR_INCONSISTENT";
             bool installable = translationUpdateAvailable
                 || status is InstallationStatus.CompatibleOriginal
                     or InstallationStatus.PatchSupersededByOfficialUpdate
                     or InstallationStatus.PatchSupersededByCatalogUpdate;
-            bool restorationOnly = status is InstallationStatus.PatchedByThisTool
-                or InstallationStatus.RecoveryRequired;
+            bool restorationOnly = !translationUpdateAvailable
+                && status is InstallationStatus.PatchedByThisTool or InstallationStatus.RecoveryRequired;
             if ((!remoteApplyAuthorized && !restorationOnly)
                 || (!restorationAuthorized && restorationOnly))
                 return "REFUSE_PATCHER_OR_SIGNED_DATA_NOT_CURRENT";
@@ -964,7 +1171,7 @@ namespace InvokersRu.Cli
                 if (!RuntimeUpdateAuthorization.CanUseSelectedCatalogForApply(selectedCatalog.ExactMatch))
                 {
                     throw new InvalidDataException(
-                        "The selected translation catalog is missing or does not match the selected exact profile.");
+                        "The selected translation catalog is missing or does not match the selected profile.");
                 }
                 bool includeDraft = options.Has("include-draft");
                 if (profile.TranslationPolicy == "supervised-safe-drafts" && !includeDraft)
@@ -980,6 +1187,17 @@ namespace InvokersRu.Cli
                 PatchApplyResult? result = null;
                 void InstallAndVerify()
                 {
+                    if (resolution.EquivalentCatalogMetadataUpdate)
+                    {
+                        RuntimeCacheInspection installed = resolution.InstalledInspection
+                            ?? throw new InvalidDataException("Equivalent catalog metadata update has no authenticated installed inspection.");
+                        result = RuntimeCacheService.RebindEquivalentCatalogState(
+                            installed,
+                            profile,
+                            resolution.CatalogPath,
+                            RuntimeCacheService.DefaultStatePath());
+                        return;
+                    }
                     RuntimeCacheInspection applyInspection = resolution.Inspection;
                     if (resolution.TranslationUpdateAvailable
                         && applyInspection.Status != InstallationStatus.PatchSupersededByCatalogUpdate)
@@ -1048,7 +1266,8 @@ namespace InvokersRu.Cli
                     embeddedProfile,
                     embeddedCatalogPath,
                     coordinator: null,
-                    remoteProblem: exception.Message);
+                    remoteProblem: exception.Message,
+                    remoteProblemBlocksApply: true);
             }
             catch
             {
@@ -1204,7 +1423,15 @@ namespace InvokersRu.Cli
         private static SignedUpdateChannelConfig? TryLoadSignedUpdateChannelConfig()
         {
             using Stream? stream = typeof(Program).Assembly.GetManifestResourceStream(SignedUpdateChannelResource);
-            if (stream == null) return null;
+            if (stream == null)
+            {
+                if (InstallationWritesEnabled)
+                {
+                    throw new InvalidOperationException(
+                        "The write-enabled binary has no embedded signed update-channel authority configuration.");
+                }
+                return null;
+            }
             using var memory = new MemoryStream();
             stream.CopyTo(memory);
             return SignedUpdateChannelConfig.Parse(memory.ToArray());

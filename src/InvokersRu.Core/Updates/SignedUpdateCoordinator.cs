@@ -226,6 +226,26 @@ namespace InvokersRu.Core.Updates
         }
 
         /// <summary>
+        /// Resolves a catalog only when its content-addressed cache entry still matches an independently
+        /// verified manifest. This is used to reconstruct exact compatible-revision restore/recovery pins.
+        /// </summary>
+        public bool TryGetVerifiedCatalogPath(VerifiedSignedUpdate update, out string catalogPath)
+        {
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(update);
+            try
+            {
+                catalogPath = _cacheStore.RequireCatalog(update);
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException or InvalidDataException)
+            {
+                catalogPath = string.Empty;
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Called only after the exact catalog/profile has been installed and post-commit verified.
         /// The state store rechecks the manifest identity under its own lock.
         /// </summary>

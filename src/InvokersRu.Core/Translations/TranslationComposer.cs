@@ -11,6 +11,7 @@ namespace InvokersRu.Core.Translations
         public int BaseFallbacks { get; set; }
         public int MissingCatalogRecords { get; set; }
         public int StaleCatalogRecords { get; set; }
+        public int StaleHintRecords { get; set; }
         public int RejectedCatalogRecords { get; set; }
         public int NeedsReviewFallbacks { get; set; }
         public int PolicyFallbacks { get; set; }
@@ -26,7 +27,8 @@ namespace InvokersRu.Core.Translations
             bool approvedOnly = false,
             bool excludeNeedsReview = false,
             bool allowPerLocaleContentVersion = false,
-            Func<TranslationRecord, string, bool>? eligibility = null)
+            Func<TranslationRecord, string, bool>? eligibility = null,
+            bool requireExactHint = false)
         {
             Loc1Compatibility.RequireComposableCorpus(english, baseLocale, allowPerLocaleContentVersion);
 
@@ -34,6 +36,13 @@ namespace InvokersRu.Core.Translations
             var summary = new CompositionSummary();
             foreach (Loc1Entry target in baseLocale.Entries)
             {
+                if (requireExactHint && target.Value == null)
+                {
+                    // The conservative LOC1 writer never fills an official null sentinel.
+                    summary.BaseFallbacks++;
+                    continue;
+                }
+
                 if (!englishByHash.TryGetValue(target.KeyHash, out Loc1Entry? source) || source.Value == null)
                 {
                     summary.BaseFallbacks++;
@@ -42,6 +51,17 @@ namespace InvokersRu.Core.Translations
 
                 if (catalog.TryGetUsable(target.KeyHash, source.Value, includeDraft, out TranslationRecord? record, out string reason, approvedOnly))
                 {
+                    if (requireExactHint
+                        && (record!.HintSha256 == null
+                            || target.Value == null
+                            || !Hashing.FixedEqualsHex(record.HintSha256, Hashing.Sha256Text(target.Value))))
+                    {
+                        summary.StaleHintRecords++;
+                        target.Value = source.Value;
+                        summary.EnglishFallbacks++;
+                        continue;
+                    }
+
                     if (excludeNeedsReview && record!.NeedsReview)
                     {
                         summary.NeedsReviewFallbacks++;

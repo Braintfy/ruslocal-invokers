@@ -1,6 +1,7 @@
 using InvokersRu.Core;
 using InvokersRu.Core.Loc1;
 using InvokersRu.Core.Patching;
+using InvokersRu.Core.Translations;
 using InvokersRu.Core.Updates;
 using InvokersRu.Cli;
 using System;
@@ -57,6 +58,7 @@ namespace InvokersRu.SmokeTests
             byte[] publicKey = signingKey.ExportSubjectPublicKeyInfo();
 
             ChannelConfigIsStrict(publicKey);
+            ConfiguredEmptyChannelRejectsForeignJournal(publicKey);
             CacheAcceptsExactBrotli(signingKey, publicKey);
             CacheRejectsInvalidBrotliAndPins(signingKey, publicKey);
             RefreshPromotesOnlyVerifiedContent(signingKey, publicKey);
@@ -65,7 +67,430 @@ namespace InvokersRu.SmokeTests
             TooOldHeadRemainsAuthoritativeOverLastKnownGood(signingKey, publicKey);
             TooOldHeadWithoutLastKnownGoodRemainsVisible(signingKey, publicKey);
             RollbackEquivocationAndExpiryAreNotPromoted(signingKey, publicKey);
+            CompatiblePolicyRepublishRestartAndRecovery(signingKey, publicKey);
             HistoricalCatalogUpgradeRecoveryResolvesFutureSignedProfile(signingKey, publicKey);
+        }
+
+        private static void CompatiblePolicyRepublishRestartAndRecovery(ECDsa key, byte[] publicKey)
+        {
+            WithTempRoot("compatible-policy-republish", root =>
+            {
+                const string gameVersion = "0.61.policy-republish";
+                string cacheRoot = Path.Combine(root, "runtime-cache");
+                string statePath = Path.Combine(root, "patch-state", "state.v1.json");
+                string catalogPath = Path.Combine(root, "embedded.jsonl");
+                Directory.CreateDirectory(cacheRoot);
+                Directory.CreateDirectory(Path.GetDirectoryName(statePath)!);
+                (string englishPath, string targetPath, string stampPath) = RuntimeCacheService.ResolveTuplePaths(cacheRoot);
+                byte[] englishRaw = FixtureFreeRuntimeCacheSmokeTests.CreateLoc1(
+                    1, 169, 0x1234ABCD, new[] { "Open", "Exit", "Claim" }, "Prod_policy_republish_169");
+                byte[] baseRaw = FixtureFreeRuntimeCacheSmokeTests.CreateLoc1(
+                    8, 169, 0xD7A0FEFB, new[] { "Відкрити", "Вийти", "Забрати" }, "Prod_policy_republish_169");
+                byte[] stampRaw = Encoding.UTF8.GetBytes(gameVersion);
+                File.WriteAllBytes(englishPath, englishRaw);
+                File.WriteAllBytes(targetPath, baseRaw);
+                File.WriteAllBytes(stampPath, stampRaw);
+                Loc1Document english = Loc1Codec.Parse(englishRaw);
+                Loc1Document baseLocale = Loc1Codec.Parse(baseRaw);
+                TranslationRecord Record(int index, string translation) => new TranslationRecord
+                {
+                    Id = english.Entries[index].Id,
+                    SourceSha256 = Hashing.Sha256Text(english.Entries[index].Value!),
+                    HintSha256 = Hashing.Sha256Text(baseLocale.Entries[index].Value!),
+                    Translation = translation,
+                    Status = index == 0 ? "draft" : "approved",
+                    Model = index == 0 ? "gpt-5.6-terra" : "policy-republish-smoke",
+                    PromptVersion = index == 0 ? "ru-runtime-v1" : "compatible-v1",
+                    Confidence = "high",
+                    NeedsReview = index == 2,
+                    IssueCodes = Array.Empty<string>(),
+                    RiskFlags = TranslationValidator.ClassifyRisks(english.Entries[index].Value!).ToArray(),
+                    ReviewStage = index == 0 ? "terra_done" : "synthetic",
+                    ReviewerIds = index == 0 ? Array.Empty<string>() : new[] { "fixture" },
+                    ReviewedAt = index == 0 ? null : InitialNow,
+                    ReviewRevision = index == 0 ? null : "policy-republish-v1",
+                    ScreenshotQa = true,
+                    LegalApproved = true,
+                    UpdatedAt = InitialNow
+                };
+                TranslationCatalog.WriteJsonLines(catalogPath, new[]
+                {
+                    Record(0, "Open"),
+                    Record(1, "Exit"),
+                    Record(2, "Claim")
+                });
+                byte[] catalog = File.ReadAllBytes(catalogPath);
+                byte[] compressed = CompressBrotli(catalog);
+                var family = new RuntimeCacheCompatibility
+                {
+                    Id = "trusted-policy-republish-family",
+                    GameVersion = "0.60.synthetic",
+                    ContentGuid = english.ContentGuid,
+                    EnglishContentVersion = "Prod_old_family",
+                    BaseContentVersion = "Prod_old_family",
+                    EnglishSha256 = new string('1', 64),
+                    BaseSha256 = new string('2', 64),
+                    StampSha256 = new string('3', 64),
+                    StampValue = "0.60.synthetic",
+                    EnglishLocaleId = 1,
+                    EnglishLocaleRevision = 1,
+                    EnglishReleaseRevision = 1,
+                    BaseLocaleId = 8,
+                    BaseLocaleRevision = 2,
+                    BaseReleaseRevision = 1,
+                    EntryCount = 1,
+                    MinimumAppliedTranslations = 1,
+                    Readiness = "blocked",
+                    Certified = false,
+                    TranslationCatalogSha256 = Hash(catalog),
+                    TranslationPolicy = "supervised-safe-drafts"
+                };
+                family.Validate();
+                CompatibleRevisionProfileBuild installedBuild = CompatibleRevisionProfileBuilder.Build(
+                    englishPath,
+                    targetPath,
+                    stampPath,
+                    family,
+                    catalog,
+                    Hash(catalog),
+                    "supervised-safe-drafts");
+                CompatibleRevisionProfileBuild releasePolicyBuild = CompatibleRevisionProfileBuilder.Build(
+                    englishPath,
+                    targetPath,
+                    stampPath,
+                    family,
+                    catalog,
+                    Hash(catalog),
+                    "release-approved");
+                Require(installedBuild.Composition.AppliedTranslations == releasePolicyBuild.Composition.AppliedTranslations
+                    && installedBuild.Profile.ExpectedOutputSha256 == releasePolicyBuild.Profile.ExpectedOutputSha256
+                    && installedBuild.Composition.NeedsReviewFallbacks == 1
+                    && installedBuild.Composition.PolicyFallbacks == 1
+                    && releasePolicyBuild.Composition.RejectedCatalogRecords == 1
+                    && releasePolicyBuild.Composition.PolicyFallbacks == 1,
+                    $"Policy-republish fixture does not preserve one schema-1 artifact while changing unpersisted fallback classification: "
+                    + $"supervised applied={installedBuild.Composition.AppliedTranslations}, needs-review={installedBuild.Composition.NeedsReviewFallbacks}, rejected={installedBuild.Composition.RejectedCatalogRecords}, policy={installedBuild.Composition.PolicyFallbacks}, output={installedBuild.Profile.ExpectedOutputSha256}; "
+                    + $"release applied={releasePolicyBuild.Composition.AppliedTranslations}, rejected={releasePolicyBuild.Composition.RejectedCatalogRecords}, policy={releasePolicyBuild.Composition.PolicyFallbacks}, output={releasePolicyBuild.Profile.ExpectedOutputSha256}.");
+                Loc1Document projected = Loc1Codec.Parse(baseRaw);
+                CompositionSummary projectedSummary = TranslationComposer.Apply(
+                    Loc1Codec.Parse(englishRaw),
+                    projected,
+                    TranslationCatalog.LoadJsonLines(catalogPath),
+                    includeDraft: true,
+                    excludeNeedsReview: true,
+                    allowPerLocaleContentVersion: true,
+                    eligibility: (record, source) => RuntimeSafeDraftPolicy.IsEligible(record, source, out _),
+                    requireExactHint: true);
+                byte[] patchedRaw = Loc1Codec.BuildRaw(projected);
+                Require(projectedSummary.AppliedTranslations == installedBuild.Profile.ExpectedAppliedTranslations
+                    && Hash(patchedRaw) == installedBuild.Profile.ExpectedOutputSha256,
+                    "Policy-republish setup did not materialize the installed adaptive artifact exactly.");
+
+                SignedFixture historicalRelease = SignFixture(
+                    key,
+                    publicKey,
+                    CreateManifest(69, "invokersru-data-policy-preview", compressed, catalog, 3,
+                        translationPolicy: "validated-preview-v1"),
+                    InitialNow);
+                SignedFixture currentPreview = SignFixture(
+                    key,
+                    publicKey,
+                    CreateManifest(70, "invokersru-data-policy-release", compressed, catalog, 3,
+                        translationPolicy: "release-approved-v1"),
+                    InitialNow);
+                SignedUpdateChannelConfig config = SignedUpdateChannelConfig.Parse(CreateChannelConfig(publicKey));
+                SignedUpdateStateStore stateStore = CreateStateStore(Path.Combine(root, "update-state"), () => InitialNow);
+                var cacheStore = new SignedUpdateCacheStore(Path.Combine(root, "update-cache"));
+                cacheStore.StoreEnvelope(historicalRelease.EnvelopeUtf8, historicalRelease.Update);
+                cacheStore.StoreCatalog(compressed, historicalRelease.Update);
+                cacheStore.StoreEnvelope(currentPreview.EnvelopeUtf8, currentPreview.Update);
+                cacheStore.StoreCatalog(compressed, currentPreview.Update);
+                stateStore.RecordAcceptedManifest(currentPreview.Update);
+                using var httpClient = new SignedUpdateHttpClient(new QueueHttpMessageHandler());
+                using var coordinator = new SignedUpdateCoordinator(
+                    config, "3.1.0", stateStore, cacheStore, httpClient, () => InitialNow);
+
+                string legacyCacheRoot = Path.Combine(root, "legacy-exact-updated-cache");
+                string legacyStatePath = Path.Combine(root, "legacy-exact-state", "state.v1.json");
+                Directory.CreateDirectory(legacyCacheRoot);
+                Directory.CreateDirectory(Path.GetDirectoryName(legacyStatePath)!);
+                (string legacyLiveEnglish, string legacyLiveTarget, string legacyLiveStamp) =
+                    RuntimeCacheService.ResolveTuplePaths(legacyCacheRoot);
+                File.WriteAllBytes(legacyLiveEnglish, englishRaw);
+                File.WriteAllBytes(legacyLiveTarget, baseRaw);
+                File.WriteAllBytes(legacyLiveStamp, stampRaw);
+                byte[] oldEnglishRaw = FixtureFreeRuntimeCacheSmokeTests.CreateLoc1(
+                    1, 168, 0x01020304, new[] { "Open", "Exit" }, "Prod_policy_republish_168");
+                byte[] oldBaseRaw = FixtureFreeRuntimeCacheSmokeTests.CreateLoc1(
+                    8, 168, 0x05060708, new[] { "Відкрити", "Вийти" }, "Prod_policy_republish_168");
+                byte[] oldStampRaw = Encoding.UTF8.GetBytes("0.60.policy-republish");
+                Loc1Document oldProjected = Loc1Codec.Parse(oldBaseRaw);
+                CompositionSummary oldComposition = TranslationComposer.Apply(
+                    Loc1Codec.Parse(oldEnglishRaw),
+                    oldProjected,
+                    TranslationCatalog.LoadJsonLines(catalogPath),
+                    includeDraft: true,
+                    allowPerLocaleContentVersion: true,
+                    requireExactHint: true);
+                byte[] oldPatchedRaw = Loc1Codec.BuildRaw(oldProjected);
+                Loc1Document oldEnglish = Loc1Codec.Parse(oldEnglishRaw);
+                Loc1Document oldBase = Loc1Codec.Parse(oldBaseRaw);
+                var legacyExact = new RuntimeCacheCompatibility
+                {
+                    Id = "legacy-exact-before-adaptive",
+                    Mode = "exact",
+                    GameVersion = "0.60.policy-republish",
+                    ContentGuid = oldEnglish.ContentGuid,
+                    EnglishContentVersion = oldEnglish.ContentVersion,
+                    BaseContentVersion = oldBase.ContentVersion,
+                    EnglishSha256 = Hash(oldEnglishRaw),
+                    BaseSha256 = Hash(oldBaseRaw),
+                    StampSha256 = Hash(oldStampRaw),
+                    StampValue = "0.60.policy-republish",
+                    EnglishLocaleId = oldEnglish.LocaleId,
+                    EnglishLocaleRevision = oldEnglish.LocaleRevision,
+                    EnglishReleaseRevision = oldEnglish.ReleaseRevision,
+                    BaseLocaleId = oldBase.LocaleId,
+                    BaseLocaleRevision = oldBase.LocaleRevision,
+                    BaseReleaseRevision = oldBase.ReleaseRevision,
+                    EntryCount = oldBase.Entries.Count,
+                    Readiness = "ready",
+                    Certified = true,
+                    TranslationCatalogSha256 = Hash(catalog),
+                    ExpectedOutputSha256 = Hash(oldPatchedRaw),
+                    MinimumAppliedTranslations = 1,
+                    ExpectedAppliedTranslations = oldComposition.AppliedTranslations,
+                    ExpectedEnglishFallbacks = oldComposition.EnglishFallbacks,
+                    ExpectedBaseFallbacks = oldComposition.BaseFallbacks,
+                    ExpectedNeedsReviewFallbacks = oldComposition.NeedsReviewFallbacks,
+                    TranslationPolicy = "community-preview-all-drafts"
+                };
+                legacyExact.Validate();
+                string legacyBackupPath = Path.Combine(
+                    Path.GetDirectoryName(legacyStatePath)!,
+                    "backups",
+                    $"{legacyExact.Id}-{Hashing.Sha256Text(legacyExact.Id).Substring(0, 12)}",
+                    $"{legacyExact.BaseSha256}.dl_uk_UA.bin");
+                Directory.CreateDirectory(Path.GetDirectoryName(legacyBackupPath)!);
+                File.WriteAllBytes(legacyBackupPath, oldBaseRaw);
+                File.WriteAllText(legacyStatePath, JsonSerializer.Serialize(new PatchState
+                {
+                    BuildId = legacyExact.Id,
+                    GameRoot = Path.GetFullPath(legacyCacheRoot),
+                    TargetPath = Path.GetFullPath(legacyLiveTarget),
+                    BackupPath = Path.GetFullPath(legacyBackupPath),
+                    OriginalSha256 = legacyExact.BaseSha256,
+                    PatchedSha256 = legacyExact.ExpectedOutputSha256!,
+                    TranslationsSha256 = legacyExact.TranslationCatalogSha256!,
+                    AppliedTranslations = legacyExact.ExpectedAppliedTranslations,
+                    AppliedAt = InitialNow
+                }));
+                RuntimeUpdateResolution exactToAdaptive = RuntimeUpdateResolver.Resolve(
+                    legacyCacheRoot, legacyStatePath, legacyExact, catalogPath, coordinator);
+                Require(exactToAdaptive.Profile.Mode == CompatibleRevisionProfileBuilder.Mode
+                    && exactToAdaptive.Inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate
+                    && exactToAdaptive.Inspection.OfficialUpdatePredecessor?.Mode == "exact"
+                    && RuntimeUpdateAuthorization.CanApply(exactToAdaptive, InitialNow),
+                    $"An exact pre-snapshot installed patch could not migrate to a future authenticated adaptive revision: mode={exactToAdaptive.Profile.Mode}, status={exactToAdaptive.Inspection.Status}, predecessor={exactToAdaptive.Inspection.OfficialUpdatePredecessor?.Mode ?? "null"}, source={exactToAdaptive.Source}, problem={exactToAdaptive.RemoteProblem ?? "null"}.");
+
+                string backupPath = Path.Combine(
+                    Path.GetDirectoryName(statePath)!,
+                    "backups",
+                    $"{installedBuild.Profile.Id}-{Hashing.Sha256Text(installedBuild.Profile.Id).Substring(0, 12)}",
+                    $"{installedBuild.Profile.BaseSha256}.dl_uk_UA.bin");
+                Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
+                File.WriteAllBytes(backupPath, baseRaw);
+                (string englishSnapshot, string stampSnapshot) =
+                    RuntimeCacheService.ResolveCompatibleSourceSnapshotPaths(backupPath);
+                File.WriteAllBytes(englishSnapshot, englishRaw);
+                File.WriteAllBytes(stampSnapshot, stampRaw);
+                File.WriteAllBytes(targetPath, patchedRaw);
+
+                PatchState ExactState() => new PatchState
+                {
+                    BuildId = installedBuild.Profile.Id,
+                    GameRoot = Path.GetFullPath(cacheRoot),
+                    TargetPath = Path.GetFullPath(targetPath),
+                    BackupPath = Path.GetFullPath(backupPath),
+                    OriginalSha256 = installedBuild.Profile.BaseSha256,
+                    PatchedSha256 = installedBuild.Profile.ExpectedOutputSha256!,
+                    TranslationsSha256 = installedBuild.Profile.TranslationCatalogSha256!,
+                    AppliedTranslations = installedBuild.Profile.ExpectedAppliedTranslations,
+                    AppliedAt = InitialNow
+                };
+                File.WriteAllText(statePath, JsonSerializer.Serialize(ExactState()));
+                RuntimeUpdateResolution restarted = RuntimeUpdateResolver.Resolve(
+                    cacheRoot, statePath, family, catalogPath, coordinator);
+                Require(restarted.Inspection.Status == InstallationStatus.PatchedByThisTool
+                    && restarted.Bundle?.Source == SignedUpdateBundleSource.CachedCurrent
+                    && restarted.Profile.TranslationPolicy == "release-approved"
+                    && restarted.Source == "CachedCurrent",
+                    "Schema-1 state became ambiguous when one catalog/output was authenticated under multiple policies.");
+                Require(RuntimeUpdateAuthorization.CanRestoreOrRecover(restarted),
+                    "Policy-republished adaptive state lost authenticated restore authorization after restart.");
+
+                foreach ((string Phase, bool Replaced, bool StateCommitted, string Id) scenario in new[]
+                {
+                    ("Prepared", false, false, "61616161616161616161616161616161"),
+                    ("ReplacementCommitted", true, false, "62626262626262626262626262626262"),
+                    ("PostCommitVerified", true, false, "63636363636363636363636363636363"),
+                    ("StateCommitted", true, true, "64646464646464646464646464646464")
+                })
+                {
+                    File.WriteAllBytes(targetPath, scenario.Replaced ? baseRaw : patchedRaw);
+                    if (scenario.StateCommitted)
+                        File.Delete(statePath);
+                    else
+                        File.WriteAllText(statePath, JsonSerializer.Serialize(ExactState()));
+                    string quarantinePath = Path.Combine(cacheRoot, $".dl_uk_UA.bin.{scenario.Id}.displaced");
+                    if (scenario.Replaced) File.WriteAllBytes(quarantinePath, patchedRaw);
+                    var journal = new PatchJournal
+                    {
+                        TransactionId = scenario.Id,
+                        Operation = "runtime-cache-restore",
+                        Phase = scenario.Phase,
+                        BuildId = installedBuild.Profile.Id,
+                        GameRoot = Path.GetFullPath(cacheRoot),
+                        TargetPath = Path.GetFullPath(targetPath),
+                        BackupPath = Path.GetFullPath(backupPath),
+                        QuarantinePath = quarantinePath,
+                        RollbackPath = Path.Combine(cacheRoot, $".dl_uk_UA.bin.{scenario.Id}.rollback"),
+                        DisplacedSha256 = scenario.Phase is "PostCommitVerified" or "StateCommitted"
+                            ? installedBuild.Profile.ExpectedOutputSha256
+                            : null,
+                        SourceSha256 = installedBuild.Profile.ExpectedOutputSha256!,
+                        ExpectedOutputSha256 = installedBuild.Profile.BaseSha256,
+                        TranslationsSha256 = installedBuild.Profile.TranslationCatalogSha256!,
+                        AppliedTranslations = installedBuild.Profile.ExpectedAppliedTranslations,
+                        CreatedAt = InitialNow
+                    };
+                    PatchJournalStore.Save(statePath, journal);
+                    RuntimeUpdateResolution recovery = RuntimeUpdateResolver.Resolve(
+                        cacheRoot, statePath, family, catalogPath, coordinator);
+                    Require(recovery.InstalledInspection?.Status == InstallationStatus.RecoveryRequired
+                        && recovery.Bundle?.Source == SignedUpdateBundleSource.CachedCurrent
+                        && RuntimeUpdateAuthorization.CanRestoreOrRecover(recovery),
+                        $"Policy-republished adaptive journal became ambiguous at {scenario.Phase}.");
+                    PatchJournalStore.Delete(statePath, scenario.Id);
+                    if (File.Exists(quarantinePath)) File.Delete(quarantinePath);
+                }
+
+                // A newly published exact signed profile must supersede the adaptive selection, but it
+                // must not pre-empt an already active adaptive journal.
+                string exactCatalogPath = Path.Combine(root, "exact-current.jsonl");
+                TranslationCatalog.WriteJsonLines(exactCatalogPath, new[]
+                {
+                    Record(0, "Открыть сейчас"),
+                    Record(1, "Выйти сейчас")
+                });
+                byte[] exactCatalog = File.ReadAllBytes(exactCatalogPath);
+                byte[] exactCompressed = CompressBrotli(exactCatalog);
+                Loc1Document exactProjected = Loc1Codec.Parse(baseRaw);
+                CompositionSummary exactComposition = TranslationComposer.Apply(
+                    Loc1Codec.Parse(englishRaw),
+                    exactProjected,
+                    TranslationCatalog.LoadJsonLines(exactCatalogPath),
+                    includeDraft: true,
+                    allowPerLocaleContentVersion: true,
+                    requireExactHint: true);
+                byte[] exactOutput = Loc1Codec.BuildRaw(exactProjected);
+                var signedExactProfile = new SignedUpdateCompatibilityProfile
+                {
+                    ProfileId = "signed-exact-policy-republish-current",
+                    Mode = "exact",
+                    GameVersion = gameVersion,
+                    StampSha256 = Hash(stampRaw),
+                    StampValue = gameVersion,
+                    ContentGuid = english.ContentGuid,
+                    Loc1Schema = 4,
+                    OrderedKeysetSha256 = SignedUpdateRuntimeProfileAdapter.ComputeOrderedKeysetSha256(baseLocale),
+                    English = new SignedUpdateCorpusIdentity
+                    {
+                        Sha256 = Hash(englishRaw),
+                        ContentVersion = english.ContentVersion,
+                        LocaleId = english.LocaleId,
+                        LocaleRevisionHex = english.LocaleRevision.ToString("X8"),
+                        ReleaseRevision = english.ReleaseRevision,
+                        EntryCount = english.Entries.Count
+                    },
+                    Base = new SignedUpdateCorpusIdentity
+                    {
+                        Sha256 = Hash(baseRaw),
+                        ContentVersion = baseLocale.ContentVersion,
+                        LocaleId = baseLocale.LocaleId,
+                        LocaleRevisionHex = baseLocale.LocaleRevision.ToString("X8"),
+                        ReleaseRevision = baseLocale.ReleaseRevision,
+                        EntryCount = baseLocale.Entries.Count
+                    },
+                    Composition = new SignedUpdateComposition
+                    {
+                        AppliedRu = exactComposition.AppliedTranslations,
+                        EnglishFallback = exactComposition.EnglishFallbacks,
+                        BaseFallback = exactComposition.BaseFallbacks,
+                        MissingCatalog = exactComposition.MissingCatalogRecords,
+                        StaleCatalog = exactComposition.StaleCatalogRecords,
+                        RejectedCatalog = exactComposition.RejectedCatalogRecords,
+                        NeedsReviewFallback = exactComposition.NeedsReviewFallbacks,
+                        PolicyFallback = exactComposition.PolicyFallbacks,
+                        ValidationErrors = 0,
+                        ValidationWarnings = 0,
+                        OutputRawSha256 = Hash(exactOutput)
+                    }
+                };
+                SignedFixture exactHead = SignFixture(
+                    key,
+                    publicKey,
+                    CreateManifest(
+                        71,
+                        "invokersru-data-policy-exact-current",
+                        exactCompressed,
+                        exactCatalog,
+                        2,
+                        compatibility: new[] { signedExactProfile }),
+                    InitialNow);
+                cacheStore.StoreEnvelope(exactHead.EnvelopeUtf8, exactHead.Update);
+                cacheStore.StoreCatalog(exactCompressed, exactHead.Update);
+                stateStore.RecordAcceptedManifest(exactHead.Update);
+
+                File.WriteAllBytes(targetPath, patchedRaw);
+                File.WriteAllText(statePath, JsonSerializer.Serialize(ExactState()));
+                const string precedenceId = "71717171717171717171717171717171";
+                PatchJournalStore.Save(statePath, new PatchJournal
+                {
+                    TransactionId = precedenceId,
+                    Operation = "runtime-cache-restore",
+                    Phase = "Prepared",
+                    BuildId = installedBuild.Profile.Id,
+                    GameRoot = Path.GetFullPath(cacheRoot),
+                    TargetPath = Path.GetFullPath(targetPath),
+                    BackupPath = Path.GetFullPath(backupPath),
+                    QuarantinePath = Path.Combine(cacheRoot, $".dl_uk_UA.bin.{precedenceId}.displaced"),
+                    RollbackPath = Path.Combine(cacheRoot, $".dl_uk_UA.bin.{precedenceId}.rollback"),
+                    SourceSha256 = installedBuild.Profile.ExpectedOutputSha256!,
+                    ExpectedOutputSha256 = installedBuild.Profile.BaseSha256,
+                    TranslationsSha256 = installedBuild.Profile.TranslationCatalogSha256!,
+                    AppliedTranslations = installedBuild.Profile.ExpectedAppliedTranslations,
+                    CreatedAt = InitialNow
+                });
+                RuntimeUpdateResolution journalPrecedence = RuntimeUpdateResolver.Resolve(
+                    cacheRoot, statePath, family, catalogPath, coordinator);
+                Require(journalPrecedence.InstalledInspection?.Status == InstallationStatus.RecoveryRequired
+                    && journalPrecedence.Profile.Mode == CompatibleRevisionProfileBuilder.Mode
+                    && RuntimeUpdateAuthorization.CanRestoreOrRecover(journalPrecedence),
+                    "A newly published signed exact profile pre-empted an active adaptive recovery journal.");
+                PatchJournalStore.Delete(statePath, precedenceId);
+
+                RuntimeUpdateResolution exactMigration = RuntimeUpdateResolver.Resolve(
+                    cacheRoot, statePath, family, catalogPath, coordinator);
+                Require(exactMigration.Profile.Mode == "exact"
+                    && exactMigration.Profile.Id == signedExactProfile.ProfileId
+                    && exactMigration.InstalledProfile?.Mode == CompatibleRevisionProfileBuilder.Mode
+                    && exactMigration.Inspection.Status == InstallationStatus.PatchedByThisTool
+                    && exactMigration.TranslationUpdateAvailable
+                    && RuntimeUpdateAuthorization.CanApply(exactMigration, InitialNow),
+                    "A newly published signed exact profile did not supersede an installed adaptive artifact safely.");
+            });
+            Pass();
         }
 
         private static void ChannelConfigIsStrict(byte[] publicKey)
@@ -592,6 +1017,123 @@ namespace InvokersRu.SmokeTests
             Pass();
         }
 
+        private static void ConfiguredEmptyChannelRejectsForeignJournal(byte[] publicKey)
+        {
+            WithTempRoot("configured-empty-foreign-journal", root =>
+            {
+                string cacheRoot = Path.Combine(root, "runtime-cache");
+                string statePath = Path.Combine(root, "patch-state", "state.v1.json");
+                string catalogPath = Path.Combine(root, "embedded.jsonl");
+                Directory.CreateDirectory(cacheRoot);
+                Directory.CreateDirectory(Path.GetDirectoryName(statePath)!);
+                (string englishPath, string targetPath, string stampPath) = RuntimeCacheService.ResolveTuplePaths(cacheRoot);
+                byte[] englishRaw = FixtureFreeRuntimeCacheSmokeTests.CreateLoc1(
+                    1, 169, 0x1234ABCD, new[] { "Open" }, "Prod_configured_empty_169");
+                byte[] baseRaw = FixtureFreeRuntimeCacheSmokeTests.CreateLoc1(
+                    8, 169, 0xD7A0FEFB, new[] { "Відкрити" }, "Prod_configured_empty_169");
+                byte[] stampRaw = Encoding.UTF8.GetBytes("0.61.configured-empty");
+                File.WriteAllBytes(englishPath, englishRaw);
+                File.WriteAllBytes(targetPath, baseRaw);
+                File.WriteAllBytes(stampPath, stampRaw);
+                Loc1Document english = Loc1Codec.Parse(englishRaw);
+                Loc1Document baseLocale = Loc1Codec.Parse(baseRaw);
+                TranslationCatalog.WriteJsonLines(catalogPath, new[]
+                {
+                    new TranslationRecord
+                    {
+                        Id = english.Entries[0].Id,
+                        SourceSha256 = Hashing.Sha256Text(english.Entries[0].Value!),
+                        HintSha256 = Hashing.Sha256Text(baseLocale.Entries[0].Value!),
+                        Translation = "Открыть",
+                        Status = "draft",
+                        Model = "configured-empty-smoke",
+                        PromptVersion = "compatible-v1",
+                        Confidence = "high",
+                        NeedsReview = false,
+                        RiskFlags = Array.Empty<string>(),
+                        ReviewStage = "synthetic",
+                        UpdatedAt = InitialNow
+                    }
+                });
+                byte[] catalog = File.ReadAllBytes(catalogPath);
+                var family = new RuntimeCacheCompatibility
+                {
+                    Id = "configured-empty-trusted-family",
+                    GameVersion = "0.60.synthetic",
+                    ContentGuid = english.ContentGuid,
+                    EnglishContentVersion = "Prod_old_family",
+                    BaseContentVersion = "Prod_old_family",
+                    EnglishSha256 = new string('1', 64),
+                    BaseSha256 = new string('2', 64),
+                    StampSha256 = new string('3', 64),
+                    StampValue = "0.60.synthetic",
+                    EnglishLocaleId = 1,
+                    EnglishLocaleRevision = 1,
+                    EnglishReleaseRevision = 1,
+                    BaseLocaleId = 8,
+                    BaseLocaleRevision = 2,
+                    BaseReleaseRevision = 1,
+                    EntryCount = 1,
+                    MinimumAppliedTranslations = 1,
+                    Readiness = "blocked",
+                    Certified = false,
+                    TranslationPolicy = "community-preview-all-drafts"
+                };
+                family.Validate();
+                CompatibleRevisionProfileBuild embeddedBuild = CompatibleRevisionProfileBuilder.Build(
+                    englishPath,
+                    targetPath,
+                    stampPath,
+                    family,
+                    catalog,
+                    Hash(catalog),
+                    "community-preview-all-drafts");
+
+                const string foreignId = "foreign-compatible-profile";
+                string backupPath = Path.Combine(
+                    Path.GetDirectoryName(statePath)!,
+                    "backups",
+                    $"{foreignId}-{Hashing.Sha256Text(foreignId).Substring(0, 12)}",
+                    $"{embeddedBuild.Profile.BaseSha256}.dl_uk_UA.bin");
+                Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
+                File.WriteAllBytes(backupPath, baseRaw);
+                const string transactionId = "50505050505050505050505050505050";
+                PatchJournalStore.Save(statePath, new PatchJournal
+                {
+                    TransactionId = transactionId,
+                    Operation = "runtime-cache-apply",
+                    Phase = "Prepared",
+                    BuildId = foreignId,
+                    GameRoot = Path.GetFullPath(cacheRoot),
+                    TargetPath = Path.GetFullPath(targetPath),
+                    BackupPath = Path.GetFullPath(backupPath),
+                    QuarantinePath = Path.Combine(cacheRoot, $".dl_uk_UA.bin.{transactionId}.displaced"),
+                    RollbackPath = Path.Combine(cacheRoot, $".dl_uk_UA.bin.{transactionId}.rollback"),
+                    SourceSha256 = embeddedBuild.Profile.BaseSha256,
+                    ExpectedOutputSha256 = embeddedBuild.Profile.ExpectedOutputSha256!,
+                    TranslationsSha256 = embeddedBuild.Profile.TranslationCatalogSha256!,
+                    AppliedTranslations = embeddedBuild.Profile.ExpectedAppliedTranslations,
+                    CreatedAt = InitialNow
+                });
+
+                SignedUpdateChannelConfig config = SignedUpdateChannelConfig.Parse(CreateChannelConfig(publicKey));
+                SignedUpdateStateStore stateStore = CreateStateStore(Path.Combine(root, "update-state"), () => InitialNow);
+                var cacheStore = new SignedUpdateCacheStore(Path.Combine(root, "update-cache"));
+                using var httpClient = new SignedUpdateHttpClient(new QueueHttpMessageHandler());
+                using var coordinator = new SignedUpdateCoordinator(
+                    config, "3.1.0", stateStore, cacheStore, httpClient, () => InitialNow);
+                RuntimeUpdateResolution resolution = RuntimeUpdateResolver.Resolve(
+                    cacheRoot, statePath, embeddedBuild.Profile, catalogPath, coordinator);
+                Require(resolution.Inspection.Status == InstallationStatus.InconsistentState
+                    && resolution.InstalledInspection == null
+                    && resolution.Bundle == null
+                    && resolution.ChannelAuthority == null
+                    && !RuntimeUpdateAuthorization.CanRestoreOrRecover(resolution),
+                    "A configured channel with no accepted head exposed a foreign local journal as recoverable.");
+            });
+            Pass();
+        }
+
         private static void HistoricalCatalogUpgradeRecoveryResolvesFutureSignedProfile(
             ECDsa key,
             byte[] publicKey)
@@ -923,7 +1465,8 @@ namespace InvokersRu.SmokeTests
             string notesRu = "Fixture-free smoke metadata.",
             string minimumPatcherVersion = "3.1.0",
             string latestPatcherVersion = "3.1.0",
-            SignedUpdateCompatibilityProfile[]? compatibility = null)
+            SignedUpdateCompatibilityProfile[]? compatibility = null,
+            string translationPolicy = "validated-preview-v1")
         {
             const int entryCount = 4;
             int applied = Math.Min(2, signedRecordCount);
@@ -953,7 +1496,7 @@ namespace InvokersRu.SmokeTests
                     UncompressedSha256 = signedUncompressedSha256 ?? Hash(uncompressed),
                     RecordCount = signedRecordCount,
                     Format = "invokers-ru-jsonl-v1",
-                    TranslationPolicy = "validated-preview-v1"
+                    TranslationPolicy = translationPolicy
                 },
                 Compatibility = compatibility ?? new[]
                 {

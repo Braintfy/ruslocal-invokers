@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$PayloadDirectory,
 
-    [string]$AppVersion = '3.1.0-preview'
+    [string]$AppVersion = '3.1.1-preview'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -191,6 +191,52 @@ Assert-True -Condition ($createParentPosition -ge 0 -and $commitPosition -gt $cr
     -Message 'Publish does not create the final output parent before its atomic Directory.Move.'
 
 $issText = Get-Content -LiteralPath (Join-Path $repoRoot 'installer\InvokersRu.iss') -Raw -Encoding UTF8
+$minimumWindowsBuild = '10.0.14393'
+$releaseVersion = '3.1.1-preview'
+Assert-True -Condition ([regex]::Matches($issText,
+    '(?m)^MinVersion=10\.0\.14393\r?$').Count -eq 1) `
+    -Message "Installer must require exactly x64 Windows 10 build $minimumWindowsBuild or newer."
+Assert-True -Condition ($issText.IndexOf('MinVersion=10.0.17763', [StringComparison]::Ordinal) -lt 0) `
+    -Message 'Installer still blocks Windows 10 builds older than 1809.'
+Assert-True -Condition ([regex]::Matches($issText,
+    '(?m)^ArchitecturesAllowed=x64compatible\r?$').Count -eq 1) `
+    -Message 'Installer architecture allowlist is not exactly x64compatible.'
+Assert-True -Condition ([regex]::Matches($issText,
+    '(?m)^ArchitecturesInstallIn64BitMode=x64compatible\r?$').Count -eq 1) `
+    -Message 'Installer does not install the x64 payload in 64-bit mode.'
+foreach ($versionedInstallerSetting in @(
+    'AppVerName=InvokersRu {#AppVersion}',
+    'UninstallDisplayName=InvokersRu {#AppVersion}',
+    'VersionInfoDescription=InvokersRu {#AppVersion} installer',
+    'VersionInfoProductName=InvokersRu {#AppVersion}'
+)) {
+    Assert-True -Condition ($issText.IndexOf($versionedInstallerSetting, [StringComparison]::Ordinal) -ge 0) `
+        -Message "Installer does not derive version metadata from AppVersion: $versionedInstallerSetting"
+}
+
+$guiProjectText = Get-Content -LiteralPath (Join-Path $repoRoot 'src\InvokersRu.Gui\InvokersRu.Gui.csproj') `
+    -Raw -Encoding UTF8
+$cliProjectText = Get-Content -LiteralPath (Join-Path $repoRoot 'src\InvokersRu.Cli\InvokersRu.Cli.csproj') `
+    -Raw -Encoding UTF8
+$publishScriptText = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'publish-windows-preview.ps1') `
+    -Raw -Encoding UTF8
+Assert-True -Condition ($guiProjectText.IndexOf(
+    '<TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>', [StringComparison]::Ordinal) -ge 0) `
+    -Message 'GUI does not use the oldest Windows API target pack shipped by this .NET 10 SDK.'
+Assert-True -Condition ($guiProjectText.IndexOf(
+    '<SupportedOSPlatformVersion>10.0.14393.0</SupportedOSPlatformVersion>', [StringComparison]::Ordinal) -ge 0) `
+    -Message 'GUI supported-platform metadata does not declare Windows 10 build 14393.'
+foreach ($projectVersionText in @($guiProjectText, $cliProjectText)) {
+    Assert-True -Condition ($projectVersionText.IndexOf(
+        "<Version>$releaseVersion</Version>", [StringComparison]::Ordinal) -ge 0) `
+        -Message "A Windows entry point does not default to version $releaseVersion."
+}
+Assert-True -Condition ($publishScriptText.IndexOf(
+    "[string]`$OutputDirectory = 'work\publish\windows-$releaseVersion'", [StringComparison]::Ordinal) -ge 0) `
+    -Message "Windows publish output does not default to version $releaseVersion."
+Assert-True -Condition ($publishScriptText.IndexOf(
+    "[string]`$AppVersion = '$releaseVersion'", [StringComparison]::Ordinal) -ge 0) `
+    -Message "Windows publish AppVersion does not default to $releaseVersion."
 foreach ($requiredInstallerSetting in @(
     'DefaultDirName={localappdata}\Programs\InvokersRu',
     'DisableDirPage=yes',
@@ -260,6 +306,10 @@ Assert-True -Condition $unsignedSignerRejected -Message 'VerifyOnly accepted an 
     payload_file_count = [int]$verify.file_count
     actual_payload_paths_schema_checked = @($payloadManifest.files).Count
     publish_parent_before_commit = $true
+    minimum_windows_build = $minimumWindowsBuild
+    windows_architecture = 'x64compatible'
+    source_release_version = $releaseVersion
+    gui_windows_target = 'net10.0-windows10.0.17763.0'
     fixed_installer_directory_guard = $true
     malformed_manifest_cases_rejected = 3
     json_schema_integer_semantics_checked = $true

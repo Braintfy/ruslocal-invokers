@@ -14,6 +14,9 @@ namespace InvokersRu.Core.Patching
         [JsonPropertyName("id")]
         public string Id { get; set; } = string.Empty;
 
+        [JsonPropertyName("mode")]
+        public string Mode { get; set; } = "exact";
+
         [JsonPropertyName("game_version")]
         public string GameVersion { get; set; } = string.Empty;
 
@@ -58,6 +61,9 @@ namespace InvokersRu.Core.Patching
 
         [JsonPropertyName("entry_count")]
         public int EntryCount { get; set; }
+
+        [JsonPropertyName("ordered_keyset_sha256")]
+        public string? OrderedKeysetSha256 { get; set; }
 
         [JsonPropertyName("readiness")]
         public string Readiness { get; set; } = "blocked";
@@ -110,7 +116,8 @@ namespace InvokersRu.Core.Patching
 
         public void Validate()
         {
-            if (Schema != 1 || !IsSafeId(Id) || string.IsNullOrWhiteSpace(GameVersion)
+            if (Schema != 1 || !IsSafeId(Id) || (Mode != "exact" && Mode != "compatible-revision")
+                || string.IsNullOrWhiteSpace(GameVersion)
                 || string.IsNullOrWhiteSpace(ContentGuid) || string.IsNullOrWhiteSpace(EnglishContentVersion)
                 || string.IsNullOrWhiteSpace(BaseContentVersion) || string.IsNullOrWhiteSpace(StampValue))
             {
@@ -130,7 +137,16 @@ namespace InvokersRu.Core.Patching
             ValidateHash(EnglishSha256, nameof(EnglishSha256));
             ValidateHash(BaseSha256, nameof(BaseSha256));
             ValidateHash(StampSha256, nameof(StampSha256));
-            if (EntryCount <= 0 || MinimumAppliedTranslations <= 0 || MinimumAppliedTranslations > EntryCount)
+            if (Mode == "compatible-revision")
+            {
+                ValidateHash(OrderedKeysetSha256, nameof(OrderedKeysetSha256));
+            }
+            else if (!string.IsNullOrWhiteSpace(OrderedKeysetSha256))
+            {
+                ValidateHash(OrderedKeysetSha256, nameof(OrderedKeysetSha256));
+            }
+            if (EntryCount <= 0 || EntryCount > 100_000
+                || MinimumAppliedTranslations <= 0 || MinimumAppliedTranslations > EntryCount)
             {
                 throw new InvalidDataException("Runtime-cache entry and minimum translation counts are invalid.");
             }
@@ -309,7 +325,20 @@ namespace InvokersRu.Core.Patching
         public string? StampValue { get; set; }
         public string? EnglishContentVersion { get; set; }
         public string? BaseContentVersion { get; set; }
+        public uint? EnglishFormatVersion { get; set; }
+        public uint? BaseFormatVersion { get; set; }
+        public string? EnglishContentGuid { get; set; }
+        public string? BaseContentGuid { get; set; }
+        public uint? EnglishLocaleId { get; set; }
+        public uint? EnglishLocaleRevision { get; set; }
+        public uint? EnglishReleaseRevision { get; set; }
+        public uint? BaseLocaleId { get; set; }
+        public uint? BaseLocaleRevision { get; set; }
+        public uint? BaseReleaseRevision { get; set; }
+        public int? EntryCount { get; set; }
+        public string? OrderedKeysetSha256 { get; set; }
         public RuntimeCacheCompatibility Profile { get; set; } = new RuntimeCacheCompatibility();
+        internal RuntimeCacheCompatibility? OfficialUpdatePredecessor { get; set; }
         public PatchState? State { get; set; }
         public PatchJournal? Journal { get; set; }
     }

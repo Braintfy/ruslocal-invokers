@@ -57,20 +57,39 @@ namespace InvokersRu.Core.Translations
 
         public static TranslationCatalog LoadJsonLinesBytes(byte[] content)
         {
-            string text;
+            return LoadJsonLinesBytes(content, int.MaxValue);
+        }
+
+        internal static TranslationCatalog LoadJsonLinesBytes(byte[] content, int maximumRecords)
+        {
+            ArgumentNullException.ThrowIfNull(content);
+            if (maximumRecords < 1) throw new ArgumentOutOfRangeException(nameof(maximumRecords));
             try
             {
-                text = StrictUtf8.GetString(content);
+                using var stream = new MemoryStream(content, writable: false);
+                using var reader = new StreamReader(
+                    stream,
+                    StrictUtf8,
+                    detectEncodingFromByteOrderMarks: false,
+                    bufferSize: 64 * 1024,
+                    leaveOpen: false);
+                return LoadJsonLinesCore(ReadLines(reader), maximumRecords);
             }
             catch (DecoderFallbackException exception)
             {
                 throw new InvalidDataException("Translation catalog is not strict UTF-8.", exception);
             }
-
-            return LoadJsonLinesCore(text.Split('\n'));
         }
 
-        private static TranslationCatalog LoadJsonLinesCore(IEnumerable<string> lines)
+        private static IEnumerable<string> ReadLines(TextReader reader)
+        {
+            string? line;
+            while ((line = reader.ReadLine()) != null) yield return line;
+        }
+
+        private static TranslationCatalog LoadJsonLinesCore(
+            IEnumerable<string> lines,
+            int maximumRecords = int.MaxValue)
         {
             var records = new Dictionary<ulong, TranslationRecord>();
             int lineNumber = 0;
@@ -127,6 +146,12 @@ namespace InvokersRu.Core.Translations
                 if (record.Confidence != null && record.Confidence != "high" && record.Confidence != "medium" && record.Confidence != "low")
                 {
                     throw new InvalidDataException($"Unsupported confidence at line {lineNumber}: {record.Confidence}");
+                }
+
+                if (records.Count >= maximumRecords)
+                {
+                    throw new InvalidDataException(
+                        $"Translation catalog exceeds the supported limit of {maximumRecords} records.");
                 }
 
                 if (!records.TryAdd(id, record))

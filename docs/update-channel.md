@@ -37,7 +37,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\update-channel\New-UpdateSign
 
 ## Файл совместимости
 
-`Compatibility` — строгий UTF-8 JSON без BOM, корнем которого является массив объектов существующей схемы `SignedUpdateCompatibilityProfile`. Неизвестные/пропущенные поля, дубли свойств и повторяющиеся `profile_id` отклоняются. Каждый профиль должен быть exact-профилем конкретного уже исследованного набора файлов игры.
+`Compatibility` — строгий UTF-8 JSON без BOM, корнем которого является массив объектов существующей схемы `SignedUpdateCompatibilityProfile`. Неизвестные/пропущенные поля, дубли свойств и повторяющиеся `profile_id` отклоняются. Каждый элемент массива является exact-профилем конкретного уже исследованного набора файлов игры. Сам подписанный каталог также может использоваться режимом `compatible-revision`, но только внутри content GUID family, уже аутентифицированной встроенным или подписанным exact-профилем.
 
 Пример формы одного элемента (хэши и значения здесь намеренно не являются рабочими):
 
@@ -85,9 +85,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\update-channel\New-UpdateSign
 ]
 ```
 
-Новая версия игры требует нового проверенного exact-профиля. Старый профиль можно оставить в массиве только после повторной композиции и проверки этого же каталога на старом корпусе. Один каталог не может без этой проверки считаться совместимым с несколькими версиями игры.
+Новый проверенный exact-профиль предпочтителен, но версия 3.1.1 не требует его для каждой текстовой ревизии. Без exact-профиля патчер локально закрепляет текущие EN/base/stamp, keyset, каталог, output и counts; применяются только записи с точными `source_sha256` и `hint_sha256`, без fuzzy matching. Новый exact-профиль нужен для полного сертифицированного покрытия или новой content family. Старый профиль можно оставить в массиве только после повторной композиции и проверки этого же каталога на старом корпусе.
 
-### Безопасная генерация exact-профиля
+### Генерация необязательного exact-профиля
 
 Не составляйте compatibility JSON вручную. Сначала скопируйте в отдельную рабочую папку точные файлы одной официальной установки после выбора украинского языка и полного закрытия игры: EN LOC1, исходный UK/base LOC1 и его stamp. Постройте русскую версию командой CLI `build` в **новый** файл вместе с `build-report.json`; используйте тот же `ru_RU.jsonl`, который будет опубликован. Для preview runtime policy нужны `--include-draft --raw` (без `--exclude-needs-review`), для прошедшего release gate — `--release --raw`. При разных content version EN/UK добавьте `--per-locale-content-version`.
 
@@ -149,8 +149,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\update-channel\New-SignedUpda
   -ExpectedPreviousSequence 0 `
   -IssuedUtc '2026-08-21T12:00:00Z' `
   -ExpiresUtc '2026-09-20T12:00:00Z' `
-  -MinimumPatcherVersion '3.1.0' `
-  -LatestPatcherVersion '3.1.0' `
+  -MinimumPatcherVersion '3.1.1' `
+  -LatestPatcherVersion '3.1.1' `
   -TranslationPolicy 'validated-preview-v1' `
   -Notes 'Обновлён перевод интерфейса.'
 ```
@@ -160,12 +160,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\update-channel\New-SignedUpda
 После успеха:
 
 1. Сверьте четыре файла с `update-release-receipt.json`.
-2. Создайте **неизменяемый data release** с новым тегом, точно равным `release_id`.
-3. Загрузите без переименования `ru_RU.jsonl.br` и `update-envelope.json`. Payload и receipt рекомендуется приложить для прозрачного аудита.
-4. Проверьте, что URL каталога из envelope уже доступен и его байты совпадают с receipt. Никогда не заменяйте ассеты этого data release: любое изменение получает новый `release_id` и новый `sequence`.
-5. Только после полной проверки data release обновите **фиксированный указатель канала**: точные байты нового `update-envelope.json` опубликуйте под именем `update-envelope.v1.json` в отдельном release/tag `invokersru-update-channel-v1`. Закреплённый в патчере URL остаётся постоянным: `https://github.com/Braintfy/ruslocal-invokers/releases/download/invokersru-update-channel-v1/update-envelope.v1.json`.
+2. Создайте **неизменяемый data release** с новым тегом, точно равным `release_id`. Не отмечайте его как `Latest`: ссылка патчера на `/releases/latest` должна вести на отдельный player release с установщиком, а не на служебные данные.
+3. Загрузите без переименования именно сырые `ru_RU.jsonl.br` и `update-envelope.json`. Нельзя заменять `.br` ZIP-архивом: GitHub не раздаёт файл внутри ZIP по URL, закреплённому в manifest. Payload и receipt рекомендуется приложить отдельными raw assets для прозрачного аудита.
+4. Анонимно откройте точный URL каталога из envelope и проверьте HTTP 200, размер и SHA-256 по receipt. Никогда не заменяйте ассеты этого data release: любое изменение получает новый `release_id` и новый `sequence`.
+5. Только после полной проверки data release обновите **фиксированный указатель канала**: точные байты нового `update-envelope.json` опубликуйте под именем `update-envelope.v1.json` в отдельном release/tag `invokersru-update-channel-v1`. Этот release также не должен становиться `Latest`. Закреплённый в патчере URL остаётся постоянным: `https://github.com/Braintfy/ruslocal-invokers/releases/download/invokersru-update-channel-v1/update-envelope.v1.json`.
 6. В fixed channel release изменяется только `update-envelope.v1.json`; это не новый манифест и не новая подпись, а байт-в-байт копия envelope из неизменяемого data release. Сначала публикуется data release, указатель переключается последним. Подпись, anti-rollback sequence и cache last-known-good защищают клиент при подмене, откате или временной недоступности указателя.
-7. Храните историю signing state и резервную копию вместе с ключом. Не редактируйте JSON состояния вручную.
+7. Отдельно создайте player release для новой версии GUI/CLI, приложите installer и `.sha256`, укажите точный commit/tag и только его при необходимости пометьте `Latest`. Не смешивайте player, data и fixed-pointer assets в одном release.
+8. Храните историю signing state и резервную копию вместе с ключом. Не редактируйте JSON состояния вручную.
 
 ## Самопроверка инструмента
 
