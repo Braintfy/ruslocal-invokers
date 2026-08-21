@@ -5,7 +5,7 @@
 set -uo pipefail
 
 # Version of this script. It updates itself from the repository; the bundle around it stays frozen.
-APP_VERSION="2.6.0"
+APP_VERSION="2.7.0"
 # Version of the application bundle, which only changes when the launcher or the CLI has to change.
 BUNDLE_VERSION="2.3.0"
 # Oldest bundle that still works. Kept apart from BUNDLE_VERSION so rebuilding the image does not tell
@@ -67,6 +67,22 @@ progress_start() { printf '%s\n' "$1" >>"$LOG_FILE"; }
 die() { printf 'FATAL: %s\n' "$1" >>"$LOG_FILE"; say_error "$1"; exit 1; }
 
 sha256_of() { shasum -a 256 "$1" 2>/dev/null | awk '{print toupper($1)}'; }
+
+# Numeric fields from the build report. json_field only reads quoted strings, and every number that
+# explains a build — how much applied, how much went stale — is unquoted.
+report_number() {
+    [ -f "$1" ] || return 1
+    /usr/bin/sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\([0-9-]\{1,\}\).*/\1/p" "$1" | head -1
+}
+
+# What the game itself says about a table. The driver used to guess that "the game probably updated";
+# reading the version is the difference between a guess and a reason.
+inspect_field() {
+    local file="$1" field="$2" tmp="${WORK_DIR}/inspect.json"
+    [ -f "$file" ] || return 1
+    "$CLI" inspect "$file" >"$tmp" 2>/dev/null || return 1
+    json_field "$tmp" "$field"
+}
 
 json_field() {
     [ -f "$1" ] || return 1
@@ -576,6 +592,42 @@ offer_adb_install() {
 
 # ---------- actions ----------
 
+# Names which of the two tables moved, because that is what decides what the player can do about it.
+# A changed Ukrainian table is harmless — the translation is keyed to English — while a changed English
+# table means the game rewrote its own text and those rows genuinely have no translation yet.
+explain_build_failure() {
+    local english="$1" base="$2" ev bv reason
+    ev="$(inspect_field "$english" content_version || true)"; [ -n "$ev" ] || ev="не прочитана"
+    bv="$(inspect_field "$base" content_version || true)"; [ -n "$bv" ] || bv="не прочитана"
+    reason="$(grep -i 'ERROR' "$LOG_FILE" 2>/dev/null | tail -1)"
+    [ -n "$reason" ] || reason="$(tail -1 "$LOG_FILE" 2>/dev/null)"
+    say_error "Не удалось собрать перевод.
+
+Английская таблица игры: ${ev}
+Украинская таблица игры: ${bv}
+
+${reason}
+
+Если игра обновила свои тексты, перевод под новую версию ещё не адаптирован — попробуйте позже. Полный журнал: ${LOG_FILE}"
+}
+
+# A build can succeed and still leave English on screen: that happens when the game rewrites strings it
+# had before, which invalidates the rows translated from the old wording. Saying so up front beats
+# letting the player find it mid-fight and assume the patcher broke.
+composition_note() {
+    local report="$1" applied stale missing left
+    applied="$(report_number "$report" applied_ru)"
+    [ -n "$applied" ] || { printf 'Перевод установлен.'; return 0; }
+    stale="$(report_number "$report" stale_catalog)"; [ -n "$stale" ] || stale=0
+    missing="$(report_number "$report" missing_catalog)"; [ -n "$missing" ] || missing=0
+    left=$((stale + missing))
+    if [ "$left" -gt 50 ]; then
+        printf 'Переведено строк: %s.\n\nАнглийскими остались %s — игра изменила эти тексты после того, как их перевели. Перевод для них появится в следующем обновлении каталога.' "$applied" "$left"
+    else
+        printf 'Переведено строк: %s.' "$applied"
+    fi
+}
+
 do_install() {
     local cache_root="$1" english target stamp built current original backup applied
 
@@ -609,13 +661,11 @@ do_install() {
             --translations "$OVERLAY_CACHE" --output "$built" \
             --report "${WORK_DIR}/report.json" \
             --include-draft --raw --per-locale-content-version >>"$LOG_FILE" 2>&1; then
-        say_error "Не удалось собрать перевод для этой версии игры.
-
-Скорее всего игра обновилась и перевод ещё не адаптирован. Подробности: ${LOG_FILE}"
+        explain_build_failure "$english" "$target"
         return 1
     fi
 
-    applied="$(/usr/bin/sed -n 's/.*"applied_ru"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "${WORK_DIR}/report.json" | head -1)"
+    applied="$(report_number "${WORK_DIR}/report.json" applied_ru)"
     [ -n "$applied" ] || applied="?"
 
     current="$(sha256_of "$target")"
@@ -675,7 +725,7 @@ do_install() {
 JSON
 
     local next
-    next="$(ask "Готово. Перевод установлен, строк переведено: ${applied}.
+    next="$(ask "Готово. $(composition_note "${WORK_DIR}/report.json")
 
 ЧТОБЫ ПЕРЕВОД НЕ ПРОПАЛ — одно правило:
 Не открывайте выбор языка в настройках игры. При выборе любого языка клиент заново скачивает языковой файл с сервера и стирает перевод. В настройках должен остаться украинский: русский текст подставлен именно в эту ячейку, потому что она единственная кириллическая.

@@ -272,6 +272,26 @@ function EnsureApp {
     Die "Не удалось установить приложение на телефон: $out"
 }
 
+# The version stamp the game keeps beside its tables. Naming it turns "something did not fit" into
+# something the player can act on or report.
+function GameStamp { return (Sh "cat '$GameDir/$Target.ver' 2>/dev/null").Trim() }
+
+# The phone reports how many rows it applied. Comparing that with the catalog it was handed is the only
+# signal available on this side that the game rewrote its own text: rows whose English changed no
+# longer match anything and quietly stay English.
+function AppliedNote([string]$applied) {
+    $count = 0
+    if (-not [int]::TryParse($applied, [ref]$count)) { return 'Перевод установлен.' }
+    $catalog = Join-Path $Work 'ru_RU.jsonl'
+    if (-not (Test-Path -LiteralPath $catalog)) { return "Переведено строк: $applied." }
+    $total = (Get-Content -LiteralPath $catalog -ReadCount 0).Count
+    $left = $total - $count
+    if ($left -gt 50) {
+        return "Переведено строк: $applied из $total.`n`nОстальные $left остались английскими — игра изменила эти тексты после того, как их перевели. Перевод для них появится в следующем обновлении каталога."
+    }
+    return "Переведено строк: $applied."
+}
+
 function RemoteSha([string]$path) {
     $out = Sh "sha256sum '$path' 2>/dev/null"
     if (-not $out) { return '' }
@@ -396,7 +416,14 @@ function DoApply {
     if (-not $status) {
         Die "Телефон не ответил за пять минут.`nРазблокируйте экран телефона, откройте приложение «Русификатор Invokers» и повторите."
     }
-    if (-not $status.StartsWith('OK')) { Die "Телефон сообщил об ошибке: $($status -replace '^ERR ', '')" }
+    if (-not $status.StartsWith('OK')) {
+        Die @"
+Телефон сообщил об ошибке: $($status -replace '^ERR ', '')
+
+Версия игры на телефоне: $(GameStamp)
+Если игра недавно обновилась, перевод под новую версию мог быть ещё не готов.
+"@
+    }
     $applied = $status.Substring(2).Trim()
 
     Say "Ставлю перевод в игру…"
@@ -412,7 +439,7 @@ function DoApply {
     Sh "rm -f '$Bridge/out/$Target' '$Bridge/in/ru_RU.jsonl'" | Out-Null
 
     Head "Готово"
-    Say "Переведено строк: $applied"
+    Say (AppliedNote $applied)
     Say ""
     Say "ГЛАВНОЕ ПРАВИЛО: не открывайте выбор языка в настройках игры."
     Say "При выборе любого языка игра заново скачает текст и сотрёт перевод."

@@ -259,6 +259,28 @@ ensure_app() {
 
 remote_sha() { sh_ "sha256sum '$1' 2>/dev/null" | awk '{print tolower($1)}'; }
 
+# The version stamp the game keeps beside its tables. Naming it turns "something did not fit" into
+# something the player can act on or report.
+game_stamp() { sh_ "cat '${GAME_DIR}/${TARGET}.ver' 2>/dev/null" | tr -d '\r\n'; }
+
+# The phone reports how many rows it applied. Comparing that with the catalog it was handed is the
+# only signal available on this side that the game rewrote its own text: rows whose English changed
+# no longer match anything and quietly stay English.
+applied_note() {
+    local applied="$1" total left
+    case "$applied" in ''|*[!0-9]*) printf 'Перевод установлен.'; return 0 ;; esac
+    total="$(wc -l < "${WORK}/ru_RU.jsonl" 2>/dev/null | tr -d ' ')"
+    case "$total" in ''|*[!0-9]*) printf 'Переведено строк: %s.' "$applied"; return 0 ;; esac
+    left=$((total - applied))
+    if [ "$left" -gt 50 ]; then
+        printf 'Переведено строк: %s из %s.
+
+Остальные %s остались английскими — игра изменила эти тексты после того, как их перевели. Перевод для них появится в следующем обновлении каталога.' "$applied" "$total" "$left"
+    else
+        printf 'Переведено строк: %s.' "$applied"
+    fi
+}
+
 # The target is deleted first on purpose. Copying over an existing file keeps the game's ownership,
 # and ownership is the only thing that tells a pristine file from one a tool wrote: without a fresh
 # shell-owned file, a run that has lost its saved original would record a patched file as the
@@ -372,7 +394,10 @@ do_apply() {
 Разблокируйте экран телефона, откройте приложение «Русификатор Invokers» и повторите."
     case "$status" in
         OK*) : ;;
-        *) die "Телефон сообщил об ошибке: ${status#ERR }" ;;
+        *) die "Телефон сообщил об ошибке: ${status#ERR }
+
+Версия игры на телефоне: $(game_stamp)
+Если игра недавно обновилась, перевод под новую версию мог быть ещё не готов." ;;
     esac
     local applied="${status#OK }"
 
@@ -390,7 +415,7 @@ do_apply() {
     sh_ "rm -f '${BRIDGE}/out/${TARGET}' '${BRIDGE}/in/ru_RU.jsonl'" >/dev/null
 
     head1 "Готово"
-    say "Переведено строк: ${applied}"
+    say "$(applied_note "$applied")"
     say ""
     say "ГЛАВНОЕ ПРАВИЛО: не открывайте выбор языка в настройках игры."
     say "При выборе любого языка игра заново скачает текст и сотрёт перевод."

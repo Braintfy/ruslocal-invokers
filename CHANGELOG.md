@@ -1,5 +1,11 @@
 # Changelog
 
+## Причина отказа — 2026-08-21
+
+- made the macOS driver name which table moved instead of guessing. It used to answer every build failure with «скорее всего игра обновилась», which is a guess that happens to be wrong in the case that actually occurs: today the Ukrainian table changed and the build succeeded, while a changed English table is the one that genuinely strands rows. It now reads both content versions out of the game's own files and prints the builder's real error alongside them;
+- explained the result of a successful build too. A build can finish and still leave English on screen, because rows whose English was rewritten no longer match anything; the driver now reports how many stayed English and why, rather than letting a player discover it mid-fight and conclude the patcher is broken;
+- gave the Android helpers the same answer with what they have. There is no LOC1 parser on the computer side there, so the count the phone reports is compared against the catalog it was handed — a shortfall means the same thing — and a failure from the phone now carries the game's version stamp with it.
+
 ## Профиль Prod_0.60.0_71 — 2026-08-21
 
 - certified a profile for the Ukrainian table the game quietly replaced. The client version did not move — still 0.60.1247 — and neither did the English table, but the Ukrainian base went from `Prod_0.60.0_68` to `Prod_0.60.0_71`, 489 bytes larger. That is why the translation vanished and why the Windows patcher refused with `REFUSE_UNKNOWN_OR_INCONSISTENT`: its checksums are of the base, and the base changed underneath it;
