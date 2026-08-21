@@ -547,8 +547,12 @@ namespace InvokersRu.Core.Patching
 
         internal static void ValidateRecoveryPhaseReadiness(PatchJournal journal, string currentTargetHash)
         {
-            bool apply = journal.Operation == "apply" || journal.Operation == "runtime-cache-apply";
-            bool restore = journal.Operation == "restore" || journal.Operation == "runtime-cache-restore";
+            bool apply = journal.Operation == "apply"
+                || journal.Operation == "runtime-cache-apply"
+                || journal.Operation == "runtime-cache-upgrade";
+            bool restore = journal.Operation == "restore"
+                || journal.Operation == "runtime-cache-restore"
+                || journal.Operation == "runtime-cache-upgrade-restore";
             if (!apply && !restore) throw new InvalidDataException("Recovery operation is not supported.");
             bool targetIsSource = Hashing.FixedEqualsHex(currentTargetHash, journal.SourceSha256);
             bool targetIsOutput = Hashing.FixedEqualsHex(currentTargetHash, journal.ExpectedOutputSha256);

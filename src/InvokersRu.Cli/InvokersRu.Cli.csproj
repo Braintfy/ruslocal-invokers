@@ -7,7 +7,7 @@
     <LangVersion>14.0</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AssemblyName>InvokersRu.Cli</AssemblyName>
-    <Version>3.0.1-preview</Version>
+    <Version>3.1.0-preview</Version>
     <Company>Invokers Russian Community</Company>
     <Product>InvokersRu localization patcher</Product>
     <Description>Version-aware community localization tooling for Invokers: Titan Legacy.</Description>
@@ -25,6 +25,9 @@
   <ItemGroup Condition="'$(EnableSupervisedInstallWrites)' == 'true' and '$(TrustedRuntimeCacheCompatibilityPath)' != ''">
     <EmbeddedResource Include="$(TrustedRuntimeCacheCompatibilityPath)" LogicalName="InvokersRu.TrustedRuntimeCacheCompatibility.json" />
   </ItemGroup>
+  <ItemGroup Condition="'$(SignedUpdateChannelConfigPath)' != ''">
+    <EmbeddedResource Include="$(SignedUpdateChannelConfigPath)" LogicalName="InvokersRu.SignedUpdateChannel.json" />
+  </ItemGroup>
   <Target Name="ValidateSupervisedWriteBuild" BeforeTargets="CoreCompile" Condition="'$(EnableSupervisedInstallWrites)' == 'true'">
     <Error Condition="'$(TrustedCompatibilityPath)' == ''" Text="A supervised write build requires /p:TrustedCompatibilityPath=ABSOLUTE_PATH." />
     <Error Condition="'$(TrustedCompatibilityPath)' != '' and !$([System.IO.Path]::IsPathFullyQualified('$(TrustedCompatibilityPath)'))" Text="TrustedCompatibilityPath must be an absolute path: $(TrustedCompatibilityPath)" />
@@ -33,5 +36,9 @@
   <Target Name="ValidateOptionalRuntimeCacheWriteProfile" BeforeTargets="CoreCompile" Condition="'$(EnableSupervisedInstallWrites)' == 'true' and '$(TrustedRuntimeCacheCompatibilityPath)' != ''">
     <Error Condition="!$([System.IO.Path]::IsPathFullyQualified('$(TrustedRuntimeCacheCompatibilityPath)'))" Text="TrustedRuntimeCacheCompatibilityPath must be an absolute path: $(TrustedRuntimeCacheCompatibilityPath)" />
     <Error Condition="!Exists('$(TrustedRuntimeCacheCompatibilityPath)')" Text="TrustedRuntimeCacheCompatibilityPath does not exist: $(TrustedRuntimeCacheCompatibilityPath)" />
+  </Target>
+  <Target Name="ValidateOptionalSignedUpdateChannel" BeforeTargets="CoreCompile" Condition="'$(SignedUpdateChannelConfigPath)' != ''">
+    <Error Condition="!$([System.IO.Path]::IsPathFullyQualified('$(SignedUpdateChannelConfigPath)'))" Text="SignedUpdateChannelConfigPath must be an absolute path: $(SignedUpdateChannelConfigPath)" />
+    <Error Condition="!Exists('$(SignedUpdateChannelConfigPath)')" Text="SignedUpdateChannelConfigPath does not exist: $(SignedUpdateChannelConfigPath)" />
   </Target>
 </Project>

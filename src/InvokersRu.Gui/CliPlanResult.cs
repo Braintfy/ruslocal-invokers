@@ -13,6 +13,7 @@ internal sealed class CliPlanResult
     {
         "CompatibleOriginal",
         "PatchSupersededByOfficialUpdate",
+        "PatchSupersededByCatalogUpdate",
         "PatchedByThisTool",
         "UnknownBuild",
         "MissingFiles",
@@ -30,6 +31,8 @@ internal sealed class CliPlanResult
         "REFUSE_DEV_WRITES_DISABLED",
         "REFUSE_NO_TRUSTED_CACHE_RELEASE_PROFILE",
         "REFUSE_MISSING_OR_MISMATCHED_CATALOG",
+        "REFUSE_PATCHER_OR_SIGNED_DATA_NOT_CURRENT",
+        "READY_TO_UPDATE_TRANSLATION",
         "REFUSE_UNKNOWN_OR_INCONSISTENT"
     };
 
@@ -92,6 +95,12 @@ internal sealed class CliPlanResult
     [JsonRequired]
     public EmbeddedProfileInfo Profile { get; set; } = new();
 
+    [JsonPropertyName("update")]
+    public SignedPlanUpdateInfo? Update { get; set; }
+
+    [JsonPropertyName("update_problem")]
+    public string? UpdateProblem { get; set; }
+
     [JsonPropertyName("state")]
     [JsonRequired]
     public InstalledPatchState? State { get; set; }
@@ -136,6 +145,9 @@ internal sealed class CliPlanResult
         || string.Equals(PlanAction, "REFUSE_UNKNOWN_OR_INCONSISTENT", StringComparison.Ordinal)
         || string.Equals(PlanAction, "REFUSE_NO_TRUSTED_CACHE_RELEASE_PROFILE", StringComparison.Ordinal);
 
+    [JsonIgnore]
+    public bool TranslationUpdateAvailable => Update?.TranslationUpdateAvailable == true;
+
     public static CliPlanResult Parse(CliCommandResult command)
     {
         string json = command.StandardOutput.Trim();
@@ -175,7 +187,7 @@ internal sealed class CliPlanResult
 
     private void ValidateContract()
     {
-        Require(Schema == 1, "неподдерживаемая версия JSON-контракта");
+        Require(Schema is 1 or 2, "неподдерживаемая версия JSON-контракта");
         Require(!string.IsNullOrWhiteSpace(PatcherVersion) && PatcherVersion.Length <= 64
             && Version.TryParse(PatcherVersion, out _), "некорректная версия патчера");
         Require(KnownStatuses.Contains(Status), "неизвестное состояние установки");
@@ -197,11 +209,13 @@ internal sealed class CliPlanResult
         ValidateObserved(observed, profile);
         ValidateProfile(profile);
         ValidateCatalog(catalog, profile);
+        ValidateUpdate();
         ValidateStateAndJournal();
         ValidateProcessConflicts(processConflicts);
 
         bool successfulInspection = Status is "CompatibleOriginal"
             or "PatchSupersededByOfficialUpdate"
+            or "PatchSupersededByCatalogUpdate"
             or "PatchedByThisTool";
         Require(ExitCode == (successfulInspection ? 0 : 5), "код завершения противоречит состоянию установки");
 
@@ -210,12 +224,15 @@ internal sealed class CliPlanResult
         Require(string.Equals(planAction, expectedAction, StringComparison.Ordinal),
             "решение плана противоречит состоянию, процессам или праву записи");
 
-        bool expectedCanApply = (Status is "CompatibleOriginal" or "PatchSupersededByOfficialUpdate")
-            && !hasProcessConflicts && InstallationWritesEnabled && profile.Certified && catalog.ExactMatch;
-        bool expectedCanRestore = Status == "PatchedByThisTool"
-            && !hasProcessConflicts && InstallationWritesEnabled;
+        bool remoteApplyAuthorized = IsRemoteApplyAuthorized();
+        bool expectedCanApply = (TranslationUpdateAvailable
+                || Status is "CompatibleOriginal" or "PatchSupersededByOfficialUpdate" or "PatchSupersededByCatalogUpdate")
+            && !hasProcessConflicts && InstallationWritesEnabled && profile.Certified && catalog.ExactMatch
+            && remoteApplyAuthorized;
+        bool expectedCanRestore = Status is "PatchedByThisTool" or "PatchSupersededByCatalogUpdate"
+            && !hasProcessConflicts && InstallationWritesEnabled && IsRestorationAuthorized();
         bool expectedCanRecover = Status == "RecoveryRequired"
-            && !hasProcessConflicts && InstallationWritesEnabled;
+            && !hasProcessConflicts && InstallationWritesEnabled && IsRestorationAuthorized();
         Require(CanApply == expectedCanApply && CanRestore == expectedCanRestore && CanRecover == expectedCanRecover,
             "разрешения кнопок противоречат проверенному плану");
     }
@@ -229,7 +246,8 @@ internal sealed class CliPlanResult
         ValidateOptionalText(observed.EnglishContent, 256, "версия английского контента");
         ValidateOptionalText(observed.BaseContent, 256, "версия базового контента");
 
-        if (Status is "CompatibleOriginal" or "PatchSupersededByOfficialUpdate" or "PatchedByThisTool")
+        if (Status is "CompatibleOriginal" or "PatchSupersededByOfficialUpdate"
+            or "PatchSupersededByCatalogUpdate" or "PatchedByThisTool")
         {
             Require(observed.EnglishSha256 != null && observed.BaseSha256 != null && observed.StampSha256 != null,
                 "распознанное состояние не содержит контрольные суммы файлов");
@@ -240,6 +258,11 @@ internal sealed class CliPlanResult
 
     private static void ValidateCatalog(BundledCatalogInfo catalog, EmbeddedProfileInfo profile)
     {
+        if (catalog.Source != null)
+        {
+            Require(catalog.Source is "embedded" or "Remote" or "CachedCurrent" or "LastKnownGood" or "ChannelHead",
+                "неизвестный источник каталога");
+        }
         ValidateOptionalHash(catalog.Sha256, "SHA-256 установленного каталога");
         Require(!catalog.RegularFile || catalog.Present,
             "каталог отмечен обычным файлом, хотя он отсутствует");
@@ -263,6 +286,7 @@ internal sealed class CliPlanResult
         Require(KnownTranslationPolicies.Contains(profile.TranslationPolicy), "неизвестная политика перевода");
         ValidateOptionalHash(profile.CatalogSha256, "SHA-256 каталога");
         ValidateOptionalHash(profile.ExpectedOutputSha256, "SHA-256 ожидаемого результата");
+        ValidateOptionalHash(profile.BaseSha256, "SHA-256 официальной базы");
 
         Require(profile.EntryCount > 0 && profile.EntryCount <= 100_000,
             "некорректное число строк профиля");
@@ -288,7 +312,8 @@ internal sealed class CliPlanResult
         if (profile.Certified)
         {
             Require(profile.Readiness == "ready", "сертифицированный профиль не готов");
-            Require(IsSha256(profile.CatalogSha256) && IsSha256(profile.ExpectedOutputSha256),
+            Require(IsSha256(profile.CatalogSha256) && IsSha256(profile.ExpectedOutputSha256)
+                && IsSha256(profile.BaseSha256),
                 "сертифицированный профиль не закрепляет каталог и результат");
         }
 
@@ -299,6 +324,87 @@ internal sealed class CliPlanResult
         }
     }
 
+    private void ValidateUpdate()
+    {
+        if (Schema == 1)
+        {
+            Require(Update == null && UpdateProblem == null && Catalog.Source == null,
+                "контракт v1 неожиданно содержит данные канала обновлений");
+            return;
+        }
+
+        Require(Catalog.Source != null, "контракт v2 не указывает источник каталога");
+        if (UpdateProblem != null)
+        {
+            Require(!string.IsNullOrWhiteSpace(UpdateProblem) && UpdateProblem.Length <= 4096,
+                "некорректное сообщение канала обновлений");
+        }
+
+        if (Update == null)
+        {
+            Require(Catalog.Source == "embedded" && !TranslationUpdateAvailable,
+                "удалённый источник заявлен без подписанного обновления");
+            return;
+        }
+
+        SignedPlanUpdateInfo update = Update;
+        Require(update.Source is "Remote" or "CachedCurrent" or "LastKnownGood" or "ChannelHead",
+            "неизвестный источник подписанного обновления");
+        Require(update.Sequence > 0, "некорректный sequence подписанного обновления");
+        Require(IsSha256(update.PayloadSha256), "некорректный SHA-256 payload обновления");
+        Require(IsSafeIdentifier(update.ReleaseId) && IsSafeIdentifier(update.ArtifactId),
+            "некорректный release/artifact id обновления");
+        Require(update.IssuedUtc != default && update.ExpiresUtc > update.IssuedUtc,
+            "некорректный срок подписанного обновления");
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        if (update.ExpiresUtc < now - TimeSpan.FromMinutes(1))
+            Require(update.Expired, "истёкшее подписанное обновление не отмечено как истёкшее");
+        if (update.ExpiresUtc > now + TimeSpan.FromMinutes(1))
+            Require(!update.Expired, "актуальное подписанное обновление ошибочно отмечено как истёкшее");
+        Require(update.PatcherDisposition is "Current" or "UpdateAvailable" or "TooOld",
+            "неизвестное требование версии патчера");
+        Require(Version.TryParse(update.MinimumPatcherVersion, out Version? minimum)
+            && Version.TryParse(update.LatestPatcherVersion, out Version? latest)
+            && minimum <= latest,
+            "некорректные границы версии патчера");
+        Require(Uri.TryCreate(update.DownloadPage, UriKind.Absolute, out Uri? page)
+            && page.Scheme == Uri.UriSchemeHttps
+            && string.Equals(page.Host, "github.com", StringComparison.OrdinalIgnoreCase),
+            "некорректная страница обновления патчера");
+        Require(update.NotesRu.Length <= 4096, "слишком длинное примечание обновления");
+        Require(update.TranslationUpdateAvailable ? update.ExactGameProfileFound : true,
+            "обновление перевода заявлено без точного профиля игры");
+        Require(update.ExactGameProfileFound == !string.Equals(Catalog.Source, "embedded", StringComparison.Ordinal),
+            "источник каталога противоречит выбору точного профиля");
+        Require(string.Equals(update.Source, Catalog.Source, StringComparison.Ordinal)
+                || Catalog.Source == "embedded" && !update.ExactGameProfileFound,
+            "источники обновления и выбранного каталога противоречат друг другу");
+    }
+
+    private bool IsRemoteApplyAuthorized()
+    {
+        if (UpdateProblem != null) return false;
+        if (Update == null) return UpdateProblem == null;
+        if (Update.PatcherDisposition == "TooOld") return false;
+        if (Update.Source == "ChannelHead") return false;
+        if (Update.Source == "LastKnownGood")
+        {
+            return Update.ExactGameProfileFound
+                && State != null
+                && string.Equals(State.BuildId, Profile.Id, StringComparison.Ordinal)
+                && string.Equals(State.OriginalSha256, Profile.BaseSha256, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(State.PatchedSha256, Profile.ExpectedOutputSha256, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(State.TranslationsSha256, Profile.CatalogSha256, StringComparison.OrdinalIgnoreCase)
+                && State.AppliedTranslations == Profile.AppliedTranslations;
+        }
+        if (!Update.ExactGameProfileFound) return true;
+        if (!Update.Expired) return true;
+        return false;
+    }
+
+    private bool IsRestorationAuthorized() => Status is "PatchedByThisTool"
+        or "PatchSupersededByCatalogUpdate" or "RecoveryRequired";
+
     private void ValidateStateAndJournal()
     {
         if (State != null)
@@ -307,13 +413,15 @@ internal sealed class CliPlanResult
             Require(State.AppliedTranslations > 0 && State.AppliedTranslations <= 100_000,
                 "некорректное число строк записанного состояния");
             Require(State.AppliedAt != default, "отсутствует время установки");
-            Require(IsSha256(State.PatchedSha256) && IsSha256(State.OriginalSha256),
+            Require(IsSha256(State.PatchedSha256) && IsSha256(State.OriginalSha256)
+                && IsSha256(State.TranslationsSha256),
                 "некорректные контрольные суммы записанного состояния");
         }
 
         if (Journal != null)
         {
-            Require(Journal.Operation is "runtime-cache-apply" or "runtime-cache-restore",
+            Require(Journal.Operation is "runtime-cache-apply" or "runtime-cache-restore"
+                or "runtime-cache-upgrade" or "runtime-cache-upgrade-restore",
                 "неизвестная операция журнала");
             Require(KnownJournalPhases.Contains(Journal.Phase), "неизвестная фаза журнала");
             Require(IsSafeIdentifier(Journal.TransactionId),
@@ -322,18 +430,37 @@ internal sealed class CliPlanResult
 
         Require(Status == "RecoveryRequired" ? Journal != null : Journal == null,
             "журнал транзакции противоречит состоянию установки");
-        if (Status is "PatchedByThisTool" or "PatchSupersededByOfficialUpdate")
+        if (Status is "PatchedByThisTool" or "PatchSupersededByOfficialUpdate" or "PatchSupersededByCatalogUpdate")
         {
             Require(State != null, "состояние установленного или заменённого патча отсутствует");
         }
         if (Status == "PatchedByThisTool")
         {
-            Require(string.Equals(State!.BuildId, Profile.Id, StringComparison.Ordinal)
-                && State.AppliedTranslations == Profile.AppliedTranslations,
-                "установленное состояние относится к другому профилю или числу строк");
-            Require(string.Equals(State.PatchedSha256, Observed.BaseSha256, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(State.PatchedSha256, Profile.ExpectedOutputSha256, StringComparison.OrdinalIgnoreCase),
-                "контрольная сумма установленного файла противоречит профилю или наблюдению");
+            Require(string.Equals(State!.PatchedSha256, Observed.BaseSha256, StringComparison.OrdinalIgnoreCase),
+                "контрольная сумма установленного файла противоречит наблюдению");
+            if (TranslationUpdateAvailable)
+            {
+                Require(Update?.ExactGameProfileFound == true,
+                    "обновление установленного перевода не закреплено точным профилем");
+            }
+            else
+            {
+                Require(string.Equals(State.BuildId, Profile.Id, StringComparison.Ordinal)
+                    && State.AppliedTranslations == Profile.AppliedTranslations,
+                    "установленное состояние относится к другому профилю или числу строк");
+                Require(string.Equals(State.PatchedSha256, Profile.ExpectedOutputSha256, StringComparison.OrdinalIgnoreCase),
+                    "контрольная сумма установленного файла противоречит профилю");
+            }
+        }
+        if (Status == "PatchSupersededByCatalogUpdate")
+        {
+            Require(string.Equals(State!.BuildId, Profile.Id, StringComparison.Ordinal),
+                "устаревший перевод относится к другому профилю игры");
+            Require(string.Equals(State.PatchedSha256, Observed.BaseSha256, StringComparison.OrdinalIgnoreCase),
+                "контрольная сумма устаревшего перевода противоречит наблюдению");
+            Require(!string.Equals(State.PatchedSha256, Profile.ExpectedOutputSha256, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(State.OriginalSha256, State.PatchedSha256, StringComparison.OrdinalIgnoreCase),
+                "устаревший перевод совпадает с исходным или новым закреплённым результатом");
         }
         if (Status is "CompatibleOriginal" or "UnknownBuild")
         {
@@ -350,11 +477,18 @@ internal sealed class CliPlanResult
 
     private string ExpectedPlanAction(bool hasProcessConflicts)
     {
-        bool installable = Status is "CompatibleOriginal" or "PatchSupersededByOfficialUpdate";
+        bool installable = TranslationUpdateAvailable
+            || Status is "CompatibleOriginal" or "PatchSupersededByOfficialUpdate" or "PatchSupersededByCatalogUpdate";
+        bool restorationOnly = Status is "PatchedByThisTool" or "RecoveryRequired";
+        if ((!IsRemoteApplyAuthorized() && !restorationOnly)
+            || (!IsRestorationAuthorized() && restorationOnly))
+            return "REFUSE_PATCHER_OR_SIGNED_DATA_NOT_CURRENT";
         if (installable && hasProcessConflicts) return "REFUSE_CLOSE_GAME_AND_LAUNCHER";
         if (installable && !InstallationWritesEnabled) return "REFUSE_DEV_WRITES_DISABLED";
         if (installable && !Profile.Certified) return "REFUSE_NO_TRUSTED_CACHE_RELEASE_PROFILE";
         if (installable && !Catalog.ExactMatch) return "REFUSE_MISSING_OR_MISMATCHED_CATALOG";
+        if (TranslationUpdateAvailable) return "READY_TO_UPDATE_TRANSLATION";
+        if (Status == "PatchSupersededByCatalogUpdate") return "READY_TO_UPDATE_TRANSLATION";
         if (Status == "PatchSupersededByOfficialUpdate") return "READY_TO_REAPPLY_AFTER_GAME_UPDATE";
         if (Status == "CompatibleOriginal") return "READY_TO_APPLY";
         if (Status == "PatchedByThisTool" && hasProcessConflicts) return "REFUSE_CLOSE_GAME_AND_LAUNCHER";
@@ -428,6 +562,9 @@ internal sealed class ObservedCacheIdentity
 
 internal sealed class BundledCatalogInfo
 {
+    [JsonPropertyName("source")]
+    public string? Source { get; set; }
+
     [JsonPropertyName("present")]
     [JsonRequired]
     public bool Present { get; set; }
@@ -443,6 +580,69 @@ internal sealed class BundledCatalogInfo
     [JsonPropertyName("exact_match")]
     [JsonRequired]
     public bool ExactMatch { get; set; }
+}
+
+internal sealed class SignedPlanUpdateInfo
+{
+    [JsonPropertyName("source")]
+    [JsonRequired]
+    public string Source { get; set; } = string.Empty;
+
+    [JsonPropertyName("sequence")]
+    [JsonRequired]
+    public ulong Sequence { get; set; }
+
+    [JsonPropertyName("payload_sha256")]
+    [JsonRequired]
+    public string PayloadSha256 { get; set; } = string.Empty;
+
+    [JsonPropertyName("release_id")]
+    [JsonRequired]
+    public string ReleaseId { get; set; } = string.Empty;
+
+    [JsonPropertyName("artifact_id")]
+    [JsonRequired]
+    public string ArtifactId { get; set; } = string.Empty;
+
+    [JsonPropertyName("issued_utc")]
+    [JsonRequired]
+    public DateTimeOffset IssuedUtc { get; set; }
+
+    [JsonPropertyName("expires_utc")]
+    [JsonRequired]
+    public DateTimeOffset ExpiresUtc { get; set; }
+
+    [JsonPropertyName("expired")]
+    [JsonRequired]
+    public bool Expired { get; set; }
+
+    [JsonPropertyName("patcher_disposition")]
+    [JsonRequired]
+    public string PatcherDisposition { get; set; } = string.Empty;
+
+    [JsonPropertyName("minimum_patcher_version")]
+    [JsonRequired]
+    public string MinimumPatcherVersion { get; set; } = string.Empty;
+
+    [JsonPropertyName("latest_patcher_version")]
+    [JsonRequired]
+    public string LatestPatcherVersion { get; set; } = string.Empty;
+
+    [JsonPropertyName("download_page")]
+    [JsonRequired]
+    public string DownloadPage { get; set; } = string.Empty;
+
+    [JsonPropertyName("exact_game_profile_found")]
+    [JsonRequired]
+    public bool ExactGameProfileFound { get; set; }
+
+    [JsonPropertyName("translation_update_available")]
+    [JsonRequired]
+    public bool TranslationUpdateAvailable { get; set; }
+
+    [JsonPropertyName("notes_ru")]
+    [JsonRequired]
+    public string NotesRu { get; set; } = string.Empty;
 }
 
 internal sealed class EmbeddedProfileInfo
@@ -466,6 +666,10 @@ internal sealed class EmbeddedProfileInfo
     [JsonPropertyName("translation_policy")]
     [JsonRequired]
     public string TranslationPolicy { get; set; } = string.Empty;
+
+    [JsonPropertyName("base_sha256")]
+    [JsonRequired]
+    public string? BaseSha256 { get; set; }
 
     [JsonPropertyName("catalog_sha256")]
     [JsonRequired]
@@ -517,6 +721,10 @@ internal sealed class InstalledPatchState
     [JsonPropertyName("original_sha256")]
     [JsonRequired]
     public string OriginalSha256 { get; set; } = string.Empty;
+
+    [JsonPropertyName("translations_sha256")]
+    [JsonRequired]
+    public string TranslationsSha256 { get; set; } = string.Empty;
 }
 
 internal sealed class InterruptedPatchJournal

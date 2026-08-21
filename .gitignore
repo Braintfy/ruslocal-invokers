@@ -16,6 +16,8 @@ obj/
 *.msi
 *.zip
 *.7z
+__pycache__/
+*.py[cod]
 
 # Private copies extracted from the user's installation.
 work/private-fixtures/
@@ -36,6 +38,12 @@ manifest.dat
 .env
 appsettings.local.json
 patch-state.json
+*.pem
+*.key
+*.pfx
+*.p12
+*.keystore
+update-signing-state.json
 
 # The PC helper's local scratch: downloaded platform-tools, the catalog copy and backups.
 pc/platform-tools/

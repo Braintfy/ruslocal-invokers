@@ -2,7 +2,7 @@
 
 ## Player layout
 
-InvokersRu 3.0 Preview is published as a normal self-contained .NET directory,
+InvokersRu 3.1 Preview is published as a normal self-contained .NET directory,
 not as a packed single executable. The GUI and supervised CLI remain adjacent so
 the GUI can resolve its fixed companion path. The translation and compatibility
 evidence are installed as data:
@@ -35,6 +35,13 @@ directories. The catalog must match the SHA-256 pin in the certified profile,
 and the published CLI must prove that it embeds that exact profile before the
 payload manifest is created.
 
+The CLI also embeds one reviewed signed-update channel URL, key ID and P-256
+public key. Translation catalogs and exact compatibility profiles downloaded at
+runtime are accepted only after the detached signature, monotonic sequence,
+size and SHA-256 pins have been verified. The private data-signing key is never
+part of the repository or player payload. This data signature is independent of
+Authenticode code signing.
+
 The installer build copies the manifest-listed files one by one to a new staging
 directory, verifies every SHA-256 again, runs Inno Setup and re-verifies the
 staging tree after compilation. It never runs the generated installer.
@@ -64,29 +71,32 @@ No technical setting can guarantee zero antivirus or SmartScreen warnings for a
 brand-new community executable. The release process therefore separates two
 states:
 
-- **unsigned local build** — allowed for developer testing, clearly warned and
-  not suitable for Discord distribution;
+- **unsigned community preview (current 3.1 mode)** — technically functional and
+  shown as an unknown publisher by Windows; distribute it only with the exact Git
+  commit, installer SHA-256 sidecar, an explicit SmartScreen warning, and no claim
+  that the EXE is signed;
 - **signed public build** — GUI/project binaries, Setup and uninstaller are
   Authenticode-signed and RFC 3161 timestamped, then their final hashes are
   published with the GitHub Release.
 
-For public distribution, use a certificate or managed signing service whose
-publisher name the community can recognize. Keep release builds reproducible,
-publish the Git commit and SHA-256 sidecar, and never add obfuscation, executable
-downloads, in-process hooks or hidden background behavior merely to suppress a
-warning.
+Authenticode is recommended and planned, but not represented as complete for the
+current preview. When it becomes available, use a certificate or managed signing
+service whose publisher name the community can recognize. In both modes keep
+release builds reproducible, publish the Git commit and SHA-256 sidecar, and never
+add obfuscation, executable downloads, in-process hooks or hidden background
+behavior merely to suppress a warning.
 
 ## Release checklist
 
 1. Build from a clean, reviewed commit.
-2. Publish the signed player payload and inspect `BUILD-RECEIPT.json`.
-3. Run `build-installer.ps1 -VerifyOnly -ExpectedSignerThumbprint <thumbprint>`
-   to verify the signed payload. Do not pass an Inno Sign Tool in verify-only
-   mode; no installer exists yet.
-4. Compile the installer with the configured Inno Authenticode hook.
-5. Confirm the final signature is valid and timestamped.
-6. Test install, version detection, blocked unknown version, apply, restore and
+2. Inspect `BUILD-RECEIPT.json` and run `build-installer.ps1 -VerifyOnly`.
+3. For the current unsigned preview, compile without a Sign Tool, verify the
+   `.sha256` sidecar, and label the GitHub Release/Discord post as unsigned.
+4. For a future signed release, first verify the signed player payload with
+   `-ExpectedSignerThumbprint`, then compile with the configured Inno Authenticode
+   hook and confirm the final signature plus RFC 3161 timestamp.
+5. Test install, version detection, blocked unknown version, apply, restore and
    uninstall in a disposable Windows user profile.
-7. Upload the installer and its `.sha256` sidecar to the same GitHub Release.
-8. Have at least one second community maintainer verify the downloaded hash and
-   publisher before posting the link in Discord.
+6. Upload the installer and its `.sha256` sidecar to the same GitHub Release.
+7. Have at least one second community maintainer verify the downloaded hash and,
+   when Authenticode is used, the publisher before posting the link in Discord.

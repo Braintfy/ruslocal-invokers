@@ -92,6 +92,9 @@ namespace InvokersRu.Core.Patching
         [JsonPropertyName("translation_policy")]
         public string TranslationPolicy { get; set; } = "release-approved";
 
+        [JsonPropertyName("superseded_artifacts")]
+        public RuntimeCacheSupersededArtifact[] SupersededArtifacts { get; set; } = Array.Empty<RuntimeCacheSupersededArtifact>();
+
         public static RuntimeCacheCompatibility Parse(string json)
         {
             var options = new JsonSerializerOptions
@@ -172,6 +175,36 @@ namespace InvokersRu.Core.Patching
 
             if (!string.IsNullOrWhiteSpace(TranslationCatalogSha256)) ValidateHash(TranslationCatalogSha256, nameof(TranslationCatalogSha256));
             if (!string.IsNullOrWhiteSpace(ExpectedOutputSha256)) ValidateHash(ExpectedOutputSha256, nameof(ExpectedOutputSha256));
+
+            if (SupersededArtifacts == null || SupersededArtifacts.Length > 16)
+            {
+                throw new InvalidDataException("Runtime-cache superseded artifact allowlist is null or too large.");
+            }
+
+            for (int index = 0; index < SupersededArtifacts.Length; index++)
+            {
+                RuntimeCacheSupersededArtifact artifact = SupersededArtifacts[index]
+                    ?? throw new InvalidDataException("Runtime-cache superseded artifact is null.");
+                artifact.Validate(EntryCount);
+                if (Hashing.FixedEqualsHex(artifact.OutputSha256, BaseSha256)
+                    || (!string.IsNullOrWhiteSpace(ExpectedOutputSha256)
+                        && Hashing.FixedEqualsHex(artifact.OutputSha256, ExpectedOutputSha256))
+                    || (!string.IsNullOrWhiteSpace(TranslationCatalogSha256)
+                        && Hashing.FixedEqualsHex(artifact.TranslationCatalogSha256, TranslationCatalogSha256)))
+                {
+                    throw new InvalidDataException("Runtime-cache superseded artifact duplicates the official base or current artifact.");
+                }
+
+                for (int prior = 0; prior < index; prior++)
+                {
+                    RuntimeCacheSupersededArtifact other = SupersededArtifacts[prior];
+                    if (Hashing.FixedEqualsHex(artifact.OutputSha256, other.OutputSha256)
+                        || Hashing.FixedEqualsHex(artifact.TranslationCatalogSha256, other.TranslationCatalogSha256))
+                    {
+                        throw new InvalidDataException("Runtime-cache superseded artifact allowlist contains duplicate output or catalog pins.");
+                    }
+                }
+            }
         }
 
         public static RuntimeCacheCompatibility OfficialObserved0601239()
@@ -210,6 +243,47 @@ namespace InvokersRu.Core.Patching
                     || (character >= 'a' && character <= 'z')
                     || (character >= '0' && character <= '9')
                     || character == '-' || character == '_' || character == '.');
+        }
+
+        private static void ValidateHash(string? value, string name)
+        {
+            if (value == null || value.Length != 64 || value.Any(character => !Uri.IsHexDigit(character)))
+            {
+                throw new InvalidDataException($"{name} must be a SHA-256 hexadecimal digest.");
+            }
+        }
+    }
+
+    public sealed class RuntimeCacheSupersededArtifact
+    {
+        [JsonPropertyName("output_sha256")]
+        public string OutputSha256 { get; set; } = string.Empty;
+
+        [JsonPropertyName("translation_catalog_sha256")]
+        public string TranslationCatalogSha256 { get; set; } = string.Empty;
+
+        [JsonPropertyName("applied_translations")]
+        public int AppliedTranslations { get; set; }
+
+        [JsonPropertyName("english_fallbacks")]
+        public int EnglishFallbacks { get; set; }
+
+        [JsonPropertyName("base_fallbacks")]
+        public int BaseFallbacks { get; set; }
+
+        [JsonPropertyName("needs_review_fallbacks")]
+        public int NeedsReviewFallbacks { get; set; }
+
+        internal void Validate(int entryCount)
+        {
+            ValidateHash(OutputSha256, nameof(OutputSha256));
+            ValidateHash(TranslationCatalogSha256, nameof(TranslationCatalogSha256));
+            if (AppliedTranslations <= 0 || EnglishFallbacks < 0 || BaseFallbacks < 0
+                || NeedsReviewFallbacks < 0 || NeedsReviewFallbacks > EnglishFallbacks
+                || AppliedTranslations + EnglishFallbacks + BaseFallbacks != entryCount)
+            {
+                throw new InvalidDataException("Runtime-cache superseded artifact composition pins are invalid.");
+            }
         }
 
         private static void ValidateHash(string? value, string name)

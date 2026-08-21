@@ -212,6 +212,14 @@ namespace InvokersRu.Core.Patching
                 return result;
             }
 
+            if (staticPinsMatch && state != null
+                && TryValidateCatalogSupersededState(root, target, statePath, profile, state, result.BaseSha256!, out stateProblem))
+            {
+                result.Status = InstallationStatus.PatchSupersededByCatalogUpdate;
+                result.Message = $"Runtime cache {profile.Id} contains an older restorable translation artifact; an exact newer catalog can replace it.";
+                return result;
+            }
+
             result.Status = state == null ? InstallationStatus.UnknownBuild : InstallationStatus.InconsistentState;
             result.Message = state == null
                 ? "Runtime cache or version stamp differs from the exact pinned tuple; refusing it."
@@ -230,7 +238,10 @@ namespace InvokersRu.Core.Patching
             MutationPolicy.BindTestRuntimePaths(cacheRoot, statePath);
             MutationPolicy.RequireRuntimeBinding(cacheRoot, statePath);
             bool supersededByOfficialUpdate = inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate;
-            if (inspection.Status != InstallationStatus.CompatibleOriginal && !supersededByOfficialUpdate)
+            bool supersededByCatalogUpdate = inspection.Status == InstallationStatus.PatchSupersededByCatalogUpdate;
+            if (inspection.Status != InstallationStatus.CompatibleOriginal
+                && !supersededByOfficialUpdate
+                && !supersededByCatalogUpdate)
             {
                 throw new InvalidOperationException("Runtime-cache patching requires the exact compatible original tuple.");
             }
@@ -253,16 +264,39 @@ namespace InvokersRu.Core.Patching
             {
                 throw new InvalidOperationException("An interrupted transaction requires recovery before runtime-cache apply.");
             }
+            PatchState? supersededCatalogState = null;
             if (supersededByOfficialUpdate)
             {
                 ArchiveSupersededStateUnderLock(cacheRoot, targetPath, statePath, profile);
+            }
+            else if (supersededByCatalogUpdate)
+            {
+                supersededCatalogState = RequireCatalogSupersededStateUnderLock(
+                    cacheRoot,
+                    targetPath,
+                    statePath,
+                    profile);
             }
             else if (File.Exists(statePath))
             {
                 throw new InvalidOperationException("Runtime-cache patch state appeared after inspection; refusing to overwrite it.");
             }
 
-            VerifyExactTuple(cacheRoot, profile);
+            Loc1Document english;
+            Loc1Document baseLocale;
+            if (supersededCatalogState == null)
+            {
+                VerifyExactTuple(cacheRoot, profile);
+                english = Loc1Codec.ReadFile(englishPath);
+                baseLocale = Loc1Codec.ReadFile(targetPath);
+            }
+            else
+            {
+                VerifyStaticTuple(cacheRoot, profile);
+                english = Loc1Codec.ReadFile(englishPath);
+                baseLocale = Loc1Codec.ReadFile(supersededCatalogState.BackupPath);
+                VerifyDocuments(english, baseLocale, profile);
+            }
             byte[] catalogBytes = File.ReadAllBytes(translationsPath);
             string catalogHash = Hashing.Sha256Bytes(catalogBytes);
             if (string.IsNullOrWhiteSpace(profile.TranslationCatalogSha256)
@@ -272,8 +306,6 @@ namespace InvokersRu.Core.Patching
             }
 
             TranslationCatalog catalog = TranslationCatalog.LoadJsonLinesBytes(catalogBytes);
-            Loc1Document english = Loc1Codec.ReadFile(englishPath);
-            Loc1Document baseLocale = Loc1Codec.ReadFile(targetPath);
             bool supervisedSafeDrafts = profile.TranslationPolicy == "supervised-safe-drafts";
             bool communityPreview = profile.TranslationPolicy == "community-preview-all-drafts";
             bool includeDraft = supervisedSafeDrafts || communityPreview;
@@ -329,13 +361,22 @@ namespace InvokersRu.Core.Patching
             string tempPath = Path.Combine(targetDirectory, $".{TargetFileName}.invokersru-{Guid.NewGuid():N}.tmp");
             string stateRoot = Path.GetDirectoryName(Path.GetFullPath(statePath)) ?? PatchPlanner.DefaultStateRoot();
             string backupPath = Path.Combine(stateRoot, "backups", SafeProfileId(profile.Id), $"{profile.BaseSha256}.{TargetFileName}");
-            var journal = NewJournal("runtime-cache-apply", profile, cacheRoot, targetPath, backupPath,
-                profile.BaseSha256, patchedHash, catalogHash, composition.AppliedTranslations);
+            string sourcePreimageHash = supersededCatalogState?.PatchedSha256 ?? profile.BaseSha256;
+            string operation = supersededCatalogState == null ? "runtime-cache-apply" : "runtime-cache-upgrade";
+            var journal = NewJournal(operation, profile, cacheRoot, targetPath, backupPath,
+                sourcePreimageHash, patchedHash, catalogHash, composition.AppliedTranslations);
             bool committed = false;
             try
             {
                 PatchJournalStore.Save(statePath, journal);
-                PatchService.EnsureVerifiedBackup(targetPath, backupPath, profile.BaseSha256);
+                if (supersededCatalogState == null)
+                {
+                    PatchService.EnsureVerifiedBackup(targetPath, backupPath, profile.BaseSha256);
+                }
+                else
+                {
+                    VerifyExactImmutableBackup(backupPath, profile.BaseSha256, "catalog-upgrade runtime-cache backup");
+                }
                 PatchService.Advance(statePath, journal, "BackupVerified");
                 PatchService.WriteDurably(tempPath, patchedRaw);
                 VerifyPatchedRaw(File.ReadAllBytes(tempPath), baseLocale, profile);
@@ -344,11 +385,24 @@ namespace InvokersRu.Core.Patching
                 EnsureNoProcessConflicts();
                 MutationPolicy.RequireRuntimeStatePath(statePath);
                 MutationPolicy.RequireRuntimeRoot(cacheRoot);
-                VerifyExactTuple(cacheRoot, profile);
+                if (supersededCatalogState == null)
+                {
+                    VerifyExactTuple(cacheRoot, profile);
+                }
+                else
+                {
+                    supersededCatalogState = RequireCatalogSupersededStateUnderLock(
+                        cacheRoot,
+                        targetPath,
+                        statePath,
+                        profile);
+                    if (!Hashing.FixedEqualsHex(supersededCatalogState.PatchedSha256, sourcePreimageHash))
+                        throw new IOException("Recorded superseded translation preimage changed during catalog upgrade.");
+                }
                 PatchService.EnsureSupportedMutationPaths(cacheRoot, targetPath, statePath);
                 PatchService.RejectExistingReparseComponents(backupPath, "immutable runtime-cache backup");
                 PatchService.Advance(statePath, journal, "PreCommitVerified");
-                PatchService.AtomicReplacePreservingPreimage(tempPath, targetPath, profile.BaseSha256, statePath, journal);
+                PatchService.AtomicReplacePreservingPreimage(tempPath, targetPath, sourcePreimageHash, statePath, journal);
                 committed = true;
                 if (!Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), patchedHash)) throw new IOException("Replaced raw cache hash changed.");
                 PatchService.Advance(statePath, journal, "PostCommitVerified");
@@ -374,7 +428,7 @@ namespace InvokersRu.Core.Patching
             finally
             {
                 if (File.Exists(tempPath)) File.Delete(tempPath);
-                if (!committed && File.Exists(targetPath) && Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), profile.BaseSha256))
+                if (!committed && File.Exists(targetPath) && Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), sourcePreimageHash))
                 {
                     journal.Phase = "Aborted";
                     PatchJournalStore.Save(statePath, journal);
@@ -390,16 +444,34 @@ namespace InvokersRu.Core.Patching
             profile.Validate();
             PatchState state = PatchPlanner.TryLoadState(statePath) ?? throw new InvalidOperationException("No valid runtime-cache patch state exists.");
             MutationPolicy.RequireRuntimeBinding(state.GameRoot, statePath);
-            ValidateRecordedPaths(state, statePath, profile);
+            RuntimeCacheInspection inspection = Inspect(state.GameRoot, profile, statePath);
+            bool catalogSuperseded = inspection.Status == InstallationStatus.PatchSupersededByCatalogUpdate;
+            if (inspection.Status != InstallationStatus.PatchedByThisTool && !catalogSuperseded)
+                throw new InvalidOperationException("Runtime-cache restore requires an exact current or safely superseded translation state.");
+            if (catalogSuperseded)
+            {
+                state = RequireCatalogSupersededStateUnderLock(state.GameRoot, state.TargetPath, statePath, profile);
+            }
+            else
+            {
+                ValidateRecordedPaths(state, statePath, profile);
+            }
             using ExecutionGuard guard = ExecutionGuard.Acquire(state.GameRoot, statePath);
             MutationPolicy.RequireRuntimeStatePath(statePath);
             state = PatchPlanner.TryLoadState(statePath) ?? throw new InvalidOperationException("Runtime-cache patch state disappeared after locking.");
             MutationPolicy.RequireRuntimeBinding(state.GameRoot, statePath);
-            ValidateRecordedPaths(state, statePath, profile);
             EnsureNoProcessConflicts();
             if (PatchJournalStore.FindActive(statePath) != null) throw new InvalidOperationException("Runtime-cache recovery is required before restore.");
             VerifyStaticTuple(state.GameRoot, profile);
-            RestoreUnderLock(state, statePath, profile);
+            if (catalogSuperseded)
+            {
+                state = RequireCatalogSupersededStateUnderLock(state.GameRoot, state.TargetPath, statePath, profile);
+            }
+            else
+            {
+                ValidateRecordedPaths(state, statePath, profile);
+            }
+            RestoreUnderLock(state, statePath, profile, catalogSuperseded);
         }
 
         internal static string Recover(string statePath, RuntimeCacheCompatibility profile)
@@ -429,11 +501,10 @@ namespace InvokersRu.Core.Patching
             }
             if (journal.Phase == "Completed")
             {
-                string completedOriginalHash = journal.Operation == "runtime-cache-restore"
-                    ? journal.ExpectedOutputSha256 : journal.SourceSha256;
-                if (!File.Exists(journal.BackupPath)
-                    || !Hashing.FixedEqualsHex(Hashing.Sha256File(journal.BackupPath), completedOriginalHash))
-                    throw new IOException("Completed runtime-cache transaction backup is missing or invalid.");
+                VerifyExactImmutableBackup(
+                    journal.BackupPath,
+                    profile.BaseSha256,
+                    "completed runtime-cache transaction backup");
                 VerifyStaticTuple(journal.GameRoot, profile);
                 if (File.Exists(journal.QuarantinePath)) File.Delete(journal.QuarantinePath);
                 PatchJournalStore.Delete(statePath, journal.TransactionId);
@@ -453,11 +524,12 @@ namespace InvokersRu.Core.Patching
             if (!Hashing.FixedEqualsHex(currentHash, journal.ExpectedOutputSha256)) throw new IOException("Runtime-cache recovery target is neither recorded source nor output.");
             if (!File.Exists(journal.QuarantinePath))
                 throw new IOException("Committed runtime-cache recovery is missing its validated displaced-file quarantine.");
-            string originalHash = journal.Operation == "runtime-cache-restore" ? journal.ExpectedOutputSha256 : journal.SourceSha256;
-            if (!File.Exists(journal.BackupPath) || !Hashing.FixedEqualsHex(Hashing.Sha256File(journal.BackupPath), originalHash))
-                throw new IOException("Runtime-cache recovery backup is missing or invalid.");
+            VerifyExactImmutableBackup(
+                journal.BackupPath,
+                profile.BaseSha256,
+                "runtime-cache recovery backup");
             VerifyStaticTuple(journal.GameRoot, profile);
-            if (journal.Operation == "runtime-cache-apply")
+            if (journal.Operation is "runtime-cache-apply" or "runtime-cache-upgrade")
             {
                 PatchService.WriteStateAtomically(statePath, new PatchState
                 {
@@ -465,7 +537,7 @@ namespace InvokersRu.Core.Patching
                     GameRoot = journal.GameRoot,
                     TargetPath = journal.TargetPath,
                     BackupPath = journal.BackupPath,
-                    OriginalSha256 = journal.SourceSha256,
+                    OriginalSha256 = profile.BaseSha256,
                     PatchedSha256 = journal.ExpectedOutputSha256,
                     TranslationsSha256 = journal.TranslationsSha256,
                     AppliedTranslations = journal.AppliedTranslations,
@@ -480,7 +552,46 @@ namespace InvokersRu.Core.Patching
             return $"Recovered interrupted {journal.Operation} transaction.";
         }
 
-        private static void RestoreUnderLock(PatchState state, string statePath, RuntimeCacheCompatibility profile)
+        /// <summary>
+        /// Authenticates an interrupted runtime-cache transaction without changing any files. The resolver
+        /// uses this only to select the one exact signed profile that is allowed to recover the journal;
+        /// <see cref="Recover"/> repeats every check after acquiring the execution lock before it mutates.
+        /// </summary>
+        internal static bool TryAuthenticateRecovery(
+            string cacheRoot,
+            string statePath,
+            RuntimeCacheCompatibility profile,
+            out string problem)
+        {
+            try
+            {
+                profile.Validate();
+                string root = Path.GetFullPath(cacheRoot);
+                PatchJournal journal = LoadAndValidateRuntimeJournal(statePath, root, profile);
+                VerifyStaticTuple(root, profile);
+                string currentHash = File.Exists(journal.TargetPath)
+                    ? Hashing.Sha256File(journal.TargetPath)
+                    : string.Empty;
+                ValidateRecoveryStateUnderLock(statePath, journal, profile, currentHash);
+                PatchService.ValidateRecoveryPhaseReadiness(journal, currentHash);
+                problem = string.Empty;
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException || exception is InvalidOperationException
+                || exception is UnauthorizedAccessException || exception is InvalidDataException
+                || exception is ArgumentException || exception is NotSupportedException
+                || exception is System.Security.SecurityException || exception is Loc1FormatException)
+            {
+                problem = exception.Message;
+                return false;
+            }
+        }
+
+        private static void RestoreUnderLock(
+            PatchState state,
+            string statePath,
+            RuntimeCacheCompatibility profile,
+            bool catalogSuperseded)
         {
             if (!File.Exists(state.TargetPath)) throw new FileNotFoundException("Runtime-cache target is missing.");
             string currentHash = Hashing.Sha256File(state.TargetPath);
@@ -498,7 +609,8 @@ namespace InvokersRu.Core.Patching
                 throw new IOException("Immutable runtime-cache backup is missing or invalid.");
             string directory = Path.GetDirectoryName(state.TargetPath) ?? throw new InvalidDataException("Runtime-cache target has no directory.");
             string tempPath = Path.Combine(directory, $".{TargetFileName}.restore-{Guid.NewGuid():N}.tmp");
-            PatchJournal journal = NewJournal("runtime-cache-restore", profile, state.GameRoot, state.TargetPath, state.BackupPath,
+            string operation = catalogSuperseded ? "runtime-cache-upgrade-restore" : "runtime-cache-restore";
+            PatchJournal journal = NewJournal(operation, profile, state.GameRoot, state.TargetPath, state.BackupPath,
                 state.PatchedSha256, state.OriginalSha256, state.TranslationsSha256, state.AppliedTranslations);
             bool committed = false;
             try
@@ -779,22 +891,238 @@ namespace InvokersRu.Core.Patching
             return true;
         }
 
+        private static bool TryValidateCatalogSupersededState(
+            string root,
+            string target,
+            string statePath,
+            RuntimeCacheCompatibility profile,
+            PatchState state,
+            string actualTargetHash,
+            out string problem)
+        {
+            string expectedBackup = ExpectedBackupPath(statePath, profile);
+            if (state.Schema != 1
+                || !string.Equals(state.BuildId, profile.Id, StringComparison.Ordinal)
+                || !PathEquals(state.GameRoot, root)
+                || !PathEquals(state.TargetPath, target)
+                || !PathEquals(state.BackupPath, expectedBackup)
+                || !Hashing.FixedEqualsHex(state.OriginalSha256, profile.BaseSha256)
+                || !TryFindSupersededArtifact(
+                    profile,
+                    state.PatchedSha256,
+                    state.TranslationsSha256,
+                    state.AppliedTranslations,
+                    out _)
+                || !Hashing.FixedEqualsHex(actualTargetHash, state.PatchedSha256)
+                || Hashing.FixedEqualsHex(actualTargetHash, profile.BaseSha256)
+                || string.IsNullOrWhiteSpace(profile.ExpectedOutputSha256)
+                || Hashing.FixedEqualsHex(actualTargetHash, profile.ExpectedOutputSha256)
+                || state.AppliedAt == default)
+            {
+                problem = "superseded catalog state identity/path/hash/count pins are invalid";
+                return false;
+            }
+
+            try
+            {
+                VerifyExactImmutableBackup(expectedBackup, profile.BaseSha256, "catalog-upgrade runtime-cache backup");
+                Loc1Document backup = Loc1Codec.ReadFile(expectedBackup);
+                Loc1Document current = Loc1Codec.ReadFile(target);
+                Loc1Document english = Loc1Codec.ReadFile(ResolveFixedPaths(root).English);
+                VerifyDocuments(english, backup, profile);
+                VerifyDocuments(english, current, profile);
+            }
+            catch (Exception exception) when (exception is IOException || exception is InvalidOperationException
+                || exception is UnauthorizedAccessException || exception is InvalidDataException || exception is Loc1FormatException)
+            {
+                problem = $"superseded catalog state is not safely restorable: {exception.Message}";
+                return false;
+            }
+
+            problem = string.Empty;
+            return true;
+        }
+
+        private static PatchState RequireCatalogSupersededStateUnderLock(
+            string cacheRoot,
+            string targetPath,
+            string statePath,
+            RuntimeCacheCompatibility profile)
+        {
+            VerifyStaticTuple(cacheRoot, profile);
+            PatchState state = PatchPlanner.TryLoadState(statePath)
+                ?? throw new InvalidDataException("Superseded catalog state disappeared or became unreadable after locking.");
+            if (!File.Exists(targetPath))
+                throw new FileNotFoundException("Superseded catalog target disappeared after locking.", targetPath);
+            string targetHash = Hashing.Sha256File(targetPath);
+            if (!TryValidateCatalogSupersededState(
+                    cacheRoot,
+                    targetPath,
+                    statePath,
+                    profile,
+                    state,
+                    targetHash,
+                    out string problem))
+            {
+                throw new InvalidDataException($"Superseded catalog state is not safe to replace: {problem}");
+            }
+
+            return state;
+        }
+
+        private static void VerifyExactImmutableBackup(string backupPath, string expectedHash, string label)
+        {
+            PatchService.RejectExistingReparseComponents(backupPath, label);
+            if (!File.Exists(backupPath))
+                throw new FileNotFoundException("Immutable runtime-cache backup is missing.", backupPath);
+            FileAttributes attributes = File.GetAttributes(backupPath);
+            if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                throw new InvalidDataException("Immutable runtime-cache backup is not a regular file.");
+            if (!Hashing.FixedEqualsHex(Hashing.Sha256File(backupPath), expectedHash))
+                throw new InvalidDataException("Immutable runtime-cache backup does not match the pinned official base hash.");
+        }
+
+        private static bool IsRecordedHash(string? value)
+        {
+            return value != null && value.Length == 64 && value.All(Uri.IsHexDigit);
+        }
+
+        private static bool IsSafeSupersededPatchHash(string? value, RuntimeCacheCompatibility profile)
+        {
+            if (!IsRecordedHash(value)) return false;
+            RuntimeCacheSupersededArtifact[] matches = profile.SupersededArtifacts
+                .Where(artifact => Hashing.FixedEqualsHex(artifact.OutputSha256, value!))
+                .Take(2)
+                .ToArray();
+            return matches.Length == 1;
+        }
+
+        private static bool TryFindSupersededArtifact(
+            RuntimeCacheCompatibility profile,
+            string outputSha256,
+            string catalogSha256,
+            int appliedTranslations,
+            out RuntimeCacheSupersededArtifact? artifact)
+        {
+            RuntimeCacheSupersededArtifact[] matches = profile.SupersededArtifacts
+                .Where(candidate => Hashing.FixedEqualsHex(candidate.OutputSha256, outputSha256)
+                    && Hashing.FixedEqualsHex(candidate.TranslationCatalogSha256, catalogSha256)
+                    && candidate.AppliedTranslations == appliedTranslations)
+                .Take(2)
+                .ToArray();
+            artifact = matches.Length == 1 ? matches[0] : null;
+            return artifact != null;
+        }
+
+        private static bool IsExactCurrentRecordedState(
+            PatchState state,
+            string statePath,
+            RuntimeCacheCompatibility profile)
+        {
+            try
+            {
+                string expectedBackup = ExpectedBackupPath(statePath, profile);
+                (_, string expectedTarget, _) = ResolveFixedPaths(state.GameRoot);
+                if (state.Schema != 1
+                    || !string.Equals(state.BuildId, profile.Id, StringComparison.Ordinal)
+                    || !PathEquals(state.TargetPath, expectedTarget)
+                    || !PathEquals(state.BackupPath, expectedBackup)
+                    || !Hashing.FixedEqualsHex(state.OriginalSha256, profile.BaseSha256)
+                    || !Hashing.FixedEqualsHex(state.PatchedSha256, profile.ExpectedOutputSha256!)
+                    || !Hashing.FixedEqualsHex(state.TranslationsSha256, profile.TranslationCatalogSha256!)
+                    || state.AppliedTranslations != profile.ExpectedAppliedTranslations
+                    || state.AppliedAt == default)
+                {
+                    return false;
+                }
+
+                VerifyExactImmutableBackup(expectedBackup, profile.BaseSha256, "current runtime-cache recovery backup");
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException || exception is InvalidOperationException
+                || exception is UnauthorizedAccessException || exception is InvalidDataException)
+            {
+                return false;
+            }
+        }
+
+        private static bool IsExactSupersededRecordedState(
+            PatchState state,
+            string statePath,
+            RuntimeCacheCompatibility profile,
+            string expectedPatchedHash)
+        {
+            try
+            {
+                string expectedBackup = ExpectedBackupPath(statePath, profile);
+                (_, string expectedTarget, _) = ResolveFixedPaths(state.GameRoot);
+                if (state.Schema != 1
+                    || !string.Equals(state.BuildId, profile.Id, StringComparison.Ordinal)
+                    || !PathEquals(state.TargetPath, expectedTarget)
+                    || !PathEquals(state.BackupPath, expectedBackup)
+                    || !Hashing.FixedEqualsHex(state.OriginalSha256, profile.BaseSha256)
+                    || !Hashing.FixedEqualsHex(state.PatchedSha256, expectedPatchedHash)
+                    || !TryFindSupersededArtifact(
+                        profile,
+                        state.PatchedSha256,
+                        state.TranslationsSha256,
+                        state.AppliedTranslations,
+                        out _)
+                    || state.AppliedAt == default)
+                {
+                    return false;
+                }
+
+                VerifyExactImmutableBackup(expectedBackup, profile.BaseSha256, "superseded runtime-cache recovery backup");
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException || exception is InvalidOperationException
+                || exception is UnauthorizedAccessException || exception is InvalidDataException)
+            {
+                return false;
+            }
+        }
+
         private static void ValidateJournalPins(PatchJournal journal, RuntimeCacheCompatibility profile)
         {
             if (journal.Schema != 1
-                || (journal.Operation != "runtime-cache-apply" && journal.Operation != "runtime-cache-restore")
+                || journal.Operation is not ("runtime-cache-apply" or "runtime-cache-restore"
+                    or "runtime-cache-upgrade" or "runtime-cache-upgrade-restore")
                 || !LegalJournalPhases.Contains(journal.Phase))
                 throw new InvalidDataException("Runtime-cache journal schema, operation, or phase is not supported.");
-            bool apply = journal.Operation == "runtime-cache-apply";
-            string originalHash = apply ? journal.SourceSha256 : journal.ExpectedOutputSha256;
-            string patchedHash = apply ? journal.ExpectedOutputSha256 : journal.SourceSha256;
             if (!string.Equals(journal.BuildId, profile.Id, StringComparison.Ordinal)
-                || !Hashing.FixedEqualsHex(originalHash, profile.BaseSha256)
                 || string.IsNullOrWhiteSpace(profile.ExpectedOutputSha256)
-                || !Hashing.FixedEqualsHex(patchedHash, profile.ExpectedOutputSha256)
-                || string.IsNullOrWhiteSpace(profile.TranslationCatalogSha256)
-                || !Hashing.FixedEqualsHex(journal.TranslationsSha256, profile.TranslationCatalogSha256)
-                || journal.AppliedTranslations != profile.ExpectedAppliedTranslations)
+                || string.IsNullOrWhiteSpace(profile.TranslationCatalogSha256))
+                throw new InvalidDataException("Runtime-cache journal does not match the trusted profile pins.");
+
+            bool valid = journal.Operation switch
+            {
+                "runtime-cache-apply" =>
+                    Hashing.FixedEqualsHex(journal.SourceSha256, profile.BaseSha256)
+                    && Hashing.FixedEqualsHex(journal.ExpectedOutputSha256, profile.ExpectedOutputSha256)
+                    && Hashing.FixedEqualsHex(journal.TranslationsSha256, profile.TranslationCatalogSha256)
+                    && journal.AppliedTranslations == profile.ExpectedAppliedTranslations,
+                "runtime-cache-restore" =>
+                    Hashing.FixedEqualsHex(journal.SourceSha256, profile.ExpectedOutputSha256)
+                    && Hashing.FixedEqualsHex(journal.ExpectedOutputSha256, profile.BaseSha256)
+                    && Hashing.FixedEqualsHex(journal.TranslationsSha256, profile.TranslationCatalogSha256)
+                    && journal.AppliedTranslations == profile.ExpectedAppliedTranslations,
+                "runtime-cache-upgrade" =>
+                    IsSafeSupersededPatchHash(journal.SourceSha256, profile)
+                    && Hashing.FixedEqualsHex(journal.ExpectedOutputSha256, profile.ExpectedOutputSha256)
+                    && Hashing.FixedEqualsHex(journal.TranslationsSha256, profile.TranslationCatalogSha256)
+                    && journal.AppliedTranslations == profile.ExpectedAppliedTranslations,
+                "runtime-cache-upgrade-restore" =>
+                    TryFindSupersededArtifact(
+                        profile,
+                        journal.SourceSha256,
+                        journal.TranslationsSha256,
+                        journal.AppliedTranslations,
+                        out _)
+                    && Hashing.FixedEqualsHex(journal.ExpectedOutputSha256, profile.BaseSha256),
+                _ => false
+            };
+            if (!valid)
                 throw new InvalidDataException("Runtime-cache journal does not match the trusted profile pins.");
         }
 
@@ -802,6 +1130,16 @@ namespace InvokersRu.Core.Patching
         {
             MutationPolicy.RequireRuntimeStatePath(statePath);
             MutationPolicy.RequireRuntimeRoot(root);
+            ValidateRecordedPathsReadOnly(root, target, backup, statePath, profile);
+        }
+
+        private static void ValidateRecordedPathsReadOnly(
+            string root,
+            string target,
+            string backup,
+            string statePath,
+            RuntimeCacheCompatibility profile)
+        {
             (_, string expectedTarget, _) = ResolveFixedPaths(root);
             if (!PathEquals(target, expectedTarget)) throw new InvalidDataException("Recorded runtime-cache target is not dl_uk_UA.bin.");
             string expectedBackup = ExpectedBackupPath(statePath, profile);
@@ -815,13 +1153,21 @@ namespace InvokersRu.Core.Patching
             string lockRoot,
             RuntimeCacheCompatibility profile)
         {
+            MutationPolicy.RequireRuntimeStatePath(statePath);
+            MutationPolicy.RequireRuntimeRoot(lockRoot);
+            return LoadAndValidateRuntimeJournal(statePath, lockRoot, profile);
+        }
+
+        private static PatchJournal LoadAndValidateRuntimeJournal(
+            string statePath,
+            string expectedRoot,
+            RuntimeCacheCompatibility profile)
+        {
             PatchJournal journal = PatchJournalStore.FindActive(statePath)
                 ?? throw new InvalidOperationException("No runtime-cache journal requires recovery.");
-            MutationPolicy.RequireRuntimeStatePath(statePath);
-            MutationPolicy.RequireRuntimeRoot(journal.GameRoot);
-            if (!PathEquals(journal.GameRoot, lockRoot))
+            if (!PathEquals(journal.GameRoot, expectedRoot))
                 throw new InvalidDataException("Reloaded runtime-cache journal root differs from the fixed lock root.");
-            ValidateRecordedPaths(journal.GameRoot, journal.TargetPath, journal.BackupPath, statePath, profile);
+            ValidateRecordedPathsReadOnly(journal.GameRoot, journal.TargetPath, journal.BackupPath, statePath, profile);
             ValidateJournalPins(journal, profile);
             string directory = Path.GetDirectoryName(journal.TargetPath) ?? throw new InvalidDataException("Journal target has no directory.");
             string fileName = Path.GetFileName(journal.TargetPath);
@@ -849,34 +1195,62 @@ namespace InvokersRu.Core.Patching
             if (stateFileExists && state == null)
                 throw new InvalidDataException("Runtime-cache recovery state exists but is unreadable or has an unknown schema.");
 
-            if (state != null)
-            {
-                ValidateRecordedPaths(state, statePath, profile);
-                if (!PathEquals(state.GameRoot, journal.GameRoot)
+            bool normalApply = journal.Operation == "runtime-cache-apply";
+            bool normalRestore = journal.Operation == "runtime-cache-restore";
+            bool upgradeApply = journal.Operation == "runtime-cache-upgrade";
+            bool upgradeRestore = journal.Operation == "runtime-cache-upgrade-restore";
+            bool stateIsCurrent = state != null && IsExactCurrentRecordedState(state, statePath, profile);
+            bool stateIsSuperseded = state != null
+                && IsExactSupersededRecordedState(state, statePath, profile, journal.SourceSha256);
+
+            if (state != null
+                && (!PathEquals(state.GameRoot, journal.GameRoot)
                     || !PathEquals(state.TargetPath, journal.TargetPath)
                     || !PathEquals(state.BackupPath, journal.BackupPath)
-                    || !string.Equals(state.BuildId, journal.BuildId, StringComparison.Ordinal)
-                    || !Hashing.FixedEqualsHex(state.TranslationsSha256, journal.TranslationsSha256)
-                    || state.AppliedTranslations != journal.AppliedTranslations)
-                    throw new InvalidDataException("Runtime-cache recovery state and journal identities differ.");
+                    || !string.Equals(state.BuildId, journal.BuildId, StringComparison.Ordinal)))
+            {
+                throw new InvalidDataException("Runtime-cache recovery state and journal paths or identities differ.");
             }
-            bool apply = journal.Operation == "runtime-cache-apply";
+
+            if ((normalApply || normalRestore) && state != null && !stateIsCurrent)
+                throw new InvalidDataException("Runtime-cache recovery state does not match the current trusted profile.");
+            if ((upgradeApply || upgradeRestore) && state != null && !stateIsCurrent && !stateIsSuperseded)
+                throw new InvalidDataException("Runtime-cache upgrade recovery state is neither its exact source nor current trusted output.");
+
             if (journal.Phase == "Aborted")
             {
-                if (apply && state != null) throw new InvalidDataException("Aborted runtime-cache apply retained patch state.");
-                if (!apply && state == null) throw new InvalidDataException("Aborted runtime-cache restore lost patch state.");
+                if (normalApply && state != null) throw new InvalidDataException("Aborted runtime-cache apply retained patch state.");
+                if (normalRestore && !stateIsCurrent) throw new InvalidDataException("Aborted runtime-cache restore lost its exact patch state.");
+                if ((upgradeApply || upgradeRestore) && !stateIsSuperseded)
+                    throw new InvalidDataException("Aborted runtime-cache catalog upgrade lost its exact superseded state.");
                 return;
             }
             bool stateTransitionMayHaveRun = journal.Phase == "PostCommitVerified";
             bool stateTransitionRecorded = journal.Phase == "StateCommitted" || journal.Phase == "Completed";
-            if (apply && !stateTransitionMayHaveRun && !stateTransitionRecorded && state != null)
+            if (normalApply && !stateTransitionMayHaveRun && !stateTransitionRecorded && state != null)
                 throw new InvalidDataException("Runtime-cache apply recovery has state before the legal state-commit boundary.");
-            if (apply && stateTransitionRecorded && state == null)
+            if (normalApply && stateTransitionRecorded && !stateIsCurrent)
                 throw new InvalidDataException("Runtime-cache apply recovery lost state after StateCommitted.");
-            if (!apply && !stateTransitionMayHaveRun && !stateTransitionRecorded && state == null)
+            if (normalRestore && !stateTransitionMayHaveRun && !stateTransitionRecorded && !stateIsCurrent)
                 throw new InvalidDataException("Runtime-cache restore recovery lost state before the legal state-removal boundary.");
-            if (!apply && stateTransitionRecorded && state != null)
+            if (normalRestore && stateTransitionRecorded && state != null)
                 throw new InvalidDataException("Runtime-cache restore recovery retained state after StateCommitted.");
+
+            if (upgradeApply && !stateTransitionMayHaveRun && !stateTransitionRecorded && !stateIsSuperseded)
+                throw new InvalidDataException("Runtime-cache catalog upgrade lost its superseded state before the state-commit boundary.");
+            if (upgradeApply && stateTransitionMayHaveRun && state != null && !stateIsCurrent && !stateIsSuperseded)
+                throw new InvalidDataException("Runtime-cache catalog upgrade has an impossible state at the state-commit boundary.");
+            if (upgradeApply && stateTransitionMayHaveRun && state == null)
+                throw new InvalidDataException("Runtime-cache catalog upgrade lost both its superseded and current state at the state-commit boundary.");
+            if (upgradeApply && stateTransitionRecorded && !stateIsCurrent)
+                throw new InvalidDataException("Runtime-cache catalog upgrade lost its current state after StateCommitted.");
+
+            if (upgradeRestore && !stateTransitionMayHaveRun && !stateTransitionRecorded && !stateIsSuperseded)
+                throw new InvalidDataException("Runtime-cache catalog restore lost its superseded state before removal.");
+            if (upgradeRestore && stateTransitionMayHaveRun && state != null && !stateIsSuperseded)
+                throw new InvalidDataException("Runtime-cache catalog restore has an impossible state at the state-removal boundary.");
+            if (upgradeRestore && stateTransitionRecorded && state != null)
+                throw new InvalidDataException("Runtime-cache catalog restore retained state after StateCommitted.");
         }
 
         private static void ResolveOrRejectQuarantineUnderLock(string statePath, PatchJournal journal, string currentTargetHash)
@@ -949,6 +1323,10 @@ namespace InvokersRu.Core.Patching
 
         private static void EnsureNoProcessConflicts()
         {
+            // Isolated mutation-smoke builds operate only on their test-bound temporary root. Production
+            // mutation assemblies can never take this branch; process conflicts are covered separately by
+            // the CLI/GUI plan contract while transactional tests remain independent of the user's game.
+            if (MutationPolicy.IsTestWriteBuild) return;
             IReadOnlyList<string> conflicts = PatchService.FindRuntimeCacheProcessConflicts();
             if (conflicts.Count > 0)
                 throw new InvalidOperationException($"Close game/launcher processes before runtime-cache mutation: {string.Join("; ", conflicts.Take(8))}.");

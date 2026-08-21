@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$PayloadDirectory,
 
-    [string]$AppVersion = '3.0.1-preview'
+    [string]$AppVersion = '3.1.0-preview'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -207,6 +207,8 @@ foreach ($requiredInstallerSetting in @(
 }
 Assert-True -Condition ($issText.IndexOf('ignoreversion', [StringComparison]::OrdinalIgnoreCase) -lt 0) `
     -Message 'Installer still uses ignoreversion.'
+Assert-True -Condition ($issText.IndexOf('replacesameversion', [StringComparison]::OrdinalIgnoreCase) -ge 0) `
+    -Message 'Installer may preserve stale same-version binaries while replacing unversioned data.'
 Assert-True -Condition ($issText.IndexOf("`n[Run]", [StringComparison]::OrdinalIgnoreCase) -lt 0) `
     -Message 'Installer unexpectedly contains a Run section.'
 

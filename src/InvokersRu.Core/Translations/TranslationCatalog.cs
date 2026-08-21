@@ -22,6 +22,13 @@ namespace InvokersRu.Core.Translations
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
             AllowDuplicateProperties = false
         };
+        private static readonly JsonSerializerOptions TranslationResultJsonOptions = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = false,
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+            AllowDuplicateProperties = false,
+            RespectNullableAnnotations = true
+        };
         private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
         private static readonly HashSet<string> AllowedStatuses = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -303,8 +310,8 @@ namespace InvokersRu.Core.Translations
             bool allowPartial = false)
         {
             Dictionary<ulong, Loc1Entry> sourceByHash = english.IndexByHash();
-            Dictionary<string, TranslationJob> jobs = ReadUniqueJsonLines<TranslationJob>(jobsPath, job => job.JobId, "job");
-            Dictionary<string, TranslationResult> results = ReadUniqueJsonLines<TranslationResult>(resultsPath, result => result.JobId, "result");
+            Dictionary<string, TranslationJob> jobs = ReadUniqueJsonLines<TranslationJob>(jobsPath, job => job.JobId, "job", JsonOptions);
+            Dictionary<string, TranslationResult> results = ReadUniqueJsonLines<TranslationResult>(resultsPath, result => result.JobId, "result", TranslationResultJsonOptions);
             var merged = existing._records.ToDictionary(pair => pair.Key, pair => pair.Value);
             int importedIds = 0;
             int preservedReviewed = 0;
@@ -396,9 +403,15 @@ namespace InvokersRu.Core.Translations
                     continue;
                 }
 
-                if (string.IsNullOrWhiteSpace(result.Model) || string.IsNullOrWhiteSpace(result.PromptVersion))
+                if (string.IsNullOrWhiteSpace(result.Model) || result.Model.Length > 128)
                 {
-                    errors.Add($"{result.JobId}: model and prompt_version provenance are required.");
+                    errors.Add($"{result.JobId}: model must contain 1 to 128 characters and cannot be whitespace-only.");
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(result.PromptVersion) || !IsSafePromptVersion(result.PromptVersion))
+                {
+                    errors.Add($"{result.JobId}: prompt_version must match ^[A-Za-z0-9._-]{{1,128}}$.");
                     continue;
                 }
 
@@ -412,6 +425,12 @@ namespace InvokersRu.Core.Translations
                     || code.Any(character => !(char.IsAsciiLetterOrDigit(character) || character == '_' || character == '-'))))
                 {
                     errors.Add($"{result.JobId}: issue_codes may contain only non-empty ASCII identifiers.");
+                    continue;
+                }
+
+                if (result.IssueCodes.Distinct(StringComparer.Ordinal).Count() != result.IssueCodes.Length)
+                {
+                    errors.Add($"{result.JobId}: issue_codes must not contain duplicates.");
                     continue;
                 }
 
@@ -479,7 +498,7 @@ namespace InvokersRu.Core.Translations
                         PromptVersion = result.PromptVersion,
                         Confidence = result.Confidence,
                         NeedsReview = flaggedForReview,
-                        IssueCodes = result.IssueCodes.Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal).ToArray(),
+                        IssueCodes = result.IssueCodes.OrderBy(value => value, StringComparer.Ordinal).ToArray(),
                         RiskFlags = job.RiskFlags.Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal).ToArray(),
                         ReviewStage = result.Model.Contains("sol", StringComparison.OrdinalIgnoreCase) ? "sol_review" : "terra_done",
                         UpdatedAt = DateTimeOffset.UtcNow,
@@ -497,7 +516,11 @@ namespace InvokersRu.Core.Translations
             return new ImportSummary(results.Count, importedIds, preservedReviewed, needsReview, missingResultJobs);
         }
 
-        private static Dictionary<string, T> ReadUniqueJsonLines<T>(string path, Func<T, string> keySelector, string label) where T : class
+        private static Dictionary<string, T> ReadUniqueJsonLines<T>(
+            string path,
+            Func<T, string> keySelector,
+            string label,
+            JsonSerializerOptions serializerOptions) where T : class
         {
             var records = new Dictionary<string, T>(StringComparer.Ordinal);
             int lineNumber = 0;
@@ -508,7 +531,7 @@ namespace InvokersRu.Core.Translations
                 T? item;
                 try
                 {
-                    item = JsonSerializer.Deserialize<T>(line, JsonOptions);
+                    item = JsonSerializer.Deserialize<T>(line, serializerOptions);
                 }
                 catch (JsonException exception)
                 {
@@ -577,6 +600,14 @@ namespace InvokersRu.Core.Translations
         private static bool IsSafeWorkflowIdentifier(string value)
         {
             return value.Length <= 100 && value.All(character => char.IsAsciiLetterOrDigit(character)
+                || character == '_'
+                || character == '-'
+                || character == '.');
+        }
+
+        private static bool IsSafePromptVersion(string value)
+        {
+            return value.Length <= 128 && value.All(character => char.IsAsciiLetterOrDigit(character)
                 || character == '_'
                 || character == '-'
                 || character == '.');

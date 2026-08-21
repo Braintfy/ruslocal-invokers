@@ -1,5 +1,13 @@
 # Changelog
 
+## Windows 3.1.0 Preview — 2026-08-21
+
+- replaced the retired CMD/PowerShell installer with a self-contained WinForms patcher that discovers the fixed runtime cache, identifies the exact game/content version, reports coverage and English fallbacks, and exposes only guarded install, update, recovery, and exact restore actions;
+- routed every game-cache mutation through the Core transaction: fixed paths, process and reparse checks, immutable hash-named backup, journalled atomic replacement, preimage revalidation, rollback, and fail-closed recovery;
+- added a pinned ECDSA P-256 GitHub data channel. Future compatible translation catalogs and exact game profiles can update without replacing the EXE; the patcher separately blocks data that requires a newer patcher or a changed LOC1/path/slot implementation;
+- added strict update-envelope, URL, size, expiry, anti-rollback, last-known-good, exact profile, catalog, composition, and output checks, including offline fallback and historical restore/recovery;
+- added reproducible Windows payload and Inno Setup tooling, bilingual self-build verification guides, and an English community localization kit. The current preview is intentionally not Authenticode-signed, so Windows may show Unknown publisher or SmartScreen until publisher signing is introduced.
+
 ## Эмуляторы и скобки — 2026-08-20
 
 - added the emulator route to the Android helper. An emulator runs on the same computer, so there is no cable, no driver, no pairing code and no prompt on someone else's screen to accept — it is the shortest path of the four. The helper scans the local adb ports the common emulators ship with and, on Windows, reads the port of every BlueStacks instance out of `bluestacks.conf` instead of guessing;

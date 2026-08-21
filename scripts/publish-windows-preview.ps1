@@ -1,12 +1,14 @@
 [CmdletBinding()]
 param(
-    [string]$OutputDirectory = 'work\publish\windows-3.0.1-preview',
+    [string]$OutputDirectory = 'work\publish\windows-3.1.0-preview',
 
-    [string]$AppVersion = '3.0.1-preview',
+    [string]$AppVersion = '3.1.0-preview',
 
     [string]$TranslationCatalog = 'translations\ru_RU.jsonl',
 
     [string]$RuntimeCacheProfile = 'config\runtime-cache-profile.0.60.1247.json',
+
+    [string]$SignedUpdateChannelConfig = 'config\signed-update-channel.v1.json',
 
     [string]$LegacyCompatibilityManifest = 'config\compatibility.v1.json',
 
@@ -179,11 +181,12 @@ if ($AppVersion -notmatch '^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(-[A-Za-z0-9][A-Za
 
 $catalogPath = Get-RequiredFile -Path $TranslationCatalog -Label 'Translation catalog'
 $profilePath = Get-RequiredFile -Path $RuntimeCacheProfile -Label 'Runtime-cache compatibility profile'
+$channelConfigPath = Get-RequiredFile -Path $SignedUpdateChannelConfig -Label 'Signed-update channel config'
 $legacyManifestPath = Get-RequiredFile -Path $LegacyCompatibilityManifest -Label 'Legacy compatibility manifest'
 $licensePath = Get-RequiredFile -Path 'LICENSE' -Label 'Project license'
 $readmePath = Get-RequiredFile -Path 'installer\PREVIEW-README.txt' -Label 'Installed preview README'
 
-foreach ($msbuildPath in @($profilePath, $legacyManifestPath)) {
+foreach ($msbuildPath in @($profilePath, $channelConfigPath, $legacyManifestPath)) {
     if ($msbuildPath.IndexOfAny([char[]]@(';', '%')) -ge 0) {
         throw "MSBuild input path contains a reserved character: $msbuildPath"
     }
@@ -192,12 +195,32 @@ foreach ($msbuildPath in @($profilePath, $legacyManifestPath)) {
 $profile = Get-Content -LiteralPath $profilePath -Raw -Encoding UTF8 | ConvertFrom-Json
 if ([int]$profile.schema -ne 1 -or [string]$profile.game_version -ne '0.60.1247' -or
     [string]$profile.readiness -ne 'ready' -or $profile.certified -ne $true) {
-    throw 'Windows Preview 3.0 may be built only with the ready, certified 0.60.1247 runtime-cache profile.'
+    throw 'Windows Preview 3.1 may be built only with the ready, certified 0.60.1247 runtime-cache profile.'
 }
 $catalogHash = (Get-FileHash -LiteralPath $catalogPath -Algorithm SHA256).Hash.ToUpperInvariant()
 if (-not [string]::Equals($catalogHash, [string]$profile.translation_catalog_sha256, [StringComparison]::OrdinalIgnoreCase)) {
     throw "Translation catalog SHA-256 does not match the certified profile. Expected $($profile.translation_catalog_sha256), got $catalogHash."
 }
+$channelConfig = Get-Content -LiteralPath $channelConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+if ([int]$channelConfig.schema -ne 1 -or
+    [string]$channelConfig.kind -cne 'invokers-ru-update-channel' -or
+    [string]$channelConfig.envelope_url -cne 'https://github.com/Braintfy/ruslocal-invokers/releases/download/invokersru-update-channel-v1/update-envelope.v1.json' -or
+    [string]::IsNullOrWhiteSpace([string]$channelConfig.key_id) -or
+    [string]::IsNullOrWhiteSpace([string]$channelConfig.public_key_spki_base64)) {
+    throw 'Signed-update channel config does not describe the fixed public GitHub channel and key.'
+}
+try {
+    $channelPublicKey = [Convert]::FromBase64String([string]$channelConfig.public_key_spki_base64)
+}
+catch {
+    throw 'Signed-update channel public key is not valid Base64.'
+}
+if ($channelPublicKey.Length -le 0 -or $channelPublicKey.Length -gt 1024) {
+    throw 'Signed-update channel public key has an invalid byte count.'
+}
+$channelConfigHash = (Get-FileHash -LiteralPath $channelConfigPath -Algorithm SHA256).Hash.ToUpperInvariant()
+$channelPublicKeyHash = ([BitConverter]::ToString(
+    [Security.Cryptography.SHA256]::Create().ComputeHash($channelPublicKey))).Replace('-', '')
 
 $outputCandidate = $OutputDirectory
 if (-not [IO.Path]::IsPathRooted($outputCandidate)) {
@@ -286,7 +309,8 @@ try {
             --source https://api.nuget.org/v3/index.json `
             '-p:EnableSupervisedInstallWrites=true' `
             "-p:TrustedCompatibilityPath=$legacyManifestPath" `
-            "-p:TrustedRuntimeCacheCompatibilityPath=$profilePath"
+            "-p:TrustedRuntimeCacheCompatibilityPath=$profilePath" `
+            "-p:SignedUpdateChannelConfigPath=$channelConfigPath"
         if ($LASTEXITCODE -ne 0) {
             throw "dotnet restore failed for the supervised CLI with exit code $LASTEXITCODE."
         }
@@ -311,7 +335,8 @@ try {
     $cliProperties = @($commonPublishProperties) + @(
         '-p:EnableSupervisedInstallWrites=true',
         "-p:TrustedCompatibilityPath=$legacyManifestPath",
-        "-p:TrustedRuntimeCacheCompatibilityPath=$profilePath"
+        "-p:TrustedRuntimeCacheCompatibilityPath=$profilePath",
+        "-p:SignedUpdateChannelConfigPath=$channelConfigPath"
     )
     & $dotnet publish 'src\InvokersRu.Cli\InvokersRu.Cli.csproj' `
         --configuration Release --runtime win-x64 --self-contained true --no-restore `
@@ -383,6 +408,20 @@ try {
         throw 'Supervised CLI does not embed the exact 0.60.1247 runtime-cache profile and catalog pin.'
     }
 
+    $updateStatusText = & $cliPath update-status --json 2>&1 | Out-String
+    $updateStatusExit = $LASTEXITCODE
+    if ($updateStatusExit -notin @(0, 5)) {
+        throw "Supervised CLI signed-update introspection failed with exit code $updateStatusExit."
+    }
+    $updateStatus = $updateStatusText | ConvertFrom-Json
+    if ($updateStatus.configured -ne $true -or $null -eq $updateStatus.channel -or
+        [string]$updateStatus.channel.envelope_url -cne [string]$channelConfig.envelope_url -or
+        [string]$updateStatus.channel.key_id -cne [string]$channelConfig.key_id -or
+        -not [string]::Equals([string]$updateStatus.channel.public_key_spki_sha256,
+            $channelPublicKeyHash, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Supervised CLI does not embed the exact signed-update channel URL and public key.'
+    }
+
     $signTargets = foreach ($relative in @(Get-WindowsPayloadProjectBinaries)) {
         $target = Join-Path $payloadRoot $relative
         if (-not (Test-Path -LiteralPath $target -PathType Leaf)) {
@@ -407,7 +446,7 @@ try {
 
     $sdkVersion = $detectedSdkVersion
     $receipt = [ordered]@{
-        schema = 1
+        schema = 2
         kind = 'invokers-ru-windows-preview-publish'
         app_version = $AppVersion
         game_version = [string]$profile.game_version
@@ -419,6 +458,10 @@ try {
         embedded_supervised_profile = $true
         translation_catalog_sha256 = $catalogHash
         runtime_cache_profile_sha256 = $expectedProfileHash.ToUpperInvariant()
+        signed_update_channel_config_sha256 = $channelConfigHash
+        signed_update_envelope_url = [string]$channelConfig.envelope_url
+        signed_update_key_id = [string]$channelConfig.key_id
+        signed_update_public_key_spki_sha256 = $channelPublicKeyHash
         gui_sha256 = (Get-FileHash -LiteralPath (Join-Path $payloadRoot 'InvokersRu.Gui.exe') -Algorithm SHA256).Hash.ToUpperInvariant()
         cli_sha256 = (Get-FileHash -LiteralPath $cliPath -Algorithm SHA256).Hash.ToUpperInvariant()
         dotnet_sdk = $sdkVersion
@@ -432,7 +475,6 @@ try {
     $manifestScript = Join-Path $PSScriptRoot 'new-installer-input-manifest.ps1'
     $manifestOutput = @(& $manifestScript -InputDirectory $payloadRoot `
         -ManifestPath (Join-Path $payloadRoot 'PAYLOAD-SHA256.json') -AppVersion $AppVersion)
-    if ($LASTEXITCODE -ne 0) { throw 'Payload manifest generation failed.' }
     $manifestResult = ($manifestOutput -join [Environment]::NewLine) | ConvertFrom-Json
     if ([string]$manifestResult.status -ne 'created' -or [int]$manifestResult.file_count -lt 12) {
         throw 'Payload manifest generator returned an invalid receipt.'

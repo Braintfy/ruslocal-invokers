@@ -1,7 +1,7 @@
 СТАРЫЙ ПК-ПАТЧЕР ОТКЛЮЧЁН
 ===========================
 
-Сценарий install-pc.ps1 и архив с CMD-файлом заменены приложением InvokersRu 3.0.
+Сценарий install-pc.ps1 и архив с CMD-файлом заменены приложением InvokersRu 3.1 или новее.
 
 Скачайте Windows-установщик со страницы:
 https://github.com/Braintfy/ruslocal-invokers/releases/latest

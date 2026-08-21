@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/invokers-community/model-result.schema.json",
+  "title": "Invokers community localization model result",
+  "description": "One JSON object per line. This schema describes a single result row, not the surrounding JSONL file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "job_id",
+    "translation",
+    "model",
+    "prompt_version",
+    "confidence",
+    "needs_review",
+    "issue_codes"
+  ],
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "pattern": "^ru-[a-f0-9]{24}$"
+    },
+    "translation": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "prompt_version": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{1,128}$"
+    },
+    "confidence": {
+      "enum": ["high", "medium", "low"]
+    },
+    "needs_review": {
+      "type": "boolean"
+    },
+    "issue_codes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]+$"
+      }
+    }
+  }
+}

@@ -1,4 +1,4 @@
-# ПК-клиент: InvokersRu 3.0
+# ПК-клиент: InvokersRu 3.1
 
 Актуальный Windows-патчер — графическое приложение `InvokersRu.Gui.exe` и соседний supervised CLI. Он заменяет старые `install-pc.ps1`, `Русификатор-ПК.cmd` и архив `Rusifikator-Invokers-PC-Game.zip`.
 
@@ -19,21 +19,26 @@
 - резервную копию, журнал незавершённой операции и запущенные процессы;
 - совпадение количества русских и fallback-строк с профилем выпуска.
 
+Версия 3.1 также проверяет подписанный канал данных на GitHub. Совместимые
+каталоги и точные профили новых версий игры можно опубликовать без пересборки
+EXE. Если формат игры изменился сильнее, патчер откажется от записи и попросит
+обновить само приложение.
+
 Неизвестная версия или изменённый файл получают отказ без записи. Режима `force` нет. Поддерживаемая сейчас сборка и точные хэши описаны в [windows-smart-patcher.md](windows-smart-patcher.md).
 
 ## Запись и восстановление
 
 GUI не меняет файлы самостоятельно. Он получает строгий JSON-план от соседнего CLI и вызывает только `cache-apply`, `cache-restore` или `cache-recover`. CLI использует mutex, lock-файл, immutable backup, фазовый журнал, повторную проверку исходных файлов и атомарную замену на том же NTFS-томе.
 
-Оригинал хранится вне игры в `%LOCALAPPDATA%\InvokersRu\runtime-cache`. Кнопка **«Восстановить оригинал»** доступна только когда состояние и резервная копия точно относятся к активному профилю.
+Оригинал хранится вне игры в `%LOCALAPPDATA%\InvokersRussian\runtime-cache`. Кнопка **«Восстановить оригинал»** доступна только когда состояние и резервная копия точно относятся к активному профилю.
 
 ## Сборка Windows-пакета
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\publish-windows-preview.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 `
-  -InputDirectory .\work\publish\windows-3.0.1-preview `
-  -AppVersion 3.0.1-preview `
+  -InputDirectory .\work\publish\windows-3.1.0-preview `
+  -AppVersion 3.1.0-preview `
   -OutputDirectory .\work\installer-output
 ```
 

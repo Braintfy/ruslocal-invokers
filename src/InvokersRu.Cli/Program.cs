@@ -2,6 +2,7 @@ using InvokersRu.Core;
 using InvokersRu.Core.Loc1;
 using InvokersRu.Core.Patching;
 using InvokersRu.Core.Translations;
+using InvokersRu.Core.Updates;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -16,6 +17,7 @@ namespace InvokersRu.Cli
         private const string RiskAcknowledgement = "I_ACCEPT_LOCAL_MODIFICATION";
         private const string TrustedCompatibilityResource = "InvokersRu.TrustedCompatibility.json";
         private const string TrustedRuntimeCacheCompatibilityResource = "InvokersRu.TrustedRuntimeCacheCompatibility.json";
+        private const string SignedUpdateChannelResource = "InvokersRu.SignedUpdateChannel.json";
 #if INVOKERSRU_SUPERVISED_WRITES
         private static readonly bool InstallationWritesEnabled = true;
 #else
@@ -54,6 +56,8 @@ namespace InvokersRu.Cli
                     case "cache-apply": return RuntimeCacheApply(options);
                     case "cache-restore": return RuntimeCacheRestore(options);
                     case "cache-recover": return RuntimeCacheRecover(options);
+                    case "update-status": return SignedUpdateStatus(options, refresh: false);
+                    case "update-refresh": return SignedUpdateStatus(options, refresh: true);
                     case "apply": return Apply(options);
                     case "restore": return Restore(options);
                     case "recover": return Recover(options);
@@ -567,6 +571,8 @@ namespace InvokersRu.Cli
 
             RuntimeCacheCompatibility profile = RuntimeCacheService.DescribeTuple(
                 englishPath, basePath, stampPath, options.Optional("id", string.Empty));
+            Loc1Document baseDocument = Loc1Codec.ReadFile(basePath);
+            string orderedKeysetSha256 = SignedUpdateRuntimeProfileAdapter.ComputeOrderedKeysetSha256(baseDocument);
             var serializerOptions = new JsonSerializerOptions { WriteIndented = true };
             File.WriteAllText(outputPath, JsonSerializer.Serialize(profile, serializerOptions) + Environment.NewLine);
             Console.WriteLine($"Runtime-cache profile written: {Path.GetFullPath(outputPath)}");
@@ -574,40 +580,190 @@ namespace InvokersRu.Cli
             Console.WriteLine($"English: {profile.EnglishContentVersion} (release {profile.EnglishReleaseRevision}); base: {profile.BaseContentVersion} (release {profile.BaseReleaseRevision})");
             Console.WriteLine($"English SHA-256: {profile.EnglishSha256}");
             Console.WriteLine($"Base SHA-256: {profile.BaseSha256}");
+            Console.WriteLine($"Ordered keyset SHA-256: {orderedKeysetSha256}");
             Console.WriteLine("Readiness is blocked and certified is false: pin the catalog and built output before any supervised write build.");
             return 0;
+        }
+
+        private static int SignedUpdateStatus(ArgumentBag options, bool refresh)
+        {
+            options.RequireNoExtraPositionals(0);
+            if (!options.Has("json"))
+                throw new ArgumentException("Signed update status is a machine-readable command and requires --json.");
+
+            SignedUpdateChannelConfig? config = TryLoadSignedUpdateChannelConfig();
+            if (config == null)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    schema = 1,
+                    configured = false,
+                    channel = (object?)null,
+                    network_status = "not-configured",
+                    source = (string?)null,
+                    update = (object?)null,
+                    error = "This build has no embedded signed-update channel."
+                }, new JsonSerializerOptions { WriteIndented = true }));
+                return 5;
+            }
+
+            using var coordinator = new SignedUpdateCoordinator(config, GetPatcherVersion());
+            SignedUpdateBundle? bundle = null;
+            string networkStatus = refresh ? "failed" : "not-checked";
+            string? problem = null;
+            if (refresh)
+            {
+                try
+                {
+                    bundle = coordinator.RefreshAsync().GetAwaiter().GetResult();
+                    networkStatus = bundle.Source == SignedUpdateBundleSource.Remote ? "updated" : "current";
+                }
+                catch (Exception exception) when (exception is IOException
+                    or InvalidDataException
+                    or InvalidOperationException
+                    or TimeoutException
+                    or System.Net.Http.HttpRequestException
+                    or System.Security.Cryptography.CryptographicException)
+                {
+                    problem = exception.Message;
+                }
+            }
+
+            bundle ??= coordinator.LoadBestAvailable();
+            VerifiedSignedUpdate? authority = bundle?.Authority ?? coordinator.LoadNewestAccepted();
+            VerifiedSignedUpdate? selectedUpdate = bundle?.Update ?? authority;
+            object? update = selectedUpdate == null || authority == null ? null : new
+            {
+                sequence = selectedUpdate.Manifest.Sequence,
+                payload_sha256 = selectedUpdate.PayloadSha256,
+                release_id = selectedUpdate.Manifest.ReleaseId,
+                artifact_id = selectedUpdate.Manifest.Catalog.ArtifactId,
+                catalog_sha256 = selectedUpdate.Manifest.Catalog.UncompressedSha256,
+                catalog_records = selectedUpdate.Manifest.Catalog.RecordCount,
+                issued_utc = selectedUpdate.IssuedUtc,
+                expires_utc = selectedUpdate.ExpiresUtc,
+                expired = selectedUpdate.IsExpiredAt(DateTimeOffset.UtcNow),
+                patcher_disposition = authority.PatcherDisposition.ToString(),
+                minimum_patcher_version = authority.Manifest.Patcher.MinimumVersion,
+                latest_patcher_version = authority.Manifest.Patcher.LatestVersion,
+                patcher_download_page = authority.Manifest.Patcher.DownloadPage,
+                compatibility_profiles = selectedUpdate.Manifest.Compatibility.Count,
+                notes_ru = selectedUpdate.Manifest.NotesRu
+            };
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                schema = 1,
+                configured = true,
+                channel = new
+                {
+                    envelope_url = config.EnvelopeUrl,
+                    key_id = config.KeyId,
+                    public_key_spki_sha256 = Hashing.Sha256Bytes(config.PublicKeySubjectPublicKeyInfo)
+                },
+                network_status = networkStatus,
+                source = bundle?.Source.ToString() ?? (authority == null ? null : "ChannelHead"),
+                update,
+                error = problem
+            }, new JsonSerializerOptions { WriteIndented = true }));
+            return selectedUpdate == null ? 5 : 0;
         }
 
         private static int RuntimeCacheStatus(ArgumentBag options, bool plan)
         {
             options.RequireNoExtraPositionals(0);
-            RuntimeCacheCompatibility profile;
+            RuntimeCacheCompatibility embeddedProfile;
+            bool allowSignedUpdates = false;
             if (InstallationWritesEnabled)
             {
                 if (options.Has("profile"))
                     throw new InvalidOperationException("A write-enabled patcher uses only its embedded runtime-cache profile; --profile is not accepted.");
-                profile = LoadTrustedRuntimeCacheCompatibility();
+                embeddedProfile = LoadTrustedRuntimeCacheCompatibility();
+                allowSignedUpdates = true;
             }
             else
             {
                 string profilePath = options.Optional("profile", string.Empty);
-                profile = string.IsNullOrWhiteSpace(profilePath)
+                embeddedProfile = string.IsNullOrWhiteSpace(profilePath)
                     ? RuntimeCacheCompatibility.OfficialObserved0601239()
                     : RuntimeCacheCompatibility.Parse(File.ReadAllText(profilePath));
             }
             if (!TryResolveCacheRoot(options, out string cacheRoot)) return 5;
             string statePath = RuntimeCacheService.DefaultStatePath();
-            RuntimeCacheInspection inspection = RuntimeCacheService.Inspect(cacheRoot, profile, statePath);
-            RuntimeCatalogPlanInfo catalog = InspectBundledRuntimeCatalog(profile);
+            RuntimeCatalogPlanInfo embeddedCatalog = InspectBundledRuntimeCatalog(embeddedProfile);
+            SignedUpdateCoordinator? coordinator = null;
+            RuntimeUpdateResolution resolution;
+            string? updateProblem = null;
+            try
+            {
+                SignedUpdateChannelConfig? config = allowSignedUpdates ? TryLoadSignedUpdateChannelConfig() : null;
+                coordinator = config == null ? null : new SignedUpdateCoordinator(config, GetPatcherVersion());
+                resolution = RuntimeUpdateResolver.Resolve(
+                    cacheRoot,
+                    statePath,
+                    embeddedProfile,
+                    embeddedCatalog.Path ?? string.Empty,
+                    coordinator);
+            }
+            catch (Exception exception) when (exception is IOException
+                or InvalidDataException
+                or InvalidOperationException
+                or System.Security.Cryptography.CryptographicException)
+            {
+                updateProblem = exception.Message;
+                resolution = RuntimeUpdateResolver.Resolve(
+                    cacheRoot,
+                    statePath,
+                    embeddedProfile,
+                    embeddedCatalog.Path ?? string.Empty,
+                    coordinator: null,
+                    remoteProblem: updateProblem);
+            }
+            finally
+            {
+                coordinator?.Dispose();
+            }
+
+            RuntimeCacheCompatibility profile = resolution.Profile;
+            RuntimeCacheInspection inspection = resolution.Inspection;
+            RuntimeCatalogPlanInfo catalog = InspectRuntimeCatalog(resolution.CatalogPath, profile);
             IReadOnlyList<string> conflicts = plan
                 ? PatchService.FindRuntimeCacheProcessConflicts()
                 : Array.Empty<string>();
-            string action = GetRuntimeCachePlanAction(inspection.Status, conflicts.Count, profile, catalog.ExactMatch);
+            bool remoteApplyAuthorized = RuntimeUpdateAuthorization.CanApply(resolution, DateTimeOffset.UtcNow);
+            bool restorationAuthorized = RuntimeUpdateAuthorization.CanRestoreOrRecover(resolution);
+            string action = GetRuntimeCachePlanAction(
+                inspection.Status,
+                conflicts.Count,
+                profile,
+                catalog.ExactMatch,
+                resolution.TranslationUpdateAvailable,
+                remoteApplyAuthorized,
+                restorationAuthorized);
             if (options.Has("json"))
             {
+                VerifiedSignedUpdate? selectedUpdate = resolution.Bundle?.Update ?? resolution.ChannelAuthority;
+                VerifiedSignedUpdate? channelAuthority = resolution.ChannelAuthority;
+                object? signedUpdate = selectedUpdate == null || channelAuthority == null ? null : new
+                {
+                    source = resolution.Bundle?.Source.ToString() ?? "ChannelHead",
+                    sequence = selectedUpdate.Manifest.Sequence,
+                    payload_sha256 = selectedUpdate.PayloadSha256,
+                    release_id = selectedUpdate.Manifest.ReleaseId,
+                    artifact_id = selectedUpdate.Manifest.Catalog.ArtifactId,
+                    issued_utc = selectedUpdate.IssuedUtc,
+                    expires_utc = selectedUpdate.ExpiresUtc,
+                    expired = selectedUpdate.IsExpiredAt(DateTimeOffset.UtcNow),
+                    patcher_disposition = channelAuthority.PatcherDisposition.ToString(),
+                    minimum_patcher_version = channelAuthority.Manifest.Patcher.MinimumVersion,
+                    latest_patcher_version = channelAuthority.Manifest.Patcher.LatestVersion,
+                    download_page = channelAuthority.Manifest.Patcher.DownloadPage,
+                    exact_game_profile_found = !string.Equals(resolution.Source, "embedded", StringComparison.Ordinal),
+                    translation_update_available = resolution.TranslationUpdateAvailable,
+                    notes_ru = selectedUpdate.Manifest.NotesRu
+                };
                 Console.WriteLine(JsonSerializer.Serialize(new
                 {
-                    schema = 1,
+                    schema = 2,
                     patcher_version = GetPatcherVersion(),
                     installation_writes_enabled = InstallationWritesEnabled,
                     status = inspection.Status.ToString(),
@@ -624,6 +780,7 @@ namespace InvokersRu.Cli
                     },
                     catalog = new
                     {
+                        source = resolution.Source,
                         present = catalog.Present,
                         regular_file = catalog.RegularFile,
                         sha256 = catalog.Sha256,
@@ -636,6 +793,7 @@ namespace InvokersRu.Cli
                         readiness = profile.Readiness,
                         certified = profile.Certified,
                         translation_policy = profile.TranslationPolicy,
+                        base_sha256 = profile.BaseSha256,
                         catalog_sha256 = profile.TranslationCatalogSha256,
                         expected_output_sha256 = profile.ExpectedOutputSha256,
                         entry_count = profile.EntryCount,
@@ -644,13 +802,16 @@ namespace InvokersRu.Cli
                         base_fallbacks = profile.ExpectedBaseFallbacks,
                         needs_review_fallbacks = profile.ExpectedNeedsReviewFallbacks
                     },
+                    update = signedUpdate,
+                    update_problem = resolution.RemoteProblem ?? updateProblem,
                     state = inspection.State == null ? null : new
                     {
                         build_id = inspection.State.BuildId,
                         applied_translations = inspection.State.AppliedTranslations,
                         applied_at = inspection.State.AppliedAt,
                         patched_sha256 = inspection.State.PatchedSha256,
-                        original_sha256 = inspection.State.OriginalSha256
+                        original_sha256 = inspection.State.OriginalSha256,
+                        translations_sha256 = inspection.State.TranslationsSha256
                     },
                     journal = inspection.Journal == null ? null : new
                     {
@@ -660,14 +821,18 @@ namespace InvokersRu.Cli
                     },
                     process_conflicts = conflicts,
                     plan = plan ? action : null,
-                    can_apply = plan && (inspection.Status == InstallationStatus.CompatibleOriginal
-                        || inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate)
+                    can_apply = plan && (resolution.TranslationUpdateAvailable
+                        || inspection.Status == InstallationStatus.CompatibleOriginal
+                        || inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate
+                        || inspection.Status == InstallationStatus.PatchSupersededByCatalogUpdate)
                         && conflicts.Count == 0 && InstallationWritesEnabled && profile.Certified
-                        && catalog.ExactMatch,
-                    can_restore = plan && inspection.Status == InstallationStatus.PatchedByThisTool
-                        && conflicts.Count == 0 && InstallationWritesEnabled,
+                        && catalog.ExactMatch && remoteApplyAuthorized,
+                    can_restore = plan && (inspection.Status == InstallationStatus.PatchedByThisTool
+                            || inspection.Status == InstallationStatus.PatchSupersededByCatalogUpdate
+                            || resolution.InstalledInspection?.Status == InstallationStatus.PatchedByThisTool)
+                        && conflicts.Count == 0 && InstallationWritesEnabled && restorationAuthorized,
                     can_recover = plan && inspection.Status == InstallationStatus.RecoveryRequired
-                        && conflicts.Count == 0 && InstallationWritesEnabled
+                        && conflicts.Count == 0 && InstallationWritesEnabled && restorationAuthorized
                 }, new JsonSerializerOptions { WriteIndented = true }));
                 return RuntimeCacheStatusExitCode(inspection.Status);
             }
@@ -681,6 +846,11 @@ namespace InvokersRu.Cli
             Console.WriteLine($"Base content: {inspection.BaseContentVersion ?? "n/a"}");
             Console.WriteLine($"Translation policy: {profile.TranslationPolicy}");
             Console.WriteLine($"Expected applied translations: {profile.ExpectedAppliedTranslations.ToString(CultureInfo.InvariantCulture)}");
+            Console.WriteLine($"Translation data source: {resolution.Source}");
+            if (resolution.Bundle != null)
+                Console.WriteLine($"Signed update: sequence {resolution.Bundle.Update.Manifest.Sequence}, release {resolution.Bundle.Update.Manifest.ReleaseId}");
+            if (!string.IsNullOrWhiteSpace(resolution.RemoteProblem ?? updateProblem))
+                Console.WriteLine($"Signed update warning: {resolution.RemoteProblem ?? updateProblem}");
             if (inspection.Journal != null)
                 Console.WriteLine($"Interrupted transaction: {inspection.Journal.Operation} / {inspection.Journal.Phase} / {inspection.Journal.TransactionId}");
             if (plan)
@@ -705,17 +875,30 @@ namespace InvokersRu.Cli
                 if (!File.Exists(candidate)) continue;
                 FileAttributes attributes = File.GetAttributes(candidate);
                 bool regular = (attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0;
-                if (!regular) return new RuntimeCatalogPlanInfo(true, false, null, false);
+                if (!regular) return new RuntimeCatalogPlanInfo(candidate, true, false, null, false);
                 string sha256 = Hashing.Sha256File(candidate);
                 bool exact = !string.IsNullOrWhiteSpace(profile.TranslationCatalogSha256)
                     && Hashing.FixedEqualsHex(sha256, profile.TranslationCatalogSha256);
-                return new RuntimeCatalogPlanInfo(true, true, sha256, exact);
+                return new RuntimeCatalogPlanInfo(candidate, true, true, sha256, exact);
             }
 
-            return new RuntimeCatalogPlanInfo(false, false, null, false);
+            return new RuntimeCatalogPlanInfo(null, false, false, null, false);
         }
 
-        private sealed record RuntimeCatalogPlanInfo(bool Present, bool RegularFile, string? Sha256, bool ExactMatch);
+        private static RuntimeCatalogPlanInfo InspectRuntimeCatalog(string path, RuntimeCacheCompatibility profile)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                return new RuntimeCatalogPlanInfo(path, false, false, null, false);
+            FileAttributes attributes = File.GetAttributes(path);
+            bool regular = (attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0;
+            if (!regular) return new RuntimeCatalogPlanInfo(path, true, false, null, false);
+            string sha256 = Hashing.Sha256File(path);
+            bool exact = profile.TranslationCatalogSha256 != null
+                && Hashing.FixedEqualsHex(sha256, profile.TranslationCatalogSha256);
+            return new RuntimeCatalogPlanInfo(path, true, true, sha256, exact);
+        }
+
+        private sealed record RuntimeCatalogPlanInfo(string? Path, bool Present, bool RegularFile, string? Sha256, bool ExactMatch);
 
         private static string GetPatcherVersion()
         {
@@ -729,14 +912,26 @@ namespace InvokersRu.Cli
             InstallationStatus status,
             int processConflictCount,
             RuntimeCacheCompatibility profile,
-            bool catalogExactMatch)
+            bool catalogExactMatch,
+            bool translationUpdateAvailable,
+            bool remoteApplyAuthorized,
+            bool restorationAuthorized)
         {
-            bool installable = status is InstallationStatus.CompatibleOriginal
-                or InstallationStatus.PatchSupersededByOfficialUpdate;
+            bool installable = translationUpdateAvailable
+                || status is InstallationStatus.CompatibleOriginal
+                    or InstallationStatus.PatchSupersededByOfficialUpdate
+                    or InstallationStatus.PatchSupersededByCatalogUpdate;
+            bool restorationOnly = status is InstallationStatus.PatchedByThisTool
+                or InstallationStatus.RecoveryRequired;
+            if ((!remoteApplyAuthorized && !restorationOnly)
+                || (!restorationAuthorized && restorationOnly))
+                return "REFUSE_PATCHER_OR_SIGNED_DATA_NOT_CURRENT";
             if (installable && processConflictCount > 0) return "REFUSE_CLOSE_GAME_AND_LAUNCHER";
             if (installable && !InstallationWritesEnabled) return "REFUSE_DEV_WRITES_DISABLED";
             if (installable && !profile.Certified) return "REFUSE_NO_TRUSTED_CACHE_RELEASE_PROFILE";
             if (installable && !catalogExactMatch) return "REFUSE_MISSING_OR_MISMATCHED_CATALOG";
+            if (translationUpdateAvailable) return "READY_TO_UPDATE_TRANSLATION";
+            if (status == InstallationStatus.PatchSupersededByCatalogUpdate) return "READY_TO_UPDATE_TRANSLATION";
             if (status == InstallationStatus.PatchSupersededByOfficialUpdate) return "READY_TO_REAPPLY_AFTER_GAME_UPDATE";
             if (status == InstallationStatus.CompatibleOriginal) return "READY_TO_APPLY";
             if (status == InstallationStatus.PatchedByThisTool && processConflictCount > 0) return "REFUSE_CLOSE_GAME_AND_LAUNCHER";
@@ -756,19 +951,111 @@ namespace InvokersRu.Cli
         {
             EnsureInstallationWritesEnabled();
             RequireRiskAcknowledgement(options);
-            RuntimeCacheCompatibility profile = LoadTrustedRuntimeCacheCompatibility();
-            bool includeDraft = options.Has("include-draft");
-            if (profile.TranslationPolicy == "supervised-safe-drafts" && !includeDraft)
-                throw new InvalidOperationException("The supervised-safe-drafts runtime policy requires explicit --include-draft acknowledgement.");
-            if (profile.TranslationPolicy != "supervised-safe-drafts" && includeDraft)
-                throw new InvalidOperationException("--include-draft is accepted only by the supervised-safe-drafts runtime policy.");
-            string statePath = RuntimeCacheService.DefaultStatePath();
-            RuntimeCacheInspection inspection = RuntimeCacheService.Inspect(RuntimeCacheService.DefaultCacheRoot(), profile, statePath);
-            PatchApplyResult result = RuntimeCacheService.Apply(inspection, options.Required("translations"), statePath);
-            Console.WriteLine($"Applied {result.Composition.AppliedTranslations:N0} Russian translations to the raw runtime cache.");
-            Console.WriteLine($"Backup: {result.State.BackupPath}");
-            Console.WriteLine($"Patched SHA-256: {result.State.PatchedSha256}");
-            return 0;
+            RuntimeUpdateResolution resolution = ResolveRuntimeMutation(out SignedUpdateCoordinator? coordinator);
+            using (coordinator)
+            {
+                RuntimeCacheCompatibility profile = resolution.Profile;
+                if (!RuntimeUpdateAuthorization.CanApply(resolution, DateTimeOffset.UtcNow))
+                {
+                    throw new InvalidOperationException(
+                        "No current signed catalog bundle is authorized for installation in this runtime state.");
+                }
+                RuntimeCatalogPlanInfo selectedCatalog = InspectRuntimeCatalog(resolution.CatalogPath, profile);
+                if (!RuntimeUpdateAuthorization.CanUseSelectedCatalogForApply(selectedCatalog.ExactMatch))
+                {
+                    throw new InvalidDataException(
+                        "The selected translation catalog is missing or does not match the selected exact profile.");
+                }
+                bool includeDraft = options.Has("include-draft");
+                if (profile.TranslationPolicy == "supervised-safe-drafts" && !includeDraft)
+                    throw new InvalidOperationException("The supervised-safe-drafts runtime policy requires explicit --include-draft acknowledgement.");
+                if (profile.TranslationPolicy != "supervised-safe-drafts" && includeDraft)
+                    throw new InvalidOperationException("--include-draft is accepted only by the supervised-safe-drafts runtime policy.");
+                if (resolution.Bundle != null
+                    && resolution.ChannelAuthority?.PatcherDisposition == SignedUpdatePatcherDisposition.TooOld)
+                {
+                    throw new InvalidOperationException("The signed translation profile requires a newer patcher version.");
+                }
+
+                PatchApplyResult? result = null;
+                void InstallAndVerify()
+                {
+                    RuntimeCacheInspection applyInspection = resolution.Inspection;
+                    if (resolution.TranslationUpdateAvailable
+                        && applyInspection.Status != InstallationStatus.PatchSupersededByCatalogUpdate)
+                    {
+                        RuntimeCacheCompatibility oldProfile = resolution.InstalledProfile
+                            ?? throw new InvalidDataException("Translation update has no authenticated installed profile.");
+                        RuntimeCacheService.Restore(RuntimeCacheService.DefaultStatePath(), oldProfile);
+                        applyInspection = RuntimeCacheService.Inspect(
+                            RuntimeCacheService.DefaultCacheRoot(),
+                            profile,
+                            RuntimeCacheService.DefaultStatePath());
+                        if (applyInspection.Status != InstallationStatus.CompatibleOriginal)
+                            throw new InvalidDataException("Restored official cache did not become the exact source for the signed translation update.");
+                    }
+
+                    result = RuntimeCacheService.Apply(
+                        applyInspection,
+                        resolution.CatalogPath,
+                        RuntimeCacheService.DefaultStatePath());
+                }
+
+                if (resolution.Bundle != null)
+                {
+                    coordinator?.ExecuteInstall(resolution.Bundle, InstallAndVerify);
+                }
+                else
+                {
+                    InstallAndVerify();
+                }
+
+                PatchApplyResult completed = result
+                    ?? throw new InvalidOperationException("Runtime-cache installation completed without a result receipt.");
+                Console.WriteLine($"Applied {completed.Composition.AppliedTranslations:N0} Russian translations to the raw runtime cache.");
+                Console.WriteLine($"Backup: {completed.State.BackupPath}");
+                Console.WriteLine($"Patched SHA-256: {completed.State.PatchedSha256}");
+                return 0;
+            }
+        }
+
+        private static RuntimeUpdateResolution ResolveRuntimeMutation(out SignedUpdateCoordinator? coordinator)
+        {
+            RuntimeCacheCompatibility embeddedProfile = LoadTrustedRuntimeCacheCompatibility();
+            RuntimeCatalogPlanInfo embeddedCatalog = InspectBundledRuntimeCatalog(embeddedProfile);
+            string embeddedCatalogPath = embeddedCatalog.Path ?? string.Empty;
+            SignedUpdateChannelConfig? config = TryLoadSignedUpdateChannelConfig();
+            coordinator = config == null ? null : new SignedUpdateCoordinator(config, GetPatcherVersion());
+            try
+            {
+                return RuntimeUpdateResolver.Resolve(
+                    RuntimeCacheService.DefaultCacheRoot(),
+                    RuntimeCacheService.DefaultStatePath(),
+                    embeddedProfile,
+                    embeddedCatalogPath,
+                    coordinator);
+            }
+            catch (Exception exception) when (exception is IOException
+                or InvalidDataException
+                or InvalidOperationException
+                or System.Security.Cryptography.CryptographicException)
+            {
+                coordinator?.Dispose();
+                coordinator = null;
+                return RuntimeUpdateResolver.Resolve(
+                    RuntimeCacheService.DefaultCacheRoot(),
+                    RuntimeCacheService.DefaultStatePath(),
+                    embeddedProfile,
+                    embeddedCatalogPath,
+                    coordinator: null,
+                    remoteProblem: exception.Message);
+            }
+            catch
+            {
+                coordinator?.Dispose();
+                coordinator = null;
+                throw;
+            }
         }
 
         private static int TrustedRuntimeCacheInfo(ArgumentBag options)
@@ -790,12 +1077,12 @@ namespace InvokersRu.Cli
                     certified = profile.Certified,
                     translation_policy = profile.TranslationPolicy,
                     translation_catalog_sha256 = profile.TranslationCatalogSha256,
-                        expected_output_sha256 = profile.ExpectedOutputSha256,
-                        minimum_applied_translations = profile.MinimumAppliedTranslations,
-                        expected_applied_translations = profile.ExpectedAppliedTranslations,
-                        expected_english_fallbacks = profile.ExpectedEnglishFallbacks,
-                        expected_base_fallbacks = profile.ExpectedBaseFallbacks,
-                        expected_needs_review_fallbacks = profile.ExpectedNeedsReviewFallbacks
+                    expected_output_sha256 = profile.ExpectedOutputSha256,
+                    minimum_applied_translations = profile.MinimumAppliedTranslations,
+                    expected_applied_translations = profile.ExpectedAppliedTranslations,
+                    expected_english_fallbacks = profile.ExpectedEnglishFallbacks,
+                    expected_base_fallbacks = profile.ExpectedBaseFallbacks,
+                    expected_needs_review_fallbacks = profile.ExpectedNeedsReviewFallbacks
                 }
             }, new JsonSerializerOptions { WriteIndented = true }));
             return 0;
@@ -805,17 +1092,31 @@ namespace InvokersRu.Cli
         {
             EnsureInstallationWritesEnabled();
             RequireRiskAcknowledgement(options);
-            RuntimeCacheService.Restore(RuntimeCacheService.DefaultStatePath(), LoadTrustedRuntimeCacheCompatibility());
-            Console.WriteLine("Original raw runtime-cache localization restored.");
-            return 0;
+            RuntimeUpdateResolution resolution = ResolveRuntimeMutation(out SignedUpdateCoordinator? coordinator);
+            using (coordinator)
+            {
+                if (!RuntimeUpdateAuthorization.CanRestoreOrRecover(resolution))
+                    throw new InvalidOperationException("Signed update state is unavailable or inconsistent; restore is blocked until it is repaired.");
+                RuntimeCacheCompatibility profile = resolution.InstalledProfile ?? resolution.Profile;
+                RuntimeCacheService.Restore(RuntimeCacheService.DefaultStatePath(), profile);
+                Console.WriteLine("Original raw runtime-cache localization restored.");
+                return 0;
+            }
         }
 
         private static int RuntimeCacheRecover(ArgumentBag options)
         {
             EnsureInstallationWritesEnabled();
             RequireRiskAcknowledgement(options);
-            Console.WriteLine(RuntimeCacheService.Recover(RuntimeCacheService.DefaultStatePath(), LoadTrustedRuntimeCacheCompatibility()));
-            return 0;
+            RuntimeUpdateResolution resolution = ResolveRuntimeMutation(out SignedUpdateCoordinator? coordinator);
+            using (coordinator)
+            {
+                if (!RuntimeUpdateAuthorization.CanRestoreOrRecover(resolution))
+                    throw new InvalidOperationException("Signed update state is unavailable or inconsistent; recovery is blocked until it is repaired.");
+                RuntimeCacheCompatibility profile = resolution.InstalledProfile ?? resolution.Profile;
+                Console.WriteLine(RuntimeCacheService.Recover(RuntimeCacheService.DefaultStatePath(), profile));
+                return 0;
+            }
         }
 
         private static int TrustedManifestInfo(ArgumentBag options)
@@ -900,6 +1201,15 @@ namespace InvokersRu.Cli
             return ParseTrustedRuntimeCacheCompatibilityBytes(LoadTrustedRuntimeCacheCompatibilityBytes());
         }
 
+        private static SignedUpdateChannelConfig? TryLoadSignedUpdateChannelConfig()
+        {
+            using Stream? stream = typeof(Program).Assembly.GetManifestResourceStream(SignedUpdateChannelResource);
+            if (stream == null) return null;
+            using var memory = new MemoryStream();
+            stream.CopyTo(memory);
+            return SignedUpdateChannelConfig.Parse(memory.ToArray());
+        }
+
         private static RuntimeCacheCompatibility ParseTrustedRuntimeCacheCompatibilityBytes(byte[] bytes)
         {
             string json = new System.Text.UTF8Encoding(false, true).GetString(bytes).TrimStart('\uFEFF');
@@ -975,8 +1285,9 @@ namespace InvokersRu.Cli
                 "trusted-manifest-info" => (Array.Empty<string>(), Array.Empty<string>()),
                 "trusted-runtime-cache-info" => (Array.Empty<string>(), Array.Empty<string>()),
                 "cache-status" or "cache-plan" => (new[] { "cache-root", "profile", "json" }, new[] { "json" }),
+                "update-status" or "update-refresh" => (new[] { "json" }, new[] { "json" }),
                 "cache-profile" => (new[] { "output", "cache-root", "english", "base", "stamp", "id" }, Array.Empty<string>()),
-                "cache-apply" => (new[] { "translations", "acknowledge-risk", "include-draft" }, new[] { "include-draft" }),
+                "cache-apply" => (new[] { "acknowledge-risk", "include-draft" }, new[] { "include-draft" }),
                 "cache-restore" or "cache-recover" => (new[] { "acknowledge-risk" }, Array.Empty<string>()),
                 "apply" => (new[] { "translations", "compat", "game-root", "state", "include-draft", "acknowledge-risk" }, new[] { "include-draft" }),
                 "restore" or "recover" => (new[] { "compat", "state", "acknowledge-risk" }, Array.Empty<string>()),
@@ -998,6 +1309,8 @@ namespace InvokersRu.Cli
             Console.WriteLine("  trusted-runtime-cache-info Print embedded raw-cache profile pins (supervised build)");
             Console.WriteLine("  cache-status [--cache-root PATH]  Inspect the exact raw localization cache tuple");
             Console.WriteLine("  cache-plan   [--cache-root PATH]  Explain cache apply/refuse decision");
+            Console.WriteLine("  update-status  --json             Show the best verified cached translation data release");
+            Console.WriteLine("  update-refresh --json             Refresh signed translation data from the fixed GitHub channel");
             Console.WriteLine("  validate --english FILE --translations FILE [--ukrainian FILE] [--per-locale-content-version] [--profile preview|release]");
             Console.WriteLine("  diff --english FILE --translations FILE");
             Console.WriteLine();
@@ -1013,7 +1326,7 @@ namespace InvokersRu.Cli
                 Console.WriteLine("  apply --translations FILE --include-draft --acknowledge-risk I_ACCEPT_LOCAL_MODIFICATION");
                 Console.WriteLine("  restore --acknowledge-risk I_ACCEPT_LOCAL_MODIFICATION");
                 Console.WriteLine("  recover --acknowledge-risk I_ACCEPT_LOCAL_MODIFICATION");
-                Console.WriteLine("  cache-apply --translations FILE --include-draft --acknowledge-risk I_ACCEPT_LOCAL_MODIFICATION");
+                Console.WriteLine("  cache-apply [--include-draft] --acknowledge-risk I_ACCEPT_LOCAL_MODIFICATION");
                 Console.WriteLine("  cache-restore --acknowledge-risk I_ACCEPT_LOCAL_MODIFICATION");
                 Console.WriteLine("  cache-recover --acknowledge-risk I_ACCEPT_LOCAL_MODIFICATION");
                 Console.WriteLine("  This supervised build accepts only its embedded compatibility manifest for writes.");

@@ -340,7 +340,7 @@ Assert-NoReparsePath -Path $outputFull -Label 'Installer output directory'
 Assert-NoReparsePath -Path $outputFull -Label 'Installer output directory'
 
 if ([string]::IsNullOrWhiteSpace($InstallerBaseName)) {
-    $InstallerBaseName = "InvokersRu-3.0-Preview-$AppVersion-win-x64"
+    $InstallerBaseName = "InvokersRu-3.1-Preview-$AppVersion-win-x64"
 }
 if ($InstallerBaseName -notmatch '^InvokersRu-[A-Za-z0-9._-]{1,96}$') {
     throw "InstallerBaseName is unsafe: $InstallerBaseName"

@@ -19,12 +19,22 @@
   "readiness": "ready",
   "certified": true,
   "blocked_reason": null,
-  "translation_catalog_sha256": "CBF5211BDCB8E940829F305154CE9A92C0D202BCC6B49617A4B92BA25166600C",
-  "expected_output_sha256": "4E3AC2FBF663DA1D3EBF4B2EAEBFAADF5BC2A80AE7E424463582919F07B644CD",
+  "translation_catalog_sha256": "C9E6281FC7918886F1A8943FD39C41B7146230F6D526AB65EA1AAFE5BF10358B",
+  "expected_output_sha256": "105B6A9047E6FB0E2C34B774CAE273CC024831C06896C56C4F65F92D2F920541",
   "minimum_applied_translations": 41037,
   "expected_applied_translations": 41037,
   "expected_english_fallbacks": 1,
   "expected_base_fallbacks": 254,
   "expected_needs_review_fallbacks": 0,
-  "translation_policy": "community-preview-all-drafts"
+  "translation_policy": "community-preview-all-drafts",
+  "superseded_artifacts": [
+    {
+      "output_sha256": "4E3AC2FBF663DA1D3EBF4B2EAEBFAADF5BC2A80AE7E424463582919F07B644CD",
+      "translation_catalog_sha256": "CBF5211BDCB8E940829F305154CE9A92C0D202BCC6B49617A4B92BA25166600C",
+      "applied_translations": 41037,
+      "english_fallbacks": 1,
+      "base_fallbacks": 254,
+      "needs_review_fallbacks": 0
+    }
+  ]
 }

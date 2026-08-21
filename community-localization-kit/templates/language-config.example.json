@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "pack_id": "example-fr",
+  "target_language": {
+    "name": "French",
+    "bcp47": "fr-FR"
+  },
+  "injection_slot": {
+    "locale": "uk_UA",
+    "file": "dl_uk_UA.bin",
+    "stamp_file": "dl_uk_UA.bin.ver",
+    "locale_id": 8
+  },
+  "catalog_policy": "preview-drafts",
+  "fallback": "english",
+  "allow_per_locale_content_version": true
+}

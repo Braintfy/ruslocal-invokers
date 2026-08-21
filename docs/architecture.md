@@ -4,7 +4,7 @@
 
 `apply` разрешается только когда одновременно выполнено всё:
 
-1. ровно один встроенный runtime-профиль совпал с exact tuple;
+1. ровно один встроенный или проверенный подписанный runtime-профиль совпал с exact tuple;
 2. профиль имеет `readiness=ready` и `certified=true`;
 3. pinned EN/UK raw LOC1 и version-stamp hashes совпали;
 4. content GUID, content versions, locale ID/revision, entry count и schema совпали;
@@ -19,7 +19,9 @@
 
 Не предусмотрено fuzzy matching, nearest build, `--force`, отключение updater или снятие блокировки вручную. В unsigned dev binary `apply`, `restore` и `recover` дополнительно выключены общим compile-time gate независимо от редактируемого JSON. `plan` при выключенном gate никогда не сообщает `READY_TO_APPLY`.
 
-Для первого контролируемого теста существует отдельный compile-time профиль `supervised-safe-drafts`. Такая сборка принимает для всех write-команд только runtime-профиль, встроенный в assembly при компиляции. Профиль закрепляет exact translation catalog, raw output, исходный cache tuple и ровно 576 допустимых переводов. Редактирование внешнего JSON после сборки не может расширить её write scope. Preview требует явный `--include-draft` и отличается от будущего release-профиля, где drafts будут запрещены.
+Исторический первый контролируемый тест использовал compile-time профиль `supervised-safe-drafts` и ровно 576 допустимых переводов для `0.60.1239`. Этот этап сохранён в receipts как доказательство ранней транзакции, но не является текущим публичным профилем.
+
+Windows 3.1 содержит резервный exact-профиль `0.60.1247` и может выбирать более новый exact-профиль с каталогом из фиксированного подписанного канала. Endpoint и публичный ECDSA-ключ встроены в CLI; manifest проходит проверку подписи, срока, монотонного `sequence`, отзыва, размеров и SHA-256. Профиль новой версии всё равно должен быть подготовлен и опубликован: fuzzy/nearest-build установка не появляется. Текущий `community-preview-all-drafts` устанавливает 41 037 source-bound машинных строк из 41 292 и остаётся preview до человеческой вычитки.
 
 ## Транзакция
 
@@ -67,7 +69,7 @@ Journal и state пишутся через temporary file + flush-to-disk + atom
 | `0x00` | magic `LOC1` |
 | `0x04` | schema `4` |
 | `0x08` | language ID |
-| `0x0C` | release revision (для текущего UK runtime base — `58`) |
+| `0x0C` | opaque locale revision/content ID |
 | `0x10` | opaque locale revision/content ID |
 | `0x14` | .NET ticks |
 | `0x1C` | entry count |
@@ -92,16 +94,12 @@ for byte in key.encode("utf-8"):
 
 Проверка: `ui-multibattle-exit-popup-title` → `"Stop Multi-Battle?"`, `ui-player-profile-avatar-frame-unlock-vip-level` → `"Unlocks at VIP Pass Level {0}"`. Это даёт возможность восстанавливать осмысленное имя строки по её хэшу, что полезно для контекста при переводе и для экранного QA: префикс ключа указывает на экран. Патчеру функция не нужна — он работает с готовым набором хэшей, — но для инструментов анализа она снимает главное белое пятно формата. Подробности: [android-client.md](android-client.md).
 
-Текущий conservative writer поддерживает только пустой collision/key-blob layout, строго возрастающие уникальные hashes и не заполняет sentinel. Для профиля `0.60.1239` сохраняются locale ID `8`, locale revision `1BCA1660`, content version `Prod_0.60.0_58` и 41 290 ключей. String pool пакуется детерминированно; повторная сборка preview дала тот же SHA-256.
+Текущий conservative writer поддерживает только пустой collision/key-blob layout, строго возрастающие уникальные hashes и не заполняет sentinel. Для профиля `0.60.1247` сохраняются locale ID `8`, закреплённая ревизия, content version `Prod_0.60.0_68` и 41 292 ключа. String pool пакуется детерминированно; release tooling повторно проверяет полный raw SHA-256 и композицию до публикации exact-профиля.
 
-## Что ещё нужно до beta
+## Что ещё нужно до stable/beta
 
-- расширить экранный QA с 576 safe-preview строк на остальные 1 266 draft-записей;
-- повторять loader acceptance test и выпускать новый exact профиль после каждого обновления игры;
-- Restart Manager и дополнительный path-by-handle/reparse-point hardening;
-- signed append-only compatibility catalog и rollback protection;
-- write-enabled binary только из подписанного release CI (dev CLI остаётся read/preview-only);
-- полностью закреплённый deterministic Brotli toolchain между release-сборками;
-- Authenticode release signing;
-- отдельный updater русификатора;
-- UI поверх CLI после стабилизации core.
+- вычитать и провести экранный QA для 23 434 записей с `needs_review=true`;
+- повторять loader acceptance test и публиковать новый signed exact-профиль после каждого содержательного обновления игры;
+- добавить защищённый Windows CI/release workflow и воспроизводимую provenance/attestation;
+- получить Authenticode-подпись GUI, CLI и установщика;
+- при необходимости добавить Restart Manager и дополнительный path-by-handle hardening, не ослабляя текущие fail-closed проверки.

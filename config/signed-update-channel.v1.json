@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "kind": "invokers-ru-update-channel",
+  "envelope_url": "https://github.com/Braintfy/ruslocal-invokers/releases/download/invokersru-update-channel-v1/update-envelope.v1.json",
+  "key_id": "p256-528d957fd2a6839913367750",
+  "public_key_spki_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAESqdGBmrjJ6LAvNVleBO3NwXIDLTu1faOO4bQb11KPE29QMZHZZwwrC/ucVj5zovp1Rs9UDF3Ky2J6bq79FkckQ=="
+}

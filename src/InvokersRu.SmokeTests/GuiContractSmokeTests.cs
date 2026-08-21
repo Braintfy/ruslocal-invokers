@@ -63,6 +63,99 @@ namespace InvokersRu.SmokeTests
             Require(Parse(patched, 0).CanRestore,
                 "A valid patched state was not accepted for restore.");
 
+            JsonObject freshLkg = Clone(ready);
+            freshLkg["schema"] = 2;
+            Catalog(freshLkg)["source"] = "LastKnownGood";
+            freshLkg["update"] = CurrentLkgUpdateObject();
+            freshLkg["plan"] = "REFUSE_PATCHER_OR_SIGNED_DATA_NOT_CURRENT";
+            freshLkg["can_apply"] = false;
+            Require(!Parse(freshLkg, 0).CanApply,
+                "A current LKG was allowed to establish a fresh installation without its exact recorded state.");
+
+            JsonObject exactLkgReapply = Clone(freshLkg);
+            exactLkgReapply["status"] = "PatchSupersededByOfficialUpdate";
+            exactLkgReapply["message"] = "Official game cache replaced the exact recorded patch.";
+            exactLkgReapply["observed"]!["base_sha256"] = HashC;
+            exactLkgReapply["state"] = StateObject();
+            exactLkgReapply["plan"] = "READY_TO_REAPPLY_AFTER_GAME_UPDATE";
+            exactLkgReapply["can_apply"] = true;
+            Require(Parse(exactLkgReapply, 0).CanApply,
+                "A current exact LKG could not maintain its recorded installation after an official update.");
+
+            JsonObject sameIdDifferentArtifact = Clone(exactLkgReapply);
+            string differentOutput = new string('D', 64);
+            string differentCatalog = new string('E', 64);
+            sameIdDifferentArtifact["status"] = "PatchSupersededByCatalogUpdate";
+            sameIdDifferentArtifact["message"] = "Allowlisted older translation artifact.";
+            sameIdDifferentArtifact["observed"]!["base_sha256"] = differentOutput;
+            sameIdDifferentArtifact["state"]!["patched_sha256"] = differentOutput;
+            sameIdDifferentArtifact["state"]!["translations_sha256"] = differentCatalog;
+            sameIdDifferentArtifact["plan"] = "REFUSE_PATCHER_OR_SIGNED_DATA_NOT_CURRENT";
+            sameIdDifferentArtifact["can_apply"] = false;
+            sameIdDifferentArtifact["can_restore"] = true;
+            CliPlanResult blockedLkgDowngrade = Parse(sameIdDifferentArtifact, 0);
+            Require(!blockedLkgDowngrade.CanApply && blockedLkgDowngrade.CanRestore,
+                "A current LKG was allowed to downgrade a same-id different artifact or hid safe restore.");
+
+            JsonObject tooOld = Clone(ready);
+            tooOld["schema"] = 2;
+            tooOld["patcher_version"] = "3.1.0";
+            Catalog(tooOld)["source"] = "LastKnownGood";
+            tooOld["update"] = TooOldUpdateObject();
+            tooOld["update_problem"] = "The signed channel requires a newer patcher.";
+            tooOld["plan"] = "REFUSE_PATCHER_OR_SIGNED_DATA_NOT_CURRENT";
+            tooOld["can_apply"] = false;
+            CliPlanResult blockedByAuthority = Parse(tooOld, 0);
+            Require(!blockedByAuthority.CanApply
+                && blockedByAuthority.Update?.PatcherDisposition == "TooOld",
+                "A newest too-old channel head did not block an older selected LKG catalog.");
+
+            JsonObject freshTooOld = Clone(ready);
+            freshTooOld["schema"] = 2;
+            freshTooOld["patcher_version"] = "3.1.0";
+            freshTooOld["catalog"] = new JsonObject
+            {
+                ["source"] = "ChannelHead",
+                ["present"] = false,
+                ["regular_file"] = false,
+                ["sha256"] = null,
+                ["exact_match"] = false
+            };
+            freshTooOld["update"] = TooOldUpdateObject("ChannelHead");
+            freshTooOld["update_problem"] = "The signed channel requires a newer patcher.";
+            freshTooOld["plan"] = "REFUSE_PATCHER_OR_SIGNED_DATA_NOT_CURRENT";
+            freshTooOld["can_apply"] = false;
+            Require(Parse(freshTooOld, 0).Update?.PatcherDisposition == "TooOld",
+                "A fresh too-old metadata-only channel head disappeared from the GUI contract.");
+
+            JsonObject corruptAcceptedHead = Clone(ready);
+            corruptAcceptedHead["schema"] = 2;
+            Catalog(corruptAcceptedHead)["source"] = "embedded";
+            corruptAcceptedHead["update_problem"] = "Newest accepted metadata no longer authenticates.";
+            corruptAcceptedHead["plan"] = "REFUSE_PATCHER_OR_SIGNED_DATA_NOT_CURRENT";
+            corruptAcceptedHead["can_apply"] = false;
+            Require(!Parse(corruptAcceptedHead, 0).CanApply,
+                "A corrupt accepted channel head allowed the embedded bootstrap catalog to be applied.");
+
+            JsonObject corruptHeadPatched = Clone(patched);
+            corruptHeadPatched["schema"] = 2;
+            Catalog(corruptHeadPatched)["source"] = "embedded";
+            corruptHeadPatched["update_problem"] = "Newest accepted metadata no longer authenticates.";
+            corruptHeadPatched["plan"] = "NOOP_OR_RESTORE";
+            corruptHeadPatched["can_restore"] = true;
+            Require(Parse(corruptHeadPatched, 0).CanRestore,
+                "A corrupt accepted channel head hid restoration of an independently authenticated embedded patch.");
+
+            JsonObject tooOldPatched = Clone(tooOld);
+            tooOldPatched["status"] = "PatchedByThisTool";
+            tooOldPatched["message"] = "Already patched from authenticated history.";
+            tooOldPatched["update_problem"] = "A newer patcher is required for future installation data.";
+            tooOldPatched["plan"] = "NOOP_OR_RESTORE";
+            tooOldPatched["can_restore"] = true;
+            tooOldPatched["state"] = StateObject();
+            Require(Parse(tooOldPatched, 0).CanRestore,
+                "A too-old channel head incorrectly hid restoration of an authenticated installed patch.");
+
             JsonObject recovery = Clone(ready);
             recovery["status"] = "RecoveryRequired";
             recovery["message"] = "Recovery required.";
@@ -77,6 +170,19 @@ namespace InvokersRu.SmokeTests
             };
             Require(Parse(recovery, 5).CanRecover,
                 "RecoveryRequired with the CLI's intentional exit code 5 was rejected.");
+
+            JsonObject historicalRecovery = Clone(recovery);
+            historicalRecovery["schema"] = 2;
+            historicalRecovery["profile"]!["id"] = "runtime-cache-win64-historical-profile";
+            Catalog(historicalRecovery)["source"] = "embedded";
+            Catalog(historicalRecovery)["sha256"] = HashC;
+            Catalog(historicalRecovery)["exact_match"] = false;
+            JsonObject historicalUpdate = TooOldUpdateObject("CachedCurrent");
+            historicalUpdate["exact_game_profile_found"] = false;
+            historicalRecovery["update"] = historicalUpdate;
+            historicalRecovery["update_problem"] = null;
+            Require(Parse(historicalRecovery, 5).CanRecover,
+                "A signed historical recovery profile was confused with the current catalog source.");
 
             JsonObject unknownMember = Clone(ready);
             unknownMember["unexpected"] = true;
@@ -293,6 +399,7 @@ namespace InvokersRu.SmokeTests
                     ["readiness"] = "ready",
                     ["certified"] = true,
                     ["translation_policy"] = "community-preview-all-drafts",
+                    ["base_sha256"] = HashC,
                     ["catalog_sha256"] = HashA,
                     ["expected_output_sha256"] = HashB,
                     ["entry_count"] = 41_292,
@@ -319,8 +426,41 @@ namespace InvokersRu.SmokeTests
                 ["applied_translations"] = 41_037,
                 ["applied_at"] = "2026-08-20T18:26:44Z",
                 ["patched_sha256"] = HashB,
-                ["original_sha256"] = HashC
+                ["original_sha256"] = HashC,
+                ["translations_sha256"] = HashA
             };
+        }
+
+        private static JsonObject TooOldUpdateObject(string source = "LastKnownGood")
+        {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            return new JsonObject
+            {
+                ["source"] = source,
+                ["sequence"] = 45,
+                ["payload_sha256"] = HashC,
+                ["release_id"] = "invokersru-data-00000045",
+                ["artifact_id"] = "ru-RU-00000045",
+                ["issued_utc"] = now.AddDays(-1),
+                ["expires_utc"] = now.AddDays(20),
+                ["expired"] = false,
+                ["patcher_disposition"] = "TooOld",
+                ["minimum_patcher_version"] = "4.0.0",
+                ["latest_patcher_version"] = "4.1.0",
+                ["download_page"] = "https://github.com/Braintfy/ruslocal-invokers/releases/latest",
+                ["exact_game_profile_found"] = true,
+                ["translation_update_available"] = false,
+                ["notes_ru"] = "Требуется новая версия патчера."
+            };
+        }
+
+        private static JsonObject CurrentLkgUpdateObject()
+        {
+            JsonObject update = TooOldUpdateObject("LastKnownGood");
+            update["patcher_disposition"] = "Current";
+            update["minimum_patcher_version"] = "3.1.0";
+            update["latest_patcher_version"] = "3.1.0";
+            return update;
         }
 
         private static CliPlanResult Parse(JsonObject response, int exitCode)

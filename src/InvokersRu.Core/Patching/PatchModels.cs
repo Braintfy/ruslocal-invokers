@@ -7,6 +7,7 @@ namespace InvokersRu.Core.Patching
     {
         CompatibleOriginal,
         PatchSupersededByOfficialUpdate,
+        PatchSupersededByCatalogUpdate,
         PatchedByThisTool,
         UnknownBuild,
         MissingFiles,

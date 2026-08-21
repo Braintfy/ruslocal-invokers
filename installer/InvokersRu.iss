@@ -15,7 +15,7 @@
 AppId={{4A91DD92-3A74-4B5B-AC04-9417294887B3}
 AppName=InvokersRu
 AppVersion={#AppVersion}
-AppVerName=InvokersRu 3.0 Preview
+AppVerName=InvokersRu 3.1 Preview
 AppPublisher=InvokersRu Community
 AppPublisherURL=https://github.com/Braintfy/ruslocal-invokers
 AppSupportURL=https://github.com/Braintfy/ruslocal-invokers/issues
@@ -37,7 +37,7 @@ OutputDir={#OutputDir}
 OutputBaseFilename={#InstallerBaseName}
 Uninstallable=yes
 CreateUninstallRegKey=yes
-UninstallDisplayName=InvokersRu 3.0 Preview
+UninstallDisplayName=InvokersRu 3.1 Preview
 UninstallDisplayIcon={app}\InvokersRu.Gui.exe
 SetupLogging=yes
 CloseApplications=no
@@ -47,9 +47,9 @@ ChangesAssociations=no
 ChangesEnvironment=no
 UsePreviousAppDir=no
 LicenseFile={#SourceDir}\LICENSE.txt
-VersionInfoDescription=InvokersRu 3.0 Preview installer
+VersionInfoDescription=InvokersRu 3.1 Preview installer
 VersionInfoCompany=InvokersRu Community
-VersionInfoProductName=InvokersRu 3.0 Preview
+VersionInfoProductName=InvokersRu 3.1 Preview
 #ifdef InnoSignTool
 SignTool={#InnoSignTool}
 SignedUninstaller=yes
@@ -64,7 +64,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Files]
 ; The build script has already verified every relative path, length and SHA-256
 ; against PAYLOAD-SHA256.json, then copied the exact tree to SourceDir.
-Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs replacesameversion
 
 [Icons]
 Name: "{autoprograms}\InvokersRu"; Filename: "{app}\InvokersRu.Gui.exe"; WorkingDir: "{app}"; Comment: "Русификатор Invokers: Titan Legacy"

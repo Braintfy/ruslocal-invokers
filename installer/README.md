@@ -1,10 +1,11 @@
-# InvokersRu 3.0 Preview — Windows package
+# InvokersRu 3.1 Preview — Windows package
 
 The Windows release is a per-user Inno Setup package around a self-contained,
 multi-file `win-x64` publish. The installed player payload contains the GUI, the
 supervised CLI, the exact `0.60.1247` runtime-cache profile and its pinned
-translation catalog. It contains no PowerShell, command files, updater
-executables, services or injected game components.
+translation catalog and a pinned public key for the signed data-update channel.
+It contains no PowerShell, command files, separate updater executables, services
+or injected game components.
 
 The installer itself only copies files to the fixed directory
 `%LOCALAPPDATA%\Programs\InvokersRu`, creates one Start Menu shortcut and
@@ -19,8 +20,9 @@ components, including during silent installs.
 - Windows 10 x64 version 1809 or later;
 - .NET 10 SDK for building (the resulting player does not need a system .NET);
 - official Inno Setup 6.3 or newer only when compiling the installer;
-- for a public release: an Authenticode code-signing identity and an RFC 3161
-  timestamp service.
+- optionally, an Authenticode code-signing identity and an RFC 3161 timestamp
+  service. The current 3.1 community preview is intentionally unsigned; signing
+  remains the recommended next release-hardening step.
 
 The scripts do not download Inno Setup, certificates or signing tools. During
 `dotnet restore`, the publish script uses the official NuGet v3 feed only to
@@ -33,8 +35,9 @@ Run from the repository root:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\publish-windows-preview.ps1 `
-  -OutputDirectory .\work\publish\windows-3.0.1-preview `
-  -AppVersion 3.0.1-preview
+  -OutputDirectory .\work\publish\windows-3.1.0-preview `
+  -AppVersion 3.1.0-preview `
+  -SignedUpdateChannelConfig .\config\signed-update-channel.v1.json
 ```
 
 If `dotnet` on `PATH` is older than .NET 10, add
@@ -46,6 +49,8 @@ The script performs these checks before creating the final directory:
 - the catalog SHA-256 equals the certified `0.60.1247` profile pin;
 - the CLI is compiled with supervised mutation capability and embeds that exact
   runtime-cache profile;
+- the signed-update channel URL, key ID and public-key fingerprint equal the
+  reviewed public configuration and are embedded in the supervised CLI;
 - GUI and CLI are self-contained, multi-file `win-x64` publishes with trimming,
   ReadyToRun and single-file compression disabled;
 - the WindowsDesktop self-contained runtime is kept as one coherent superset;
@@ -67,8 +72,9 @@ To sign the project entry points before the payload hashes are sealed:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\publish-windows-preview.ps1 `
-  -OutputDirectory .\work\publish\windows-3.0.1-preview-signed `
-  -AppVersion 3.0.1-preview `
+  -OutputDirectory .\work\publish\windows-3.1.0-preview-signed `
+  -AppVersion 3.1.0-preview `
+  -SignedUpdateChannelConfig .\config\signed-update-channel.v1.json `
   -SignToolPath "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe" `
   -CertificateThumbprint 0123456789ABCDEF0123456789ABCDEF01234567 `
   -TimestampUrl https://your-rfc3161-provider.example
@@ -81,8 +87,8 @@ Trusted Signing provider. Secrets are not stored in the repository.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 `
-  -InputDirectory .\work\publish\windows-3.0.1-preview `
-  -AppVersion 3.0.1-preview `
+  -InputDirectory .\work\publish\windows-3.1.0-preview `
+  -AppVersion 3.1.0-preview `
   -VerifyOnly
 ```
 
@@ -96,15 +102,17 @@ that an installer was signed. To verify an already signed player payload, add
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 `
-  -InputDirectory .\work\publish\windows-3.0.1-preview `
-  -AppVersion 3.0.1-preview `
+  -InputDirectory .\work\publish\windows-3.1.0-preview `
+  -AppVersion 3.1.0-preview `
   -OutputDirectory .\work\installer-output
 ```
 
-The output is named `InvokersRu-3.0-Preview-3.0.1-preview-win-x64.exe` and gets a
-`.sha256` sidecar. The unsigned build is for local testing only; Windows may show
-“Unknown publisher” or SmartScreen until a trusted certificate and reputation
-are available.
+The output is named `InvokersRu-3.1-Preview-3.1.0-preview-win-x64.exe` and gets a
+`.sha256` sidecar. The current community preview may be distributed unsigned,
+but its exact source commit and SHA-256 sidecar must be published prominently.
+Windows can show “Unknown publisher” or SmartScreen until a trusted certificate
+and reputation are available; the data-channel ECDSA signature does not sign the
+EXE and does not suppress that warning.
 
 ## 4. Compile a signed release installer
 
@@ -114,8 +122,8 @@ only that configured name:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 `
-  -InputDirectory .\work\publish\windows-3.0.1-preview-signed `
-  -AppVersion 3.0.1-preview `
+  -InputDirectory .\work\publish\windows-3.1.0-preview-signed `
+  -AppVersion 3.1.0-preview `
   -OutputDirectory .\work\installer-output-signed `
   -InnoSignToolName InvokersRuRelease `
   -ExpectedSignerThumbprint 0123456789ABCDEF0123456789ABCDEF01234567

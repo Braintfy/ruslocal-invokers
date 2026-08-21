@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "target_language": "French",
+  "entries": [
+    {
+      "source": "Invoker",
+      "translation": "Invocateur",
+      "part_of_speech": "noun",
+      "case_sensitive": true,
+      "notes": "Use the approved in-game class name."
+    },
+    {
+      "source": "Cooldown",
+      "translation": "Temps de recharge",
+      "part_of_speech": "noun",
+      "case_sensitive": false,
+      "notes": "Keep compact unit tokens such as 10s unchanged."
+    }
+  ]
+}

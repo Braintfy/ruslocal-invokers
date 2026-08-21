@@ -147,6 +147,30 @@ namespace InvokersRu.Core.Updates
                 allowExpiredCachedManifest);
         }
 
+        /// <summary>
+        /// Creates a verification context pinned to the stored last-known-good payload rather than the
+        /// newer anti-rollback head. This permits independent offline signature verification after the
+        /// channel has advanced without weakening the normal network anti-rollback context.
+        /// </summary>
+        public SignedUpdateVerificationContext CreateLastKnownGoodVerificationContext(
+            DateTimeOffset nowUtc,
+            string runningPatcherVersion)
+        {
+            SignedUpdateState? state = Load();
+            SignedUpdateLastKnownGood? lastKnownGood = state?.LastKnownGood;
+            if (lastKnownGood == null)
+            {
+                throw new InvalidOperationException("No last-known-good signed update is recorded.");
+            }
+
+            return new SignedUpdateVerificationContext(
+                nowUtc,
+                runningPatcherVersion,
+                lastKnownGood.Sequence,
+                lastKnownGood.ManifestPayloadSha256,
+                allowExpiredCachedManifest: true);
+        }
+
         public SignedUpdateState RecordAcceptedManifest(VerifiedSignedUpdate verified)
         {
             ArgumentNullException.ThrowIfNull(verified);
@@ -174,22 +198,14 @@ namespace InvokersRu.Core.Updates
             }
 
             bool expiredNow = verified.IsExpiredAt(_utcNow());
-            var lastKnownGood = new SignedUpdateLastKnownGood(
-                verified.Manifest.Sequence,
-                verified.Manifest.ReleaseId,
-                verified.Manifest.Catalog.ArtifactId,
-                verified.PayloadSha256,
-                verified.Manifest.Catalog.CompressedSha256,
-                verified.Manifest.Catalog.CompressedBytes,
-                verified.Manifest.Catalog.UncompressedSha256,
-                verified.Manifest.Catalog.UncompressedBytes,
-                acceptedUtc);
+            SignedUpdateLastKnownGood lastKnownGood = CreateLastKnownGood(verified, acceptedUtc);
 
             return Mutate(current =>
             {
+                RequireCurrentIdentity(current, verified);
                 if (expiredNow)
                 {
-                    if (current?.LastKnownGood == null
+                    if (current!.LastKnownGood == null
                         || !LastKnownGoodMatchesVerified(current.LastKnownGood, verified))
                     {
                         throw new InvalidOperationException("Expired metadata may use only an already-recorded identical last-known-good artifact.");
@@ -198,21 +214,96 @@ namespace InvokersRu.Core.Updates
                     return current;
                 }
 
-                ulong highestSequence = current == null
-                    ? verified.Manifest.Sequence
-                    : Math.Max(current.HighestAcceptedSequence, verified.Manifest.Sequence);
-                string highestHash = current == null || verified.Manifest.Sequence > current.HighestAcceptedSequence
-                    ? verified.PayloadSha256
-                    : current.HighestAcceptedPayloadSha256;
-                if (current != null
-                    && verified.Manifest.Sequence == current.HighestAcceptedSequence
-                    && !FixedHashEquals(verified.PayloadSha256, current.HighestAcceptedPayloadSha256))
-                {
-                    throw new InvalidDataException("Last-known-good manifest conflicts with the accepted payload at the same sequence.");
-                }
-
-                return new SignedUpdateState(highestSequence, highestHash, lastKnownGood);
+                return new SignedUpdateState(
+                    current!.HighestAcceptedSequence,
+                    current.HighestAcceptedPayloadSha256,
+                    lastKnownGood);
             });
+        }
+
+        /// <summary>
+        /// Runs a transactional install/post-commit verification callback while the exact accepted manifest
+        /// identity is protected by the state lock, then records its catalog as last-known-good. The callback
+        /// must not call this state store recursively. A final full-state identity check also detects writers
+        /// that ignored the cooperative lock.
+        /// </summary>
+        public SignedUpdateState ExecuteWhileCurrentAndRecordLastKnownGood(
+            VerifiedSignedUpdate verified,
+            DateTimeOffset acceptedUtc,
+            Action commitAndVerify)
+        {
+            ArgumentNullException.ThrowIfNull(verified);
+            ArgumentNullException.ThrowIfNull(commitAndVerify);
+            if (verified.PatcherDisposition == SignedUpdatePatcherDisposition.TooOld)
+            {
+                throw new InvalidOperationException("A below-minimum patcher cannot apply signed update data.");
+            }
+
+            if (verified.IsExpiredAt(_utcNow()))
+            {
+                throw new InvalidOperationException("An expired manifest cannot establish a new last-known-good installation.");
+            }
+
+            SignedUpdateLastKnownGood lastKnownGood = CreateLastKnownGood(verified, acceptedUtc);
+            EnsureSafeStateDirectory();
+            using FileStream stateLock = OpenLockFile();
+            SignedUpdateState? before = LoadCore();
+            RequireCurrentIdentity(before, verified);
+            var next = new SignedUpdateState(
+                before!.HighestAcceptedSequence,
+                before.HighestAcceptedPayloadSha256,
+                lastKnownGood);
+            ValidateState(next);
+            ValidateMonotonicTransition(before, next);
+
+            commitAndVerify();
+
+            SignedUpdateState? after = LoadCore();
+            if (!StateIdentityEquals(before, after))
+            {
+                throw new InvalidOperationException("Signed-update state changed during the protected install callback.");
+            }
+
+            RequireCurrentIdentity(after, verified);
+            WriteAtomic(next);
+            return next;
+        }
+
+        /// <summary>
+        /// Runs an offline apply/reapply callback only while the newest accepted manifest and the stored LKG
+        /// identities are both exact and the newest manifest does not revoke the LKG release. Revocation never
+        /// deletes LKG metadata, so restore/recovery code may still authenticate historical backups.
+        /// </summary>
+        public void ExecuteWhileLastKnownGoodAllowed(
+            VerifiedSignedUpdate newestAccepted,
+            VerifiedSignedUpdate lastKnownGood,
+            Action applyAndVerify)
+        {
+            ArgumentNullException.ThrowIfNull(newestAccepted);
+            ArgumentNullException.ThrowIfNull(lastKnownGood);
+            ArgumentNullException.ThrowIfNull(applyAndVerify);
+            if (newestAccepted.PatcherDisposition == SignedUpdatePatcherDisposition.TooOld
+                || lastKnownGood.PatcherDisposition == SignedUpdatePatcherDisposition.TooOld)
+            {
+                throw new InvalidOperationException("A below-minimum patcher cannot apply last-known-good update data.");
+            }
+
+            EnsureSafeStateDirectory();
+            using FileStream stateLock = OpenLockFile();
+            SignedUpdateState? before = LoadCore();
+            RequireCurrentIdentity(before, newestAccepted);
+            RequireAllowedLastKnownGood(before!, newestAccepted, lastKnownGood);
+
+            applyAndVerify();
+
+            SignedUpdateState? after = LoadCore();
+            if (!StateIdentityEquals(before, after))
+            {
+                throw new InvalidOperationException("Signed-update state changed during the protected last-known-good callback.");
+            }
+
+            RequireCurrentIdentity(after, newestAccepted);
+            RequireAllowedLastKnownGood(after!, newestAccepted, lastKnownGood);
         }
 
         internal void AssertCurrentForRemoteArtifact(VerifiedSignedUpdate verified)
@@ -230,6 +321,70 @@ namespace InvokersRu.Core.Updates
             {
                 throw new InvalidOperationException("The verified manifest is not the current persisted anti-rollback identity.");
             }
+        }
+
+        private static SignedUpdateLastKnownGood CreateLastKnownGood(
+            VerifiedSignedUpdate verified,
+            DateTimeOffset acceptedUtc)
+        {
+            return new SignedUpdateLastKnownGood(
+                verified.Manifest.Sequence,
+                verified.Manifest.ReleaseId,
+                verified.Manifest.Catalog.ArtifactId,
+                verified.PayloadSha256,
+                verified.Manifest.Catalog.CompressedSha256,
+                verified.Manifest.Catalog.CompressedBytes,
+                verified.Manifest.Catalog.UncompressedSha256,
+                verified.Manifest.Catalog.UncompressedBytes,
+                acceptedUtc);
+        }
+
+        private static void RequireCurrentIdentity(
+            SignedUpdateState? current,
+            VerifiedSignedUpdate verified)
+        {
+            if (current == null
+                || current.HighestAcceptedSequence != verified.Manifest.Sequence
+                || !FixedHashEquals(current.HighestAcceptedPayloadSha256, verified.PayloadSha256))
+            {
+                throw new InvalidOperationException("The signed manifest is not the exact current persisted anti-rollback identity.");
+            }
+        }
+
+        private static void RequireAllowedLastKnownGood(
+            SignedUpdateState current,
+            VerifiedSignedUpdate newestAccepted,
+            VerifiedSignedUpdate lastKnownGood)
+        {
+            if (current.LastKnownGood == null
+                || !LastKnownGoodMatchesVerified(current.LastKnownGood, lastKnownGood))
+            {
+                throw new InvalidOperationException("The candidate is not the exact stored last-known-good identity.");
+            }
+
+            foreach (string revokedReleaseId in newestAccepted.Manifest.RevokedReleaseIds)
+            {
+                if (string.Equals(revokedReleaseId, current.LastKnownGood.ReleaseId, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException("The newest accepted manifest revokes this last-known-good release for apply/reapply.");
+                }
+            }
+        }
+
+        private static bool StateIdentityEquals(SignedUpdateState? left, SignedUpdateState? right)
+        {
+            if (left == null || right == null) return left == right;
+            if (left.HighestAcceptedSequence != right.HighestAcceptedSequence
+                || !FixedHashEquals(left.HighestAcceptedPayloadSha256, right.HighestAcceptedPayloadSha256))
+            {
+                return false;
+            }
+
+            SignedUpdateLastKnownGood? leftLkg = left.LastKnownGood;
+            SignedUpdateLastKnownGood? rightLkg = right.LastKnownGood;
+            if (leftLkg == null || rightLkg == null) return leftLkg == rightLkg;
+            return LastKnownGoodIdentityEquals(leftLkg, rightLkg)
+                && leftLkg.AcceptedUtc == rightLkg.AcceptedUtc;
         }
 
         private SignedUpdateState Mutate(Func<SignedUpdateState?, SignedUpdateState> mutation)

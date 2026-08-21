@@ -116,24 +116,31 @@ namespace InvokersRu.Core.Translations
 
     public sealed class TranslationResult
     {
+        [JsonRequired]
         [JsonPropertyName("job_id")]
         public string JobId { get; set; } = string.Empty;
 
+        [JsonRequired]
         [JsonPropertyName("translation")]
         public string Translation { get; set; } = string.Empty;
 
+        [JsonRequired]
         [JsonPropertyName("model")]
         public string? Model { get; set; }
 
+        [JsonRequired]
         [JsonPropertyName("prompt_version")]
         public string? PromptVersion { get; set; }
 
+        [JsonRequired]
         [JsonPropertyName("confidence")]
         public string? Confidence { get; set; }
 
+        [JsonRequired]
         [JsonPropertyName("needs_review")]
         public bool NeedsReview { get; set; }
 
+        [JsonRequired]
         [JsonPropertyName("issue_codes")]
         public string[] IssueCodes { get; set; } = Array.Empty<string>();
     }
