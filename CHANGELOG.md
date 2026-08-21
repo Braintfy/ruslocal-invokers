@@ -1,5 +1,13 @@
 # Changelog
 
+## Каталог — 2026-08-21
+
+- gave `Fate Star` and `Destiny Star` different names. Both had been translated as «Звезда судьбы», which is how the guarantee for the pair came out reading «Гарантия звезды судьбы и судьбы» — two distinct items collapsed into one word. Fate is «рок» now;
+- stopped one orb wearing another's name: `Wonder Orb Guarantee` was labelled «Гарантия Чудо-сферы», and Чудо-сфера is `Miracle Orb`, a different item on the same screen;
+- settled the orb families that carried three names each. `Miracle Orb` appeared as «Чудо-сфера», «волшебная сфера» and «Чудо-Шар»; `Dream Orb` as «Сфера снов» and «Сфера Мечты». Derived rows — bonus, fragment, guarantee — now follow the item they belong to;
+- normalised capitalisation inside compound item names to the glossary rule, so «Гарантия Сияющей Звезды» matches «Сияющая звезда» rather than shouting at it;
+- all of it lives in `terminology.ru.json`, so the next pass cannot drift it apart again.
+
 ## README — 2026-08-21
 
 - put the two questions people actually arrive with at the top of the README: what this cost, and how to do it for another language. The community kit and the prompts were already in the repository, buried at the very bottom under «Для разработчиков» where nobody looking for them would go;
