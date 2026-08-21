@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
 using System.IO;
 using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -156,11 +158,11 @@ internal sealed class MainForm : Form
         root.Controls.Add(logCard, 0, 4);
 
         _pathLabel.Text = _gameRoot;
-        _browseButton.Click += async (_, _) => await ChooseCacheRootAsync();
+        _browseButton.Click += async (_, _) => await FindOrChooseCacheRootAsync();
         _checkButton.Click += async (_, _) => await CheckAsync(showFailureDialog: true);
         _applyButton.Click += async (_, _) => await ApplyOrRecoverAsync();
         _restoreButton.Click += async (_, _) => await RestoreAsync();
-        Shown += async (_, _) => await CheckAsync(showFailureDialog: false);
+        Shown += async (_, _) => await InitialCheckAsync();
         FormClosing += OnFormClosing;
     }
 
@@ -251,7 +253,7 @@ internal sealed class MainForm : Form
         browseButton = new Button
         {
             Dock = DockStyle.Fill,
-            Text = "Выбрать папку…",
+            Text = "Найти автоматически",
             FlatStyle = FlatStyle.Flat,
             BackColor = Color.FromArgb(36, 52, 78),
             ForeColor = Theme.Text,
@@ -286,9 +288,76 @@ internal sealed class MainForm : Form
         return card;
     }
 
-    private async Task ChooseCacheRootAsync()
+    private async Task InitialCheckAsync()
+    {
+        if (!HasCacheTuple(_gameRoot))
+        {
+            SetBusy(true, "Поиск игры…");
+            try
+            {
+                CacheSearchResult quickSearch = await SearchCacheRootsAsync(
+                    new[] { Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) },
+                    TimeSpan.FromSeconds(8));
+                if (quickSearch.Paths.Count == 1)
+                {
+                    SelectCacheRoot(quickSearch.Paths[0]);
+                    AppendLog($"Папка локализации найдена автоматически: {_gameRoot}");
+                }
+            }
+            finally
+            {
+                SetBusy(false, string.Empty);
+            }
+        }
+
+        await CheckAsync(showFailureDialog: false);
+    }
+
+    private async Task FindOrChooseCacheRootAsync()
     {
         if (_busy) return;
+        SetBusy(true, "Поиск на дисках…");
+        AppendLog("Ищем точный набор файлов локализации на доступных локальных дисках.");
+        CacheSearchResult search;
+        try
+        {
+            search = await SearchCacheRootsAsync(GetFixedDriveRoots(), TimeSpan.FromSeconds(60));
+        }
+        finally
+        {
+            SetBusy(false, string.Empty);
+        }
+
+        string? selectedRoot = search.Paths.Count switch
+        {
+            0 => null,
+            1 => search.Paths[0],
+            _ => ChooseFromFoundRoots(search.Paths)
+        };
+        if (selectedRoot != null)
+        {
+            SelectCacheRoot(selectedRoot);
+            AppendLog($"Выбрана найденная папка локализации: {selectedRoot}");
+            await CheckAsync(showFailureDialog: true);
+            return;
+        }
+
+        string timeoutNotice = search.TimedOut
+            ? "Поиск остановлен через 60 секунд. "
+            : string.Empty;
+        DialogResult manual = MessageBox.Show(
+            this,
+            timeoutNotice + "Автоматический поиск не нашёл подходящую папку. Выбрать папку i18n вручную?",
+            "Папка локализации не найдена",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Information,
+            MessageBoxDefaultButton.Button1);
+        if (manual == DialogResult.Yes)
+            await ChooseCacheRootManuallyAsync();
+    }
+
+    private async Task ChooseCacheRootManuallyAsync()
+    {
         using var dialog = new FolderBrowserDialog
         {
             Description = "Выберите папку i18n, в которой находятся dl_en_US.bin, dl_uk_UA.bin и dl_uk_UA.bin.ver.",
@@ -312,13 +381,147 @@ internal sealed class MainForm : Form
             return;
         }
 
-        _gameRoot = selectedRoot;
-        SaveCacheRoot(selectedRoot);
-        _pathLabel.Text = selectedRoot;
-        _lastPlan = null;
-        UpdateButtons();
+        SelectCacheRoot(selectedRoot);
         AppendLog($"Выбрана папка локализации: {selectedRoot}");
         await CheckAsync(showFailureDialog: true);
+    }
+
+    private void SelectCacheRoot(string selectedRoot)
+    {
+        _gameRoot = Path.GetFullPath(selectedRoot)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        SaveCacheRoot(_gameRoot);
+        _pathLabel.Text = _gameRoot;
+        _lastPlan = null;
+        UpdateButtons();
+    }
+
+    private static async Task<CacheSearchResult> SearchCacheRootsAsync(
+        IReadOnlyCollection<string> roots,
+        TimeSpan timeout)
+    {
+        using var cancellation = new CancellationTokenSource(timeout);
+        return await Task.Run(() => SearchCacheRoots(roots, cancellation.Token));
+    }
+
+    private static CacheSearchResult SearchCacheRoots(
+        IReadOnlyCollection<string> roots,
+        CancellationToken cancellationToken)
+    {
+        var found = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true,
+            ReturnSpecialDirectories = false,
+            AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System,
+            MaxRecursionDepth = 18
+        };
+        foreach (string root in roots)
+        {
+            if (cancellationToken.IsCancellationRequested) break;
+            if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) continue;
+            try
+            {
+                foreach (string stampPath in Directory.EnumerateFiles(root, "dl_uk_UA.bin.ver", options))
+                {
+                    if (cancellationToken.IsCancellationRequested || found.Count >= 32) break;
+                    string? candidate = Path.GetDirectoryName(stampPath);
+                    if (candidate != null && HasCacheTuple(candidate))
+                    {
+                        string normalized = Path.GetFullPath(candidate)
+                            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                        if (seen.Add(normalized)) found.Add(normalized);
+                    }
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                or ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                // Inaccessible trees are skipped; discovery never weakens the later exact file validation.
+            }
+        }
+
+        found.Sort(StringComparer.OrdinalIgnoreCase);
+        return new CacheSearchResult(found, cancellationToken.IsCancellationRequested);
+    }
+
+    private static IReadOnlyCollection<string> GetFixedDriveRoots()
+    {
+        var roots = new List<string>();
+        foreach (DriveInfo drive in DriveInfo.GetDrives())
+        {
+            try
+            {
+                if (drive.IsReady && drive.DriveType == DriveType.Fixed)
+                    roots.Add(drive.RootDirectory.FullName);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // A drive that cannot be inspected is not a valid automatic candidate.
+            }
+        }
+
+        return roots;
+    }
+
+    private string? ChooseFromFoundRoots(IReadOnlyList<string> paths)
+    {
+        using var dialog = new Form
+        {
+            Text = "Выберите установленную игру",
+            StartPosition = FormStartPosition.CenterParent,
+            ClientSize = new Size(720, 330),
+            MinimumSize = new Size(620, 280),
+            BackColor = Theme.Background,
+            ForeColor = Theme.Text,
+            Font = Font,
+            ShowInTaskbar = false,
+            MinimizeBox = false,
+            MaximizeBox = false
+        };
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 3,
+            Padding = new Padding(16)
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120f));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46f));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48f));
+        var title = new Label
+        {
+            Dock = DockStyle.Fill,
+            Text = "Найдено несколько папок локализации. Выберите используемую установку:",
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = Theme.Text
+        };
+        layout.Controls.Add(title, 0, 0);
+        layout.SetColumnSpan(title, 2);
+        var list = new ListBox
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Theme.Card,
+            ForeColor = Theme.Text,
+            BorderStyle = BorderStyle.FixedSingle,
+            HorizontalScrollbar = true
+        };
+        foreach (string path in paths) list.Items.Add(path);
+        list.SelectedIndex = 0;
+        layout.Controls.Add(list, 0, 1);
+        layout.SetColumnSpan(list, 2);
+        var select = new Button { Text = "Выбрать", Dock = DockStyle.Fill, DialogResult = DialogResult.OK };
+        var cancel = new Button { Text = "Отмена", Dock = DockStyle.Fill, DialogResult = DialogResult.Cancel };
+        layout.Controls.Add(select, 0, 2);
+        layout.Controls.Add(cancel, 1, 2);
+        dialog.Controls.Add(layout);
+        dialog.AcceptButton = select;
+        dialog.CancelButton = cancel;
+        return dialog.ShowDialog(this) == DialogResult.OK ? list.SelectedItem as string : null;
     }
 
     private static string? ResolveSelectedCacheRoot(string selectedPath)
@@ -342,9 +545,7 @@ internal sealed class MainForm : Form
         };
         foreach (string candidate in candidates)
         {
-            if (File.Exists(Path.Combine(candidate, "dl_en_US.bin"))
-                && File.Exists(Path.Combine(candidate, "dl_uk_UA.bin"))
-                && File.Exists(Path.Combine(candidate, "dl_uk_UA.bin.ver")))
+            if (HasCacheTuple(candidate))
             {
                 return Path.GetFullPath(candidate).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             }
@@ -352,6 +553,15 @@ internal sealed class MainForm : Form
 
         return null;
     }
+
+    private static bool HasCacheTuple(string candidate)
+    {
+        return File.Exists(Path.Combine(candidate, "dl_en_US.bin"))
+            && File.Exists(Path.Combine(candidate, "dl_uk_UA.bin"))
+            && File.Exists(Path.Combine(candidate, "dl_uk_UA.bin.ver"));
+    }
+
+    private sealed record CacheSearchResult(IReadOnlyList<string> Paths, bool TimedOut);
 
     private static string LoadSavedCacheRoot()
     {
@@ -635,7 +845,7 @@ internal sealed class MainForm : Form
             SetBadge("ИГРА НЕ НАЙДЕНА", Theme.Danger);
             _stateLabel.Text = "Состояние: файлы игры отсутствуют по стандартному пути";
             _stateLabel.ForeColor = Theme.Danger;
-            _noticeLabel.Text = $"Файлы локализации не найдены в {_gameRoot}. Нажмите «Выбрать папку…» и укажите папку i18n с файлами EN/UK/stamp.";
+            _noticeLabel.Text = $"Файлы локализации не найдены в {_gameRoot}. Нажмите «Найти автоматически»; патчер проверит доступные локальные диски и при необходимости предложит ручной выбор i18n.";
             _noticeLabel.ForeColor = Theme.Danger;
         }
         else if (string.Equals(plan.PlanAction, "REFUSE_PATCHER_OR_SIGNED_DATA_NOT_CURRENT", StringComparison.Ordinal))
