@@ -1158,7 +1158,8 @@ namespace InvokersRu.Cli
         {
             EnsureInstallationWritesEnabled();
             RequireRiskAcknowledgement(options);
-            RuntimeUpdateResolution resolution = ResolveRuntimeMutation(out SignedUpdateCoordinator? coordinator);
+            string cacheRoot = ResolveCacheRootForMutation(options);
+            RuntimeUpdateResolution resolution = ResolveRuntimeMutation(cacheRoot, out SignedUpdateCoordinator? coordinator);
             using (coordinator)
             {
                 RuntimeCacheCompatibility profile = resolution.Profile;
@@ -1206,7 +1207,7 @@ namespace InvokersRu.Cli
                             ?? throw new InvalidDataException("Translation update has no authenticated installed profile.");
                         RuntimeCacheService.Restore(RuntimeCacheService.DefaultStatePath(), oldProfile);
                         applyInspection = RuntimeCacheService.Inspect(
-                            RuntimeCacheService.DefaultCacheRoot(),
+                            cacheRoot,
                             profile,
                             RuntimeCacheService.DefaultStatePath());
                         if (applyInspection.Status != InstallationStatus.CompatibleOriginal)
@@ -1237,7 +1238,16 @@ namespace InvokersRu.Cli
             }
         }
 
-        private static RuntimeUpdateResolution ResolveRuntimeMutation(out SignedUpdateCoordinator? coordinator)
+        private static string ResolveCacheRootForMutation(ArgumentBag options)
+        {
+            if (!TryResolveCacheRoot(options, out string cacheRoot))
+                throw new InvalidOperationException("Runtime-cache localization folder is unavailable.");
+            return Path.GetFullPath(cacheRoot);
+        }
+
+        private static RuntimeUpdateResolution ResolveRuntimeMutation(
+            string cacheRoot,
+            out SignedUpdateCoordinator? coordinator)
         {
             RuntimeCacheCompatibility embeddedProfile = LoadTrustedRuntimeCacheCompatibility();
             RuntimeCatalogPlanInfo embeddedCatalog = InspectBundledRuntimeCatalog(embeddedProfile);
@@ -1247,7 +1257,7 @@ namespace InvokersRu.Cli
             try
             {
                 return RuntimeUpdateResolver.Resolve(
-                    RuntimeCacheService.DefaultCacheRoot(),
+                    cacheRoot,
                     RuntimeCacheService.DefaultStatePath(),
                     embeddedProfile,
                     embeddedCatalogPath,
@@ -1261,7 +1271,7 @@ namespace InvokersRu.Cli
                 coordinator?.Dispose();
                 coordinator = null;
                 return RuntimeUpdateResolver.Resolve(
-                    RuntimeCacheService.DefaultCacheRoot(),
+                    cacheRoot,
                     RuntimeCacheService.DefaultStatePath(),
                     embeddedProfile,
                     embeddedCatalogPath,
@@ -1311,7 +1321,8 @@ namespace InvokersRu.Cli
         {
             EnsureInstallationWritesEnabled();
             RequireRiskAcknowledgement(options);
-            RuntimeUpdateResolution resolution = ResolveRuntimeMutation(out SignedUpdateCoordinator? coordinator);
+            string cacheRoot = ResolveCacheRootForMutation(options);
+            RuntimeUpdateResolution resolution = ResolveRuntimeMutation(cacheRoot, out SignedUpdateCoordinator? coordinator);
             using (coordinator)
             {
                 if (!RuntimeUpdateAuthorization.CanRestoreOrRecover(resolution))
@@ -1327,7 +1338,8 @@ namespace InvokersRu.Cli
         {
             EnsureInstallationWritesEnabled();
             RequireRiskAcknowledgement(options);
-            RuntimeUpdateResolution resolution = ResolveRuntimeMutation(out SignedUpdateCoordinator? coordinator);
+            string cacheRoot = ResolveCacheRootForMutation(options);
+            RuntimeUpdateResolution resolution = ResolveRuntimeMutation(cacheRoot, out SignedUpdateCoordinator? coordinator);
             using (coordinator)
             {
                 if (!RuntimeUpdateAuthorization.CanRestoreOrRecover(resolution))
@@ -1514,8 +1526,8 @@ namespace InvokersRu.Cli
                 "cache-status" or "cache-plan" => (new[] { "cache-root", "profile", "json" }, new[] { "json" }),
                 "update-status" or "update-refresh" => (new[] { "json" }, new[] { "json" }),
                 "cache-profile" => (new[] { "output", "cache-root", "english", "base", "stamp", "id" }, Array.Empty<string>()),
-                "cache-apply" => (new[] { "acknowledge-risk", "include-draft" }, new[] { "include-draft" }),
-                "cache-restore" or "cache-recover" => (new[] { "acknowledge-risk" }, Array.Empty<string>()),
+                "cache-apply" => (new[] { "acknowledge-risk", "include-draft", "cache-root" }, new[] { "include-draft" }),
+                "cache-restore" or "cache-recover" => (new[] { "acknowledge-risk", "cache-root" }, Array.Empty<string>()),
                 "apply" => (new[] { "translations", "compat", "game-root", "state", "include-draft", "acknowledge-risk" }, new[] { "include-draft" }),
                 "restore" or "recover" => (new[] { "compat", "state", "acknowledge-risk" }, Array.Empty<string>()),
                 _ => (Array.Empty<string>(), Array.Empty<string>())

@@ -1,5 +1,11 @@
 # Changelog
 
+## Windows 3.1.2 Preview — 2026-08-21
+
+- Added a folder picker for non-standard `i18n` locations and remembered the selected path per Windows user.
+- The same selected cache root is now used for plan, apply, restore, and recovery operations.
+- Kept Windows 10 x64 build 14393 support and the universal compatible-revision translation path.
+
 ## Причина отказа — 2026-08-21
 
 - made the macOS driver name which table moved instead of guessing. It used to answer every build failure with «скорее всего игра обновилась», which is a guess that happens to be wrong in the case that actually occurs: today the Ukrainian table changed and the build succeeded, while a changed English table is the one that genuinely strands rows. It now reads both content versions out of the game's own files and prints the builder's real error alongside them;

@@ -5,15 +5,18 @@ using System.IO;
 using System.Diagnostics;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace InvokersRu.Gui;
 
 internal sealed class MainForm : Form
 {
     private const string RiskAcknowledgement = "I_ACCEPT_LOCAL_MODIFICATION";
+    private const string SettingsRegistryPath = @"Software\InvokersRu";
+    private const string CacheRootSettingName = "RuntimeCacheRoot";
 
     private readonly CliRunner _cli = new();
-    private readonly string _gameRoot;
+    private string _gameRoot;
     private readonly Label _pathLabel;
     private readonly Label _versionLabel;
     private readonly Label _stateLabel;
@@ -23,15 +26,14 @@ internal sealed class MainForm : Form
     private readonly ActionButton _checkButton;
     private readonly ActionButton _applyButton;
     private readonly ActionButton _restoreButton;
+    private readonly Button _browseButton;
     private readonly Label _busyLabel;
     private CliPlanResult? _lastPlan;
     private bool _busy;
 
     public MainForm()
     {
-        _gameRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            "AppData", "LocalLow", "Hit_Zone", "Invokers", "i18n");
+        _gameRoot = LoadSavedCacheRoot();
 
         Text = "InvokersRu — русификация Titan Legacy";
         StartPosition = FormStartPosition.CenterScreen;
@@ -60,7 +62,12 @@ internal sealed class MainForm : Form
 
         root.Controls.Add(CreateHeader(), 0, 0);
 
-        CardPanel gameCard = CreateGameCard(out _pathLabel, out _versionLabel, out _stateLabel, out _statusBadge);
+        CardPanel gameCard = CreateGameCard(
+            out _pathLabel,
+            out _versionLabel,
+            out _stateLabel,
+            out _statusBadge,
+            out _browseButton);
         gameCard.Margin = new Padding(0, 0, 0, 16);
         root.Controls.Add(gameCard, 0, 1);
 
@@ -149,6 +156,7 @@ internal sealed class MainForm : Form
         root.Controls.Add(logCard, 0, 4);
 
         _pathLabel.Text = _gameRoot;
+        _browseButton.Click += async (_, _) => await ChooseCacheRootAsync();
         _checkButton.Click += async (_, _) => await CheckAsync(showFailureDialog: true);
         _applyButton.Click += async (_, _) => await ApplyOrRecoverAsync();
         _restoreButton.Click += async (_, _) => await RestoreAsync();
@@ -197,7 +205,8 @@ internal sealed class MainForm : Form
         out Label pathLabel,
         out Label versionLabel,
         out Label stateLabel,
-        out Label statusBadge)
+        out Label statusBadge,
+        out Button browseButton)
     {
         var card = new CardPanel { Dock = DockStyle.Fill };
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 4, BackColor = Theme.Card };
@@ -238,7 +247,21 @@ internal sealed class MainForm : Form
             TextAlign = ContentAlignment.MiddleLeft
         };
         layout.Controls.Add(pathLabel, 0, 1);
-        layout.SetColumnSpan(pathLabel, 2);
+
+        browseButton = new Button
+        {
+            Dock = DockStyle.Fill,
+            Text = "Выбрать папку…",
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(36, 52, 78),
+            ForeColor = Theme.Text,
+            Font = new Font("Segoe UI Semibold", 8.5f, FontStyle.Bold, GraphicsUnit.Point),
+            Margin = new Padding(8, 3, 0, 3),
+            Cursor = Cursors.Hand,
+            TabStop = true
+        };
+        browseButton.FlatAppearance.BorderColor = Color.FromArgb(62, 82, 112);
+        layout.Controls.Add(browseButton, 1, 1);
 
         versionLabel = new Label
         {
@@ -263,6 +286,108 @@ internal sealed class MainForm : Form
         return card;
     }
 
+    private async Task ChooseCacheRootAsync()
+    {
+        if (_busy) return;
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = "Выберите папку i18n, в которой находятся dl_en_US.bin, dl_uk_UA.bin и dl_uk_UA.bin.ver.",
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = false,
+            InitialDirectory = Directory.Exists(_gameRoot)
+                ? _gameRoot
+                : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+        string? selectedRoot = ResolveSelectedCacheRoot(dialog.SelectedPath);
+        if (selectedRoot == null)
+        {
+            MessageBox.Show(
+                this,
+                "В выбранной папке не найден полный набор файлов локализации. Выберите папку i18n, содержащую dl_en_US.bin, dl_uk_UA.bin и dl_uk_UA.bin.ver.\n\nПеред выбором включите украинский язык в игре и дождитесь загрузки.",
+                "Папка локализации не найдена",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        _gameRoot = selectedRoot;
+        SaveCacheRoot(selectedRoot);
+        _pathLabel.Text = selectedRoot;
+        _lastPlan = null;
+        UpdateButtons();
+        AppendLog($"Выбрана папка локализации: {selectedRoot}");
+        await CheckAsync(showFailureDialog: true);
+    }
+
+    private static string? ResolveSelectedCacheRoot(string selectedPath)
+    {
+        string selected;
+        try
+        {
+            selected = Path.GetFullPath(selectedPath);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+
+        string[] candidates =
+        {
+            selected,
+            Path.Combine(selected, "i18n"),
+            Path.Combine(selected, "Invokers", "i18n"),
+            Path.Combine(selected, "Hit_Zone", "Invokers", "i18n")
+        };
+        foreach (string candidate in candidates)
+        {
+            if (File.Exists(Path.Combine(candidate, "dl_en_US.bin"))
+                && File.Exists(Path.Combine(candidate, "dl_uk_UA.bin"))
+                && File.Exists(Path.Combine(candidate, "dl_uk_UA.bin.ver")))
+            {
+                return Path.GetFullPath(candidate).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+        }
+
+        return null;
+    }
+
+    private static string LoadSavedCacheRoot()
+    {
+        string defaultRoot = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "AppData", "LocalLow", "Hit_Zone", "Invokers", "i18n");
+        try
+        {
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(SettingsRegistryPath, writable: false);
+            string? saved = key?.GetValue(CacheRootSettingName) as string;
+            if (!string.IsNullOrWhiteSpace(saved) && saved.Length <= 1024 && Path.IsPathFullyQualified(saved))
+                return Path.GetFullPath(saved).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or System.Security.SecurityException or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            // A damaged optional preference must not prevent the patcher from starting.
+        }
+
+        return defaultRoot;
+    }
+
+    private static void SaveCacheRoot(string cacheRoot)
+    {
+        try
+        {
+            using RegistryKey key = Registry.CurrentUser.CreateSubKey(SettingsRegistryPath, writable: true);
+            key.SetValue(CacheRootSettingName, cacheRoot, RegistryValueKind.String);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or System.Security.SecurityException)
+        {
+            // The selection still works for this session when the optional preference cannot be saved.
+        }
+    }
+
     private async Task<bool> CheckAsync(bool showFailureDialog)
     {
         if (_busy) return false;
@@ -275,7 +400,9 @@ internal sealed class MainForm : Form
             AppendLog(update.CombinedOutput.Length == 0
                 ? $"Проверка обновлений завершилась с кодом {update.ExitCode} без вывода."
                 : update.CombinedOutput);
-            CliCommandResult command = await _cli.RunAsync("cache-plan", new[] { "--json" });
+            CliCommandResult command = await _cli.RunAsync(
+                "cache-plan",
+                new[] { "--json", "--cache-root", _gameRoot });
             CliPlanResult plan = CliPlanResult.Parse(command);
             string? refreshWarning = CliPlanResult.ExtractUpdateRefreshWarning(update);
             if (plan.UpdateProblem == null && !plan.UpdateProblemBlocksApply && refreshWarning != null)
@@ -329,7 +456,7 @@ internal sealed class MainForm : Form
 
         await RunMutationAsync(
             "cache-restore",
-            new[] { "--acknowledge-risk", RiskAcknowledgement },
+            new[] { "--acknowledge-risk", RiskAcknowledgement, "--cache-root", _gameRoot },
             "Оригинальная локализация восстановлена и состояние патчера очищено.");
     }
 
@@ -361,7 +488,7 @@ internal sealed class MainForm : Form
             {
                 await RunMutationAsync(
                     "cache-recover",
-                    new[] { "--acknowledge-risk", RiskAcknowledgement },
+                    new[] { "--acknowledge-risk", RiskAcknowledgement, "--cache-root", _gameRoot },
                     "Состояние патчера восстановлено. Выполните проверку ещё раз.");
             }
             return;
@@ -411,7 +538,7 @@ internal sealed class MainForm : Form
 
         await RunMutationAsync(
             "cache-apply",
-            new[] { "--acknowledge-risk", RiskAcknowledgement },
+            new[] { "--acknowledge-risk", RiskAcknowledgement, "--cache-root", _gameRoot },
             "Русская локализация установлена. Запускайте игру с выбранным украинским языком — этот слот используется для русского перевода.");
     }
 
@@ -508,7 +635,7 @@ internal sealed class MainForm : Form
             SetBadge("ИГРА НЕ НАЙДЕНА", Theme.Danger);
             _stateLabel.Text = "Состояние: файлы игры отсутствуют по стандартному пути";
             _stateLabel.ForeColor = Theme.Danger;
-            _noticeLabel.Text = $"Клиент не найден в {_gameRoot}. Установка заблокирована; оболочка не ищет случайные каталоги и не изменяет путь вручную.";
+            _noticeLabel.Text = $"Файлы локализации не найдены в {_gameRoot}. Нажмите «Выбрать папку…» и укажите папку i18n с файлами EN/UK/stamp.";
             _noticeLabel.ForeColor = Theme.Danger;
         }
         else if (string.Equals(plan.PlanAction, "REFUSE_PATCHER_OR_SIGNED_DATA_NOT_CURRENT", StringComparison.Ordinal))
@@ -646,6 +773,7 @@ internal sealed class MainForm : Form
     private void UpdateButtons()
     {
         _checkButton.Enabled = !_busy;
+        _browseButton.Enabled = !_busy;
         _applyButton.Text = _lastPlan?.CanRecover == true
             ? "Восстановить после сбоя"
             : string.Equals(_lastPlan?.TranslationUpdateKind, "metadata-only", StringComparison.Ordinal)
