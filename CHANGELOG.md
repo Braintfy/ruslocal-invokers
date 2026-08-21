@@ -1,5 +1,11 @@
 # Changelog
 
+## Профиль Prod_0.60.0_71 — 2026-08-21
+
+- certified a profile for the Ukrainian table the game quietly replaced. The client version did not move — still 0.60.1247 — and neither did the English table, but the Ukrainian base went from `Prod_0.60.0_68` to `Prod_0.60.0_71`, 489 bytes larger. That is why the translation vanished and why the Windows patcher refused with `REFUSE_UNKNOWN_OR_INCONSISTENT`: its checksums are of the base, and the base changed underneath it;
+- confirmed the translation itself survived intact before certifying anything. The catalog keys off the English `source_sha256`, English did not change, and a rebuild against the new base still applies all 41 037 rows with the same 1 English and 254 base fallbacks. The 5 356 new warnings are `stale-hint`: the Ukrainian context a row was translated beside has changed, which is advice to re-read, not a defect;
+- kept both previous outputs in `superseded_artifacts`, so a player who installed before this update is still recognised and can still restore their original instead of being locked out by an unknown hash.
+
 ## Каталог — 2026-08-21
 
 - gave `Fate Star` and `Destiny Star` different names. Both had been translated as «Звезда судьбы», which is how the guarantee for the pair came out reading «Гарантия звезды судьбы и судьбы» — two distinct items collapsed into one word. Fate is «рок» now;
