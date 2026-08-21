@@ -6,6 +6,7 @@
 - built the numbers block out of things that can be checked rather than remembered — line counts, characters, models and passes come from the catalog itself, the per-pass token figure from the `jobs` estimate. The totals are stated as an order of magnitude, because that is what they are;
 - corrected the download table, which named files that do not exist in the release: `Rusifikator-Invokers-PC.zip` is published as `Rusifikator-Invokers-ANDROID.zip`, and the APK carries its version in the name;
 - compressed the Android section from four near-identical walkthroughs to four short ones with the shared step — pick Ukrainian, close the game — stated once, and merged the two update sections that had been explaining the same thing twice;
+- brought README.en.md level with the Russian one, which had drifted three changes behind: it still had no emulator method, no numbers, no pointer to the localization kit, and named release files that do not exist;
 - documented the SDK pin in the developer section. `global.json` requires 10.0.302 and a newer SDK simply refuses to build, which is a confusing first five minutes for anyone cloning the repository; the two update-channel commands were missing from the command list as well.
 
 ## Windows 3.1.0 Preview — 2026-08-21

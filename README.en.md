@@ -4,16 +4,56 @@
 
 An unofficial Russian translation of the game. **41,037 of 41,292 strings** are translated: menus, quests, skill descriptions, items, and battle messages. One string remains in English and another 254 entries are empty in the game itself.
 
-The translation is machine-generated and has not yet received a complete human editorial pass. This project does not distribute original game files: Russian text is composed on each user's device from that user's own installed game data.
+A model did the translating and no human editor has been over the text. After the first pass the corpus was corrected against screenshots from the game: one glossary instead of five names for the same effect, a proofreading pass over prose, and shortening the labels that did not fit the interface. Numbers, percentages and durations are checked against the source automatically.
+
+This project does not distribute original game files: Russian text is composed on each user's device from that user's own installed game data.
+
+## Project numbers
+
+| | |
+| --- | --- |
+| Strings in the game | 41,292 |
+| Translated | **41,037** — 99.4%; one internal string and 254 entries empty in the game itself |
+| Volume of Russian text | 7.0 million characters |
+| Passes over the corpus | 7 — first translation, rework on a stronger model, repair of half-English rows, prose proofreading, name unification, screenshot QA, interface labels |
+| Models | claude-haiku-4-5 — 25,812 rows, claude-opus-5 — 13,702, gpt-5.6 — 1,523 |
+| Tokens for one full pass | ≈3.7M in, ≈2.8M out — measured by the `jobs` command |
+| Tokens for translation | ≈18M: a full run over the corpus (~10M), reworking a quarter of the rows on a stronger model (~2M), five targeted passes (~6M) |
+| Tokens for building the PC version | ≈10M, through ChatGPT |
+| Total | ≈28M tokens |
+| Elapsed | 6 days, 16–21 August 2026 |
+| Automated checks | 22 classes of error: placeholders, numbers, units, markup, braces, Cyrillic look-alikes of Latin abbreviations |
+| Code | 18,500 lines of C# and 1,175 of Java, no external dependencies |
+| Platforms | Windows, macOS, Android, emulators |
+
+Rows, characters, models and passes are read out of `translations/ru_RU.jsonl` itself; the per-pass token figure is the `jobs` estimate. The totals are an order of magnitude rather than a billing statement: on long strings full of markup the fixed per-agent overhead costs more than the strings do, which is why splitting the work finer gets more expensive, not less.
+
+## Translate into your own language
+
+The project translates into Russian, but nothing in the pipeline is tied to that language. If the game already carries a slot for yours — and it carries fourteen — the same route works, and no game file leaves your machine.
+
+| What you need | Where it is |
+| --- | --- |
+| The whole pipeline, step by step | **[Community localization kit](community-localization-kit/README.md)** — from capturing a tuple of your own game build to a Windows installer and a macOS image |
+| Prompts for the model | [translation](community-localization-kit/prompts/translation.md), [review](community-localization-kit/prompts/review.md) |
+| Prompts proven on the full corpus | [first translation](prompts/translation-system.ru-v2.md), [repairing half-English rows](prompts/translation-repair.ru-v4.md), [prose proofreading](prompts/translation-polish.ru-v4.md) |
+| Templates | [glossary](community-localization-kit/templates/glossary.example.json), [style guide](community-localization-kit/templates/style-guide.example.md), [language config](community-localization-kit/templates/language-config.example.json) |
+| How it works underneath | [LOC1 format and pipeline](docs/architecture.md), [translation workflow](docs/translation-workflow.md) |
+
+What the pipeline cannot do: it does not add new languages to the game and does not change its format. It works only with a slot the game already has and the current LOC1; strings absent from your build stay English.
+
+The lessons from this project that will save you time are in [docs/translation-workflow.md](docs/translation-workflow.md): why long strings with markup need a stronger model, how terminology drift between batches is detected, and which three classes of defect are visible only by looking at screenshots.
 
 ## Download
 
+Everything is on the [releases page](https://github.com/Braintfy/ruslocal-invokers/releases/latest).
+
 | Where you play | What to download |
 | --- | --- |
-| Mac | **[Russian localizer for macOS](https://github.com/Braintfy/ruslocal-invokers/releases/latest)** — the `.dmg` file |
-| Android phone, no root | **[Rusifikator-Invokers-PC.zip](https://github.com/Braintfy/ruslocal-invokers/releases/latest)** — a computer helper; the phone app is included |
-| Android phone with root | **[Rusifikator-Invokers-Android.apk](https://github.com/Braintfy/ruslocal-invokers/releases/latest)** |
-| Windows PC with the PC game installed | **[InvokersRu for Windows](https://github.com/Braintfy/ruslocal-invokers/releases/latest)** — download `InvokersRu-…-win-x64.exe` |
+| Windows PC | `InvokersRu-…-win-x64.exe` — installer |
+| Mac | `Rusifikator-Invokers-….dmg` — disk image |
+| Android phone, no root | `Rusifikator-Invokers-ANDROID.zip` — a computer helper; the phone app is inside |
+| Android phone with root | `Rusifikator-Invokers-Android-….apk` — the app alone |
 
 The Mac version can update itself. The Android computer helper fetches the current translation from the project. Windows 3.1 ships an offline bootstrap translation and can fetch newer **signed translation data and exact game-version profiles** from the fixed GitHub channel without replacing the EXE. It detects the game version and blocks installation when the profile is missing, incompatible, expired, or requires a newer patcher.
 
@@ -21,45 +61,46 @@ The Mac game is the iPhone/iPad application. The App Store installs those applic
 
 ## Android installation
 
-The Android translation works and has been tested. The installation method depends on whether the phone has root access; this is an Android platform restriction, not a project decision.
+Since Android 11 one application cannot modify another's data. Root is the only way to do it entirely on the device; without root a computer transports the files, while the phone still performs the build. Nothing has to be installed by hand — the helper downloads what it needs.
 
-Starting with Android 11, one application cannot read or modify another application's data. Root is the only way to do this entirely on the phone. Without root, a computer transports the files, while the phone still performs the translation build. No third-party utility needs to be installed manually; the helper downloads what it needs.
+**In every method**, first select **Ukrainian** in the game, wait for the text to download, and fully close the game. Russian text occupies the Ukrainian slot, the only Cyrillic one the game has.
 
-### Method 1 — phone only (root required)
+### Method 1 — device only (root required)
 
-1. Download and install the APK.
-2. In the game, select **Ukrainian**, wait for the text to download, and fully close the game.
-3. Open “Русификатор Invokers,” choose Install translation, and grant root access.
+Install the APK, open “Русификатор Invokers,” choose Install translation, and grant root access.
 
-### Method 2 — wireless over Wi-Fi
+### Method 2 — an emulator on this computer (BlueStacks and similar)
 
-The phone and computer must be on the same Wi-Fi network. On Windows this is often more reliable than a cable because it needs no device driver.
+The shortest route of the four: the emulator runs on the same machine, so there is no cable, no driver, no pairing code and no “Allow USB debugging?” prompt on someone else's screen. The helper scans the local ADB ports itself and reads the BlueStacks configuration.
 
-1. Download `Rusifikator-Invokers-PC.zip` to the computer and extract it.
-2. Run **`Русификатор-Android.cmd`** on Windows or **`Русификатор-Android.command`** on Mac. On first launch on Mac, right-click it and choose Open.
-3. Enable Developer options on the phone. If the menu is hidden, open Settings → About phone → Software information, tap Build number seven times, and enter the device PIN.
-4. Open Settings → Developer options and enable **Wireless debugging**.
-5. Choose Wi-Fi in the helper. When it asks for an address and code, open Wireless debugging → Pair device with pairing code on the phone. The code is short-lived.
-6. In the game, select **Ukrainian**, wait for the download, and fully close the game.
-7. Choose Install translation. The phone may briefly show the builder application while the operation completes.
+With root enabled in the emulator the computer is not needed at all: drop the APK onto the emulator window and follow method 1. Root is switched on under Settings → Advanced → Root access, after which the emulator has to restart.
 
-### Method 3 — USB cable
+Without root:
 
-Steps 1–2 are the same, then:
+1. BlueStacks: Settings → Advanced → **Android Debug Bridge** — enable it and press Save. The same screen shows a line like `127.0.0.1:5555`.
+2. Extract `Rusifikator-Invokers-ANDROID.zip` and run **`Русификатор-Android.cmd`**.
+3. Choose **“an emulator on this computer”**, then Install translation.
 
-3. Enable Developer options and **USB debugging**.
-4. Connect a data-capable USB cable, not a charge-only cable.
-5. Accept “Allow USB debugging?” on the phone; optionally select Always allow from this computer.
-6. In the game, select **Ukrainian**, wait for the download, and fully close the game.
-7. Choose USB cable in the helper and install the translation.
+If the emulator is not found the helper asks for the port — take it from that same line. With several emulator windows open, leave one running: the helper takes the first that answers.
 
-On **Samsung**, first disable Auto Blocker in Security and privacy; it blocks USB access by default. On **Xiaomi**, also enable “USB debugging (Security settings).”
+Verified against a stub reproducing an emulator's responses; not tested against a live BlueStacks.
+
+### Methods 3 and 4 — a phone over Wi-Fi or USB
+
+1. Extract `Rusifikator-Invokers-ANDROID.zip` and run **`Русификатор-Android.cmd`** on Windows or **`Русификатор-Android.command`** on Mac (first launch: right-click → Open).
+2. Enable Developer options: Settings → About phone → Software information, tap Build number seven times.
+3. Under Developer options enable **Wireless debugging** or **USB debugging**.
+4. Pick the matching item in the helper and choose Install translation.
+
+Over Wi-Fi the phone and computer must share a network; the helper asks for the address and code from Wireless debugging → Pair device with pairing code, and the code is short-lived. On Windows this is more reliable than a cable because it needs no driver.
+
+Over USB you need a data-capable cable and “Allow USB debugging?” accepted on the phone. On **Samsung** disable **Auto Blocker** first; on **Xiaomi** also enable “USB debugging (Security settings).”
 
 ### Restore the original on Android
 
-In the same helper, option 2 restores its saved copy and option 3 removes the language data so the game downloads an official copy again.
+In the same helper, option 2 restores its saved copy and option 3 removes the language data so the game downloads an official copy again. The terminal equivalent is `scripts/android-patch.sh` with `status`, `apply`, `restore`, and `reset`.
 
-The terminal equivalent is `scripts/android-patch.sh` with `status`, `apply`, `restore`, and `reset`. See [docs/android-client.md](docs/android-client.md) for the technical rationale.
+See [docs/android-client.md](docs/android-client.md) for the technical rationale.
 
 ## Windows PC installation
 
@@ -90,37 +131,19 @@ The exact original Ukrainian file is stored below `%LOCALAPPDATA%\InvokersRussia
 
 Selecting any language makes the client download that language file again and removes the replacement. Keep the selected language on Ukrainian. If the localization disappears, reinstalling it usually fixes the issue.
 
-## Updates
+## Updates, and updating the game
 
-### Windows 3.1 signed data channel
+**Windows 3.1** checks one pinned GitHub data-channel URL. Translation catalogs and exact profiles for newer game builds are authenticated by a separate project ECDSA P-256 key; the patcher verifies the signature, the monotonic release sequence, expiry, size limits, download origin and SHA-256 of every artifact before use, so a compatible catalog or profile update needs no new EXE. Without a network it falls back to its embedded bootstrap or authenticated last-known-good data under documented expiry rules, and never treats an unsigned file or arbitrary URL as an update.
 
-The Windows application checks one pinned GitHub data-channel URL. Translation catalogs and exact profiles for newer game builds are authenticated by a separate project ECDSA P-256 key. The patcher verifies the signature, monotonically increasing release sequence, expiry, size limits, download origin, and SHA-256 of every artifact before using it. A normal compatible catalog/profile update therefore does not require a new EXE.
+If you still run Windows 3.0, replace it once with 3.1: 3.0 does not implement the data-channel protocol. The patcher reports its own staleness separately and points at [Releases](https://github.com/Braintfy/ruslocal-invokers/releases/latest). A new installer is also required when code must change — a different LOC1 schema, locale slot or cache path cannot be expressed by signed data alone.
 
-If you already installed the older Windows 3.0 patcher, replace it with 3.1 once: version 3.0 does not implement the signed data-channel protocol. After that migration, compatible catalog/profile updates do not require another EXE.
+The data signature is not Authenticode. An unsigned Windows EXE can still show `Unknown publisher` or a SmartScreen reputation warning until a publisher certificate is added.
 
-The patcher reports its own compatibility separately. If it is below the signed manifest's minimum version, new data is blocked and the UI directs the player to [Releases](https://github.com/Braintfy/ruslocal-invokers/releases/latest). A new installer is also required when code must change — for example, if the game changes LOC1 schema, locale slot, cache path, or another invariant that signed data alone cannot safely express.
+**macOS** fetches a newer translation and updateable driver by itself, accepting a download only when it matches the published checksum. Reinstalling the app and granting disk access again is normally unnecessary because that driver lives outside the bundle. A new DMG is needed only when the app says its fixed launcher changed; then Full Disk Access must be granted to the new build — remove the old row with `−`, press `+`, and add the app again.
 
-When the network is unavailable, the patcher can use its exact embedded bootstrap or authenticated last-known-good data under the documented expiry/state rules. It never treats an unsigned GitHub file or arbitrary URL as an update.
+Disable self-update with `touch ~/Library/Application\ Support/InvokersRu/no-self-update`
 
-The data signature is not Authenticode. Unsigned Windows EXEs can still show `Unknown publisher` or SmartScreen reputation warnings until a publisher certificate/signing process is added.
-
-### macOS
-
-The macOS app checks the repository and can fetch a newer translation and updateable patcher driver. Reinstalling the app and granting disk access again is normally unnecessary because the updateable driver lives outside the app bundle. A download is accepted only when it matches the published checksum.
-
-Disable self-update with:
-
-```sh
-touch ~/Library/Application\ Support/InvokersRu/no-self-update
-```
-
-A new DMG is needed only when the app explicitly says its fixed launcher changed. In that case, macOS Full Disk Access must be granted to the new build: remove the old row with `−`, use `+`, and add the app again.
-
-## After a game update
-
-A game update usually restores the official language file. On Windows, select Ukrainian again, wait for the download, fully quit the game and launcher, and choose Check. If an exact signed profile has been published, the patcher fetches the compatible data and offers Update localization. If no profile exists yet, all writes remain blocked; once the profile is published, checking again is enough and the patcher itself need not be reinstalled.
-
-On macOS and Android, reinstall the localization after a compatible game update. If the update changed source strings, some text may remain English until the overlay is adapted.
+**After the game itself updates**, the official language file usually comes back. Select Ukrainian again, wait for the download, fully close the game, and install the translation once more. On Windows, pressing Check is enough: if an exact signed profile has been published the patcher fetches the data and offers Update localization, and if not, writes stay blocked until it is — without reinstalling the patcher.
 
 ## Restore the original
 
@@ -160,7 +183,13 @@ The macOS log is at `~/Library/Application Support/InvokersRu/patcher.log`.
 
 ## For developers
 
-The cross-platform CLI targets .NET 10 and has no external runtime dependencies:
+The cross-platform CLI targets .NET 10 and has no external runtime dependencies.
+
+The SDK version is pinned in `global.json` (10.0.302, `rollForward: latestPatch`). A different build makes `dotnet` refuse to compile — install the pinned one alongside whatever you already have:
+
+```sh
+curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --version 10.0.302
+```
 
 ```sh
 dotnet build src/InvokersRu.Cli/InvokersRu.Cli.csproj -c Release
