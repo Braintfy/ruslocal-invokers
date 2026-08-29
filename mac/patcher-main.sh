@@ -5,12 +5,12 @@
 set -uo pipefail
 
 # Version of this script. It updates itself from the repository; the bundle around it stays frozen.
-APP_VERSION="2.7.0"
+APP_VERSION="2.8.0"
 # Version of the application bundle, which only changes when the launcher or the CLI has to change.
-BUNDLE_VERSION="2.3.0"
+BUNDLE_VERSION="3.0.0"
 # Oldest bundle that still works. Kept apart from BUNDLE_VERSION so rebuilding the image does not tell
 # everyone to download it again: a new bundle is only mandatory when the old one genuinely cannot run.
-MINIMUM_BUNDLE_VERSION="2.2.0"
+MINIMUM_BUNDLE_VERSION="3.0.0"
 
 REPO_RAW="https://raw.githubusercontent.com/Braintfy/ruslocal-invokers/main"
 OVERLAY_URL="${REPO_RAW}/translations/ru_RU.jsonl"
@@ -22,11 +22,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOURCES="${INVOKERSRU_RESOURCES:-$HERE}"
 CLI="${RESOURCES}/InvokersRu.Cli"
 
-SUPPORT_DIR="${HOME}/Library/Application Support/InvokersRu"
+SUPPORT_DIR="${INVOKERSRU_SUPPORT_DIR:-${HOME}/Library/Application Support/InvokersRu}"
 WORK_DIR="${SUPPORT_DIR}/work"
 BACKUP_DIR="${SUPPORT_DIR}/backups"
 RUNTIME_DIR="${SUPPORT_DIR}/runtime"
-STATE_FILE="${SUPPORT_DIR}/state.json"
+LEGACY_STATE_FILE="${SUPPORT_DIR}/state.json"
+STATE_DIR="${SUPPORT_DIR}/states"
+STATE_FILE="$LEGACY_STATE_FILE"
 OVERLAY_CACHE="${SUPPORT_DIR}/ru_RU.jsonl"
 LOG_FILE="${SUPPORT_DIR}/patcher.log"
 RESUME_MARKER="${SUPPORT_DIR}/.resuming"
@@ -35,7 +37,7 @@ TARGET_NAME="dl_uk_UA.bin"
 ENGLISH_NAME="dl_en_US.bin"
 TITLE="Русификатор Invokers"
 
-mkdir -p "$SUPPORT_DIR" "$WORK_DIR" "$BACKUP_DIR" "$RUNTIME_DIR"
+mkdir -p "$SUPPORT_DIR" "$WORK_DIR" "$BACKUP_DIR" "$RUNTIME_DIR" "$STATE_DIR"
 exec 2>>"$LOG_FILE"
 printf '\n===== %s | v%s =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$APP_VERSION" >>"$LOG_FILE"
 
@@ -91,22 +93,53 @@ json_field() {
 
 # ---------- environment ----------
 
-# Every place a build of the game is known to keep its localization cache. The iOS-on-Mac build hides
-# it in a container named after a random UUID, so the English file is what identifies the directory
-# rather than the path. Listing this keeps working without Full Disk Access; reading the files does not.
+# Every place a build of the game is known to keep its localization cache. The native desktop client
+# introduced in 0.60.1289 writes to Application Support, while the retired iOS-on-Mac client hides its
+# cache in a container named after a random UUID. Both may remain on one Mac, so merely taking the first
+# match is wrong: cache selection below ranks the newest client data and prefers the native location.
 cache_candidates() {
-    local containers="${HOME}/Library/Containers" container candidate
+    local containers="${HOME}/Library/Containers" container candidate explicit
+
+    explicit="${INVOKERSRU_CACHE_ROOT:-}"
+    if [ -n "$explicit" ] && [ -f "${explicit}/${ENGLISH_NAME}" ]; then
+        printf '%s\n' "$explicit"
+    fi
+
+    # Current standalone launcher (bundle id) and Unity's documented/fallback persistent-data paths.
+    for candidate in "${HOME}/Library/Application Support/hitzone.anima.spirit.guardians/i18n" \
+                     "${HOME}/Library/Application Support/unity.Hit.Zone.Invokers/i18n" \
+                     "${HOME}/Library/Application Support/Hit.Zone/Invokers/i18n" \
+                     "${HOME}/Library/Application Support/Hit_Zone/Invokers/i18n" \
+                     "${HOME}/Library/Application Support/com.Hit_Zone.Invokers/i18n"; do
+        [ -f "${candidate}/${ENGLISH_NAME}" ] && printf '%s\n' "$candidate"
+    done
+
     if [ -d "$containers" ]; then
         for container in "$containers"/*/; do
             candidate="${container}Data/Documents/i18n"
             [ -f "${candidate}/${ENGLISH_NAME}" ] && printf '%s\n' "$candidate"
         done
     fi
-    # Where a native Unity player would keep the same tuple, should one ever ship for macOS.
-    for candidate in "${HOME}/Library/Application Support/Hit_Zone/Invokers/i18n" \
-                     "${HOME}/Library/Application Support/com.Hit_Zone.Invokers/i18n"; do
-        [ -f "${candidate}/${ENGLISH_NAME}" ] && printf '%s\n' "$candidate"
-    done
+}
+
+cache_version() {
+    local stamp="$1/${ENGLISH_NAME}.ver"
+    [ -f "$stamp" ] && tr -d '\r\n' < "$stamp" || printf '0'
+}
+
+cache_priority() {
+    case "$1" in
+        "${HOME}/Library/Application Support/hitzone.anima.spirit.guardians/i18n") printf '40' ;;
+        "${HOME}/Library/Application Support/"*) printf '30' ;;
+        "${HOME}/Library/Containers/"*) printf '20' ;;
+        *) printf '10' ;;
+    esac
+}
+
+cache_modified() {
+    stat -f '%m' "$1/${ENGLISH_NAME}.ver" 2>/dev/null \
+        || stat -f '%m' "$1/${ENGLISH_NAME}" 2>/dev/null \
+        || printf '0'
 }
 
 # The list is collected once and counted in memory. Piping into head instead would close the pipe
@@ -119,14 +152,64 @@ cache_candidate_count() {
 }
 
 find_cache_root() {
-    local list
-    list="$(cache_candidates)"
+    local list candidate version priority modified
+    local best="" best_version="0" best_priority="0" best_modified="0"
+    if [ -n "${INVOKERSRU_CACHE_ROOT:-}" ] \
+        && [ -f "${INVOKERSRU_CACHE_ROOT}/${ENGLISH_NAME}" ]; then
+        printf '%s\n' "$INVOKERSRU_CACHE_ROOT"
+        return 0
+    fi
+    list="$(cache_candidates | awk '!seen[$0]++')"
     [ -n "$list" ] || return 1
-    [ "$(printf '%s\n' "$list" | wc -l | tr -d ' ')" -eq 1 ] || return 1
-    printf '%s\n' "$list"
+    while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
+        version="$(cache_version "$candidate")"
+        priority="$(cache_priority "$candidate")"
+        modified="$(cache_modified "$candidate")"
+        if [ -z "$best" ] \
+            || version_older "$best_version" "$version" \
+            || { ! version_older "$version" "$best_version" \
+                 && ! version_older "$best_version" "$version" \
+                 && { [ "$priority" -gt "$best_priority" ] \
+                      || { [ "$priority" -eq "$best_priority" ] && [ "$modified" -gt "$best_modified" ]; }; }; }; then
+            best="$candidate"
+            best_version="$version"
+            best_priority="$priority"
+            best_modified="$modified"
+        fi
+    done <<<"$list"
+    [ -n "$best" ] || return 1
+    printf '%s\n' "$best"
 }
 
-game_running() { pgrep -f "Invokers.app/Invokers" >/dev/null 2>&1; }
+select_state_file() {
+    local cache_root="$1" key legacy_root
+    key="$(printf '%s' "$cache_root" | shasum -a 256 | awk '{print toupper($1)}')"
+    STATE_FILE="${STATE_DIR}/${key}.json"
+    if [ ! -f "$STATE_FILE" ] && [ -f "$LEGACY_STATE_FILE" ]; then
+        legacy_root="$(json_field "$LEGACY_STATE_FILE" cache_root || true)"
+        if [ "$legacy_root" = "$cache_root" ]; then
+            cp -f "$LEGACY_STATE_FILE" "${STATE_FILE}.tmp" 2>/dev/null \
+                && mv -f "${STATE_FILE}.tmp" "$STATE_FILE"
+        fi
+    fi
+}
+
+game_running() {
+    pgrep -f 'Invokers\.app/(Contents/MacOS/)?Invokers([[:space:]]|$)' >/dev/null 2>&1
+}
+
+preferred_language() {
+    # Unity stores the selected LOC1 locale id here. Read only this scalar: the same plist also holds
+    # account credentials and must never be copied into diagnostics or logs.
+    defaults read hitzone.anima.spirit.guardians 'i18n.Language' 2>/dev/null || true
+}
+
+activate_ukrainian_language() {
+    # The standalone launcher passes its own locale to Unity. Persist slot 8 as well so a direct launch
+    # from this app and the next game session both read the file that was just installed.
+    defaults write hitzone.anima.spirit.guardians 'i18n.Language' -int 8 2>>"$LOG_FILE"
+}
 
 # Reports the hardware, not the process: under Rosetta uname would answer x86_64 on an Apple Silicon
 # machine, and the whole diagnosis below hangs on telling those two apart correctly.
@@ -138,29 +221,38 @@ cpu_name() { sysctl -n machdep.cpu.brand_string 2>/dev/null || uname -m; }
 # the fallback for a machine with indexing switched off.
 game_bundle() {
     local hit
+    for hit in "${HOME}/Library/Application Support/zone.hitzone.invokers.launcher/game/Invokers.app" \
+               "/Applications/Invokers Titan Legacy.app"; do
+        [ -d "$hit" ] && { printf '%s\n' "$hit"; return 0; }
+    done
     hit="$(mdfind "kMDItemCFBundleIdentifier == 'hitzone.anima.spirit.guardians'" 2>/dev/null | head -1)"
     if [ -n "$hit" ] && [ -d "$hit" ]; then printf '%s\n' "$hit"; return 0; fi
     [ -d "/Applications/Invokers.app" ] && { printf '%s\n' "/Applications/Invokers.app"; return 0; }
     return 1
 }
 
-# The bundled file handler is built for Apple Silicon, because the iOS-on-Mac game it edits cannot be
-# installed anywhere else. Checking it here turns "Bad CPU type in executable" into a sentence that
-# tells the user what actually happened.
+launch_game() {
+    local native_game="${HOME}/Library/Application Support/zone.hitzone.invokers.launcher/game/Invokers.app"
+    if [ -d "$native_game" ]; then
+        activate_ukrainian_language || true
+        open -n "$native_game" --args -language uk_UA >/dev/null 2>&1 && return 0
+    fi
+    open -a "Invokers Titan Legacy" >/dev/null 2>&1 && return 0
+    open -b "hitzone.anima.spirit.guardians" >/dev/null 2>&1 && return 0
+    open -a "Invokers" >/dev/null 2>&1
+}
+
+# The published bundle contains both Mac architectures. Checking the handler here turns a damaged or
+# incomplete image into a useful message instead of leaking a shell error into the UI.
 require_cli() {
     [ -f "$CLI" ] || die "Внутри приложения нет файла обработчика (${CLI}).
 
 Образ повреждён — скачайте его заново со страницы проекта."
     chmod +x "$CLI" 2>/dev/null || true
     "$CLI" help >/dev/null 2>&1 && return 0
-    if apple_silicon; then
-        die "Встроенный обработчик файлов игры не запускается.
+    die "Встроенный обработчик файлов игры не запускается на этом Mac.
 
-Скачайте образ приложения заново со страницы проекта."
-    fi
-    die "Встроенный обработчик файлов игры собран под Apple Silicon и на процессоре Intel не работает.
-
-Процессор этого компьютера: $(cpu_name)."
+Скачайте образ приложения заново со страницы проекта. Процессор: $(cpu_name)."
 }
 
 # One message per real cause. The old dialog blamed Full Disk Access for every empty result, which is
@@ -177,20 +269,10 @@ diagnose_missing_game() {
 Русификатор не станет угадывать, какую из них менять, чтобы не испортить чужие файлы. Напишите об этом в issue проекта — путь нужно будет указать вручную."
     fi
 
-    if [ -z "$bundle" ] && ! apple_silicon; then
-        die "На этом Mac игру запустить нельзя.
-
-Invokers для Mac — это приложение для iPhone и iPad, а такие приложения App Store ставит только на компьютеры Apple Silicon (M1 и новее). Здесь процессор Intel: $(cpu_name).
-
-Русификатору нечего менять: папки с данными игры на этом компьютере нет и не появится.
-
-Если вы играете на телефоне Android — подключите его кабелем, включите отладку по USB и запустите русификатор снова: перевод можно поставить на телефон."
-    fi
-
     if [ -z "$bundle" ]; then
         die "Игра Invokers на этом Mac не найдена.
 
-Установите её из App Store — на Apple Silicon она лежит в разделе «Приложения для iPhone и iPad» — и запустите хотя бы один раз, чтобы игра создала свою папку с данными.
+Установите официальный клиент «Invokers Titan Legacy» с сайта invokers.com, запустите лаунчер, скачайте игру и откройте её хотя бы один раз, чтобы она создала папку с данными.
 
 Затем запустите русификатор снова."
     fi
@@ -724,6 +806,10 @@ do_install() {
 }
 JSON
 
+    if ! activate_ukrainian_language; then
+        printf 'warning: could not persist Ukrainian language slot\n' >>"$LOG_FILE"
+    fi
+
     local next
     next="$(ask "Готово. $(composition_note "${WORK_DIR}/report.json")
 
@@ -739,9 +825,7 @@ JSON
 
 Запустить игру сейчас?" "Закрыть" "Запустить игру")"
     if [ "$next" = "Запустить игру" ]; then
-        open -b "hitzone.anima.spirit.guardians" >/dev/null 2>&1 \
-            || open -a "Invokers" >/dev/null 2>&1 \
-            || say_info "Не удалось запустить игру автоматически — откройте её вручную."
+        launch_game || say_info "Не удалось запустить игру автоматически — откройте её вручную."
     fi
     return 0
 }
@@ -791,7 +875,159 @@ describe_state() {
     printf '%s' "$line"
 }
 
+# ---------- native window bridge ----------
+
+gui_emit() {
+    local key="$1" value="$2"
+    value="$(printf '%s' "$value" | tr '\r\n' '  ')"
+    printf '%s=%s\n' "$key" "$value"
+}
+
+gui_status() {
+    local cache_root target version client state title detail current original patched running="no"
+    local language language_label can_install="no"
+    cache_root="$(find_cache_root || true)"
+    game_running && running="yes"
+    language="$(preferred_language)"
+    case "$language" in
+        8) language_label="украинский" ;;
+        "") language_label="не определён" ;;
+        *) language_label="выбран другой (${language})" ;;
+    esac
+
+    if [ -z "$cache_root" ]; then
+        gui_emit STATE "missing"
+        gui_emit TITLE "Данные игры не найдены"
+        gui_emit DETAIL "Установите игру через официальный Mac-лаунчер, запустите её и загрузите украинский язык."
+        gui_emit CLIENT "Mac"
+        gui_emit VERSION "—"
+        gui_emit CACHE "—"
+        gui_emit LANGUAGE "$language_label"
+        gui_emit RUNNING "$running"
+        gui_emit PATCHER "$APP_VERSION"
+        gui_emit CAN_INSTALL "no"
+        gui_emit CAN_RESTORE "no"
+        return 0
+    fi
+
+    select_state_file "$cache_root"
+    target="${cache_root}/${TARGET_NAME}"
+    version="$(cache_version "$cache_root")"
+    case "$cache_root" in
+        "${HOME}/Library/Application Support/hitzone.anima.spirit.guardians/i18n") client="Нативный Mac-клиент" ;;
+        "${HOME}/Library/Containers/"*) client="Старый iOS-клиент" ;;
+        *) client="Unity-клиент" ;;
+    esac
+
+    if [ ! -f "$target" ]; then
+        state="needs-language"
+        title="Нужно загрузить украинский язык"
+        detail="Откройте игру, выберите украинский язык, дождитесь загрузки и полностью закройте игру."
+    else
+        current="$(sha256_of "$target")"
+        original=""; patched=""
+        [ -f "$STATE_FILE" ] && original="$(json_field "$STATE_FILE" original_sha256 || true)"
+        [ -f "$STATE_FILE" ] && patched="$(json_field "$STATE_FILE" patched_sha256 || true)"
+        if [ -n "$patched" ] && [ "$current" = "$patched" ]; then
+            state="russian"
+            title="Русский перевод установлен"
+            detail="Файл проверен и совпадает с установленной сборкой перевода."
+        elif [ -n "$original" ] && [ "$current" = "$original" ]; then
+            state="original"
+            title="Готово к установке"
+            detail="Сейчас используется оригинальный украинский файл. Можно установить русский перевод."
+        elif [ -f "$STATE_FILE" ]; then
+            state="changed"
+            title="Языковой файл обновился"
+            detail="Игра перезаписала локализацию после обновления или смены языка. Установите перевод заново."
+        else
+            state="ready"
+            title="Готово к установке"
+            detail="Найден актуальный украинский файл. Перед изменением будет создана проверенная резервная копия."
+        fi
+    fi
+
+    if [ "$running" = "yes" ]; then
+        detail="${detail} Игра сейчас запущена — перед установкой её нужно закрыть."
+    fi
+    if [ -n "$language" ] && [ "$language" != "8" ]; then
+        state="needs-language"
+        title="В игре выбран не украинский язык"
+        detail="Откройте игру, выберите украинский язык, дождитесь загрузки и полностью закройте игру. Иначе русский слот не будет активен."
+    fi
+    if [ -f "$target" ] && { [ -z "$language" ] || [ "$language" = "8" ]; }; then
+        can_install="yes"
+    fi
+    gui_emit STATE "$state"
+    gui_emit TITLE "$title"
+    gui_emit DETAIL "$detail"
+    gui_emit CLIENT "$client"
+    gui_emit VERSION "$version"
+    gui_emit CACHE "$cache_root"
+    gui_emit LANGUAGE "$language_label"
+    gui_emit RUNNING "$running"
+    gui_emit PATCHER "$APP_VERSION"
+    gui_emit CAN_INSTALL "$can_install"
+    [ -f "$STATE_FILE" ] && gui_emit CAN_RESTORE "yes" || gui_emit CAN_RESTORE "no"
+}
+
+wait_until_game_closed() {
+    local retry
+    while game_running; do
+        retry="$(ask "Игра сейчас запущена.
+
+Полностью закройте Invokers (Cmd+Q), иначе изменения не сохранятся." "Отмена" "Я закрыл, продолжить")"
+        [ "$retry" = "Я закрыл, продолжить" ] || return 1
+    done
+}
+
+run_gui_mac_action() {
+    local action="$1" cache_root
+    cache_root="$(find_cache_root || true)"
+    if [ -z "$cache_root" ]; then
+        diagnose_missing_game
+        return 1
+    fi
+    select_state_file "$cache_root"
+    printf 'cache root: %s\n' "$cache_root" >>"$LOG_FILE"
+    require_disk_access "${cache_root}/${ENGLISH_NAME}"
+    wait_until_game_closed || return 0
+    require_cli
+    case "$action" in
+        install) do_install "$cache_root" ;;
+        restore) do_restore "$cache_root" ;;
+    esac
+}
+
+run_gui_android_action() {
+    local serial action
+    if ! find_adb; then
+        offer_adb_install || return 0
+    fi
+    serial="$(android_device)"
+    if [ -z "$serial" ]; then
+        say_error "Планшет или телефон Android не найден.
+
+Подключите устройство, включите отладку по USB и подтвердите доступ на его экране."
+        return 1
+    fi
+    android_has_game "$serial" || { say_error "На подключённом устройстве не установлена Invokers: Titan Legacy."; return 1; }
+    require_cli
+    action="$(ask "Android-устройство: ${serial}
+
+Что сделать?" "Отмена" "Восстановить" "Установить перевод")"
+    case "$action" in
+        "Установить перевод") android_install "$serial" ;;
+        "Восстановить") android_restore "$serial" ;;
+    esac
+}
+
 # ---------- main ----------
+
+# Tests source this file to exercise cache selection without opening any dialogs.
+if [ "${INVOKERSRU_LIBRARY_MODE:-0}" = "1" ]; then
+    return 0 2>/dev/null || exit 0
+fi
 
 # A relaunch triggered by the Full Disk Access prompt should land the user back where they were,
 # not at the beginning of the same explanation they just read.
@@ -803,90 +1039,63 @@ if [ -f "$RESUME_MARKER" ]; then
     rm -f "$RESUME_MARKER"
 fi
 
+COMMAND="${1:-interactive}"
+if [ "$COMMAND" = "--gui-status" ]; then
+    gui_status
+    exit 0
+fi
+
 self_update "$@"
+
+case "$COMMAND" in
+    --gui-install)
+        check_app_update
+        run_gui_mac_action install
+        exit $?
+        ;;
+    --gui-restore)
+        check_app_update
+        run_gui_mac_action restore
+        exit $?
+        ;;
+esac
 
 if [ "$RESUMING" = false ]; then
     choice="$(ask "Неофициальный любительский русификатор Invokers: Titan Legacy.
 
 Приложение не связано с HitZone Inc. Оно изменяет только один файл кэша локализации внутри папки данных игры и не трогает саму игру, её подпись и защиту. Оригинал сохраняется, откат доступен в любой момент.
 
-Переведено 41 037 строк из 41 292 — весь интерфейс. Перевод машинный и не вычитан человеком. Используйте на свой риск." "Выход" "Продолжить")"
+Для текущего клиента 0.60.1289 применяется 40 997 строк из 41 292; строки, не прошедшие строгую проверку, остаются оригинальными. Перевод любительский. Используйте на свой риск." "Выход" "Продолжить")"
     [ "$choice" = "Продолжить" ] || exit 0
 fi
 
 check_app_update
 
-# The phone is looked for before the Mac's own data, because a computer that cannot run the game itself
-# can still carry the translation onto a connected Android device. Failing on the missing Mac data
-# first would hide that from exactly the users who have no other route.
+# Android and iOS are intentionally not exposed in the supported 3.0 release.
+# Their experimental transport helpers stay in the source tree for future work.
 ANDROID_SERIAL=""
-if find_adb; then
-    ANDROID_SERIAL="$(android_device)"
-    if [ -n "$ANDROID_SERIAL" ] && ! android_has_game "$ANDROID_SERIAL"; then ANDROID_SERIAL=""; fi
-fi
 
 CACHE_ROOT="$(find_cache_root || true)"
 PLATFORM="mac"
 
 if [ -z "$CACHE_ROOT" ]; then
-    if [ -n "$ANDROID_SERIAL" ]; then
-        answer="$(ask "Данные игры на этом Mac не найдены, но к компьютеру подключён телефон Android с установленной игрой.
-
-Установить перевод на телефон?" "Почему не найдено" "На телефон")"
-        if [ "$answer" = "На телефон" ]; then
-            PLATFORM="android"
-        else
-            diagnose_missing_game
-            CACHE_ROOT="$(find_cache_root || true)"
-            [ -n "$CACHE_ROOT" ] || exit 0
-        fi
-    else
-        diagnose_missing_game
-        CACHE_ROOT="$(find_cache_root || true)"
-        [ -n "$CACHE_ROOT" ] || die "Данные игры так и не найдены.
+    diagnose_missing_game
+    CACHE_ROOT="$(find_cache_root || true)"
+    [ -n "$CACHE_ROOT" ] || die "Данные игры так и не найдены.
 
 Запустите игру, дождитесь главного меню и попробуйте снова."
-    fi
 fi
 
 if [ "$PLATFORM" = "mac" ]; then
+    select_state_file "$CACHE_ROOT"
     printf 'cache root: %s\n' "$CACHE_ROOT" >>"$LOG_FILE"
     require_disk_access "${CACHE_ROOT}/${ENGLISH_NAME}"
 
-    while game_running; do
-        retry="$(ask "Игра сейчас запущена.
+    wait_until_game_closed || exit 0
 
-Полностью закройте Invokers (Cmd+Q), иначе изменения не сохранятся." "Выход" "Я закрыл, продолжить")"
-        [ "$retry" = "Я закрыл, продолжить" ] || exit 0
-    done
-
-    # A macOS dialog takes at most three buttons, so the platform is a separate question rather than a
-    # fourth button on the action menu.
-    if [ -n "$ANDROID_SERIAL" ]; then
-        where="$(ask "К компьютеру подключён телефон Android с установленной игрой.
-
-Куда установить перевод?" "Отмена" "На телефон" "На этот Mac")"
-        case "$where" in
-            "На телефон") PLATFORM="android" ;;
-            "На этот Mac") PLATFORM="mac" ;;
-            *) exit 0 ;;
-        esac
-    fi
 fi
 
 require_cli
-
-if [ "$PLATFORM" = "android" ]; then
-    action="$(ask "Телефон: ${ANDROID_SERIAL}
-
-Что сделать?" "Отмена" "Восстановить на телефоне" "Установить на телефон")"
-    case "$action" in
-        "Установить на телефон") android_install "$ANDROID_SERIAL" ;;
-        "Восстановить на телефоне") android_restore "$ANDROID_SERIAL" ;;
-        *) exit 0 ;;
-    esac
-    exit 0
-fi
 
 action="$(ask "$(describe_state "$CACHE_ROOT")
 

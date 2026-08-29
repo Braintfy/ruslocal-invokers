@@ -12,9 +12,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${1:-${REPO_ROOT}/work/mac-app}"
 APP_NAME="Русификатор Invokers"
 APP_DIR="${OUT_DIR}/${APP_NAME}.app"
-# Both slices ship. Apple Silicon is where the iOS-on-Mac game lives, but an Intel Mac still has real
-# work to do: it explains why the game cannot be there, and it can build and carry the translation to
-# a connected Android phone. A single-slice bundle just refuses to launch, which explains nothing.
+# Both slices ship so the control panel itself remains universal. Game availability is determined by
+# the official native launcher and its installed client, not by the localizer architecture.
 RIDS="osx-arm64 osx-x64"
 MIN_MACOS="12.0"
 
@@ -85,11 +84,12 @@ lipo -create $SLICES -output "${APP_DIR}/Contents/Resources/InvokersRu.Cli"
 chmod 755 "${APP_DIR}/Contents/Resources/InvokersRu.Cli"
 install -m 755 "${REPO_ROOT}/mac/patcher-main.sh" "${APP_DIR}/Contents/Resources/patcher.sh"
 
-# The bundle's main executable must be a Mach-O binary. A shell script here cannot hold a Full Disk
-# Access grant: the running process would be /bin/bash, so the switch in System Settings appears
-# enabled while every read of the game container still fails.
-cc -O2 -Wall -Wextra -arch arm64 -arch x86_64 -mmacosx-version-min="${MIN_MACOS}" \
-   -o "${APP_DIR}/Contents/MacOS/${APP_NAME}" "${REPO_ROOT}/mac/launcher.c"
+# The bundle's main executable is a small native Cocoa control panel. Keeping the shell worker as its
+# child preserves Full Disk Access inheritance while giving the user a persistent, verifiable status
+# screen instead of a chain of unrelated dialogs.
+cc -O2 -Wall -Wextra -fobjc-arc -framework Cocoa \
+   -arch arm64 -arch x86_64 -mmacosx-version-min="${MIN_MACOS}" \
+   -o "${APP_DIR}/Contents/MacOS/${APP_NAME}" "${REPO_ROOT}/mac/launcher.m"
 chmod 755 "${APP_DIR}/Contents/MacOS/${APP_NAME}"
 
 # A missing slice is the failure that reaches users as an unexplained prohibitory icon in Finder, so

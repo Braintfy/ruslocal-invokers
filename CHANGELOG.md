@@ -1,5 +1,15 @@
 # Changelog
 
+## macOS 3.0.0 — 2026-08-29
+
+- restored localization support for the native macOS client `0.60.1289`. The old patcher reported success while writing the retired iOS-on-Mac cache (`0.60.1247`); cache discovery now ranks every detected stamp and prefers the current native Application Support location on ties;
+- added a native Cocoa control panel with explicit client, game version, cache path, running state, install, verified restore, refresh, game launch, and log actions;
+- detected the standalone launcher's second failure mode: it started Unity with `-language en_US` and persisted locale id `1`, leaving a correct Ukrainian-slot patch inactive. Installation now persists id `8`, and the control panel launches the native game with `-language uk_UA`;
+- isolated state and content-addressed backups per client cache, migrated matching legacy state, fixed native-process detection, and added regression coverage for cache selection, explicit override, and state isolation;
+- verified a real composition against the current LOC1 schema-4 files: 40,997 Russian rows, 41 English fallbacks, 254 base fallbacks, 40 stale hints, and one missing match out of 41,292 entries;
+- narrowed the supported release scope to Windows PC and macOS. Android and iOS remain future work, are no longer exposed in the Mac interface, and are documented only as research/development material;
+- replaced the oversized, outdated README with concise Windows and native-macOS instructions and documented the mandatory Ukrainian language slot.
+
 ## Windows 3.1.2 Preview — 2026-08-21
 
 - Added a folder picker for non-standard `i18n` locations and remembered the selected path per Windows user.
