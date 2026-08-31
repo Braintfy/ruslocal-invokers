@@ -1124,6 +1124,20 @@ namespace InvokersRu.SmokeTests
                     "Launcher repair of only the official Ukrainian cache was not safely recognized for same-revision reapply.");
                 File.WriteAllBytes(targetPath, patchedA);
 
+                // A content-only EN/UK update can keep the client version stamp unchanged.
+                // The old state must be authenticated using immutable snapshots, not live EN.
+                File.WriteAllBytes(englishPath, englishB);
+                File.WriteAllBytes(targetPath, baseB);
+                RuntimeUpdateResolution contentOnlyUpdate = RuntimeUpdateResolver.Resolve(
+                    cacheRoot, statePath, builtA.Profile, catalogPath, coordinator: null);
+                Require(contentOnlyUpdate.Inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate
+                    && contentOnlyUpdate.Profile.GameVersion == builtA.Profile.GameVersion
+                    && contentOnlyUpdate.Profile.EnglishReleaseRevision == 270
+                    && contentOnlyUpdate.Profile.ExpectedAppliedTranslations == 2
+                    && contentOnlyUpdate.Profile.ExpectedEnglishFallbacks == 1,
+                    "A content-only EN/UK update with an unchanged client stamp stranded the old authenticated state.");
+                File.WriteAllBytes(targetPath, patchedA);
+
                 File.WriteAllBytes(englishPath, englishB);
                 File.WriteAllBytes(stampPath, stampB);
                 RuntimeUpdateResolution staleTarget = RuntimeUpdateResolver.Resolve(

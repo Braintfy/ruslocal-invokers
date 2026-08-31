@@ -106,7 +106,9 @@ namespace InvokersRu.Core.Updates
                 throw new InvalidDataException("Artifact response or redirect host is not trusted.");
             }
 
-            RejectEncodedPathSeparators(value);
+            // GitHub CDN query parameters legitimately contain encoded slashes (MIME
+            // types and signatures). Only the path participates in path confinement.
+            RejectEncodedPathSeparators(uri.GetLeftPart(UriPartial.Path));
             return uri;
         }
 

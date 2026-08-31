@@ -118,6 +118,17 @@ pwsh -NoProfile -File .\scripts\update-channel\Test-UpdateReleaseTool.ps1
 
 ## 5. Self-contained payload с графическим патчером
 
+Для 3.1.3 сохраните старый встроенный каталог в паре с его профилем: он нужен для проверки установок, сделанных версией 3.1.2. Актуальный каталог из `translations/` поставляется отдельно через подписанный канал. Извлеките публичный исходный каталог из первоначального коммита, а не из готового EXE:
+
+```powershell
+New-Item -ItemType Directory -Force .\work | Out-Null
+git archive --format=zip --output=work/bootstrap-3.1.2.zip cf144f0c5840e5a24d0717eaec7f952ae7a8fbcc translations/ru_RU.jsonl
+Expand-Archive .\work\bootstrap-3.1.2.zip .\work\bootstrap-3.1.2
+Get-FileHash .\work\bootstrap-3.1.2\translations\ru_RU.jsonl -Algorithm SHA256
+```
+
+Ожидаемый SHA-256: `78D129B19F4619754BEE92AB876DA24FECC73807032D4A13B27CEAA5EE9619D1`. Не подставляйте свежий каталог в старый профиль и не меняйте закреплённые хэши. После сборки команда `update-refresh --json` загрузит и проверит актуальный подписанный каталог, не изменяя игру.
+
 Выберите уникальную локальную версию и новый выходной каталог. Скрипт специально отказывается перезаписывать существующий результат.
 
 ```powershell
@@ -128,7 +139,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\publish-windows-preview.ps1 `
   -OutputDirectory $payload `
   -AppVersion $version `
-  -TranslationCatalog '.\translations\ru_RU.jsonl' `
+  -TranslationCatalog '.\work\bootstrap-3.1.2\translations\ru_RU.jsonl' `
   -RuntimeCacheProfile '.\config\runtime-cache-profile.0.60.1247.json' `
   -SignedUpdateChannelConfig '.\config\signed-update-channel.v1.json'
 ```
@@ -139,7 +150,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 pwsh -NoProfile -File .\scripts\publish-windows-preview.ps1 `
   -OutputDirectory $payload `
   -AppVersion $version `
-  -TranslationCatalog '.\translations\ru_RU.jsonl' `
+  -TranslationCatalog '.\work\bootstrap-3.1.2\translations\ru_RU.jsonl' `
   -RuntimeCacheProfile '.\config\runtime-cache-profile.0.60.1247.json' `
   -SignedUpdateChannelConfig '.\config\signed-update-channel.v1.json'
 ```

@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
-    [string]$OutputDirectory = 'work\publish\windows-3.1.2-preview',
+    [string]$OutputDirectory = 'work\publish\windows-3.1.3-preview',
 
-    [string]$AppVersion = '3.1.2-preview',
+    [string]$AppVersion = '3.1.3-preview',
 
     [string]$TranslationCatalog = 'translations\ru_RU.jsonl',
 

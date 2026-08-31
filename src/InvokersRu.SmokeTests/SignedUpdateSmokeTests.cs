@@ -149,6 +149,17 @@ namespace InvokersRu.SmokeTests
                 "../translations-2026.08.20.1"));
             SignedUpdateUrlPolicy.ValidateArtifactResponseUrl(
                 "https://release-assets.githubusercontent.com/github-production-release-asset/123?token=x");
+            SignedUpdateUrlPolicy.ValidateArtifactResponseUrl(
+                "https://release-assets.githubusercontent.com/github-production-release-asset/123?sig=a%2Fb%5Cc&response-content-type=application%2Foctet-stream");
+            SignedUpdateUrlPolicy.ValidateArtifactResponseUrl(
+                "https://objects.githubusercontent.com/asset?response-content-type=application%2foctet-stream");
+            foreach (string encodedSeparator in new[] { "%2f", "%2F", "%5c", "%5C" })
+            {
+                Expect<InvalidDataException>(() => SignedUpdateUrlPolicy.ValidateArtifactResponseUrl(
+                    $"https://release-assets.githubusercontent.com/asset{encodedSeparator}123?token=ok"));
+            }
+            Expect<InvalidDataException>(() => SignedUpdateUrlPolicy.ValidateArtifactResponseUrl(
+                "https://attacker.example/asset?response-content-type=application%2Foctet-stream"));
             Pass();
 
             SignedEnvelopeData oversized = Sign(signingKey, CreateManifest(
@@ -352,7 +363,7 @@ namespace InvokersRu.SmokeTests
             }
 
             const string envelopeUrl = "https://github.com/Braintfy/ruslocal-invokers/releases/latest/download/update-envelope.json";
-            const string cdnUrl = "https://release-assets.githubusercontent.com/github-production-release-asset/123?token=x";
+            const string cdnUrl = "https://release-assets.githubusercontent.com/github-production-release-asset/123?sig=a%2Fb&response-content-type=application%2Foctet-stream";
             byte[] envelopeBytes = Encoding.UTF8.GetBytes("{\"signed\":true}");
             var envelopeHandler = new QueueHttpMessageHandler(
                 _ => Redirect(HttpStatusCode.Found, cdnUrl),

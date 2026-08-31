@@ -1,5 +1,13 @@
 # Changelog
 
+## Windows 3.1.3 Preview / translation data 5 — 2026-08-31
+
+- Fixed signed-update downloads through GitHub's CDN: encoded slashes in query parameters (MIME types/signatures) are allowed, while encoded path separators, untrusted hosts, and signature/hash failures remain blocked.
+- Added regression coverage for CDN redirects and official EN/UK updates without a client-version change; retained fail-closed handling for inconsistent or tampered state.
+- Refreshed only 436 Ukrainian hint hashes against the user's official EN 68 / UK 81 files and corrected three residual English skill strings. Composition applies 41,037 Russian rows, with one English fallback and 254 base fallbacks; zero validation errors. Character names remain Latin according to the project glossary. EN 71 / UK 82 was not available for certification.
+- Retained the 3.1.2 bootstrap catalog and its matching runtime profile in the Windows installer to authenticate existing installations and backups. Current translation data is delivered separately through the signed channel.
+- 3.1.2 does not self-update its executable and its downloader needs this fix. A one-time installer upgrade is necessary; the previous direct download URL aliases the genuine 3.1.3 installer without moving the old source tag. macOS assets are unchanged.
+
 ## macOS 3.0.0 — 2026-08-29
 
 - restored localization support for the native macOS client `0.60.1289`. The old patcher reported success while writing the retired iOS-on-Mac cache (`0.60.1247`); cache discovery now ranks every detected stamp and prefers the current native Application Support location on ties;
