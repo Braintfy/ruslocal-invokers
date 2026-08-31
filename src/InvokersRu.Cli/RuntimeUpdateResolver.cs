@@ -480,24 +480,8 @@ namespace InvokersRu.Cli
             {
                 // Inspect is expected to be inconsistent against the new output pins until the old exact
                 // patch is restored. The write command performs restore then a fresh exact apply.
-                remoteInspection = new RuntimeCacheInspection
-                {
-                    Status = InstallationStatus.PatchedByThisTool,
-                    Message = "A newer signed translation artifact is available for this exact game build.",
-                    CacheRoot = installedInspection!.CacheRoot,
-                    EnglishPath = installedInspection.EnglishPath,
-                    TargetPath = installedInspection.TargetPath,
-                    StampPath = installedInspection.StampPath,
-                    EnglishSha256 = installedInspection.EnglishSha256,
-                    BaseSha256 = installedInspection.BaseSha256,
-                    StampSha256 = installedInspection.StampSha256,
-                    StampValue = installedInspection.StampValue,
-                    EnglishContentVersion = installedInspection.EnglishContentVersion,
-                    BaseContentVersion = installedInspection.BaseContentVersion,
-                    Profile = remoteProfile,
-                    State = installedInspection.State,
-                    Journal = installedInspection.Journal
-                };
+                remoteInspection = CloneInspectionWithProfile(installedInspection!, remoteProfile,
+                    "A newer signed translation artifact is available for this exact game build.");
             }
 
             return new RuntimeUpdateResolution
@@ -1275,12 +1259,13 @@ namespace InvokersRu.Cli
 
         private static RuntimeCacheInspection CloneInspectionWithProfile(
             RuntimeCacheInspection source,
-            RuntimeCacheCompatibility profile)
+            RuntimeCacheCompatibility profile,
+            string message = "A newer authenticated catalog has identical materialized bytes; only exact state metadata needs rebinding.")
         {
             return new RuntimeCacheInspection
             {
                 Status = source.Status,
-                Message = "A newer authenticated catalog has identical materialized bytes; only exact state metadata needs rebinding.",
+                Message = message,
                 CacheRoot = source.CacheRoot,
                 EnglishPath = source.EnglishPath,
                 TargetPath = source.TargetPath,
@@ -1291,6 +1276,18 @@ namespace InvokersRu.Cli
                 StampValue = source.StampValue,
                 EnglishContentVersion = source.EnglishContentVersion,
                 BaseContentVersion = source.BaseContentVersion,
+                EnglishFormatVersion = source.EnglishFormatVersion,
+                BaseFormatVersion = source.BaseFormatVersion,
+                EnglishContentGuid = source.EnglishContentGuid,
+                BaseContentGuid = source.BaseContentGuid,
+                EnglishLocaleId = source.EnglishLocaleId,
+                EnglishLocaleRevision = source.EnglishLocaleRevision,
+                EnglishReleaseRevision = source.EnglishReleaseRevision,
+                BaseLocaleId = source.BaseLocaleId,
+                BaseLocaleRevision = source.BaseLocaleRevision,
+                BaseReleaseRevision = source.BaseReleaseRevision,
+                EntryCount = source.EntryCount,
+                OrderedKeysetSha256 = source.OrderedKeysetSha256,
                 Profile = profile,
                 State = source.State,
                 Journal = source.Journal

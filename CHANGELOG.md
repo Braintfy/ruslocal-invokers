@@ -1,5 +1,11 @@
 # Changelog
 
+## Windows 3.1.4 Preview — 2026-08-31
+
+- Fixed the startup JIT exception when a signed exact translation update supersedes an existing compatible-revision installation. The CLI now preserves every observed EN/UK identity field when rebinding the selected profile, including metadata-only catalog updates; the strict GUI contract remains enforced.
+- Handle `InvalidDataException` in the GUI operation boundary so an invalid CLI response disables actions and shows a normal error instead of escaping an async event handler.
+- Added a regression that fails on the 3.1.3 identity loss. Translation package 5 is unchanged; no game data, patch state, or backups need deletion. Install this hotfix over 3.1.3.
+
 ## Windows 3.1.3 Preview / translation data 5 — 2026-08-31
 
 - Fixed signed-update downloads through GitHub's CDN: encoded slashes in query parameters (MIME types/signatures) are allowed, while encoded path separators, untrusted hosts, and signature/hash failures remain blocked.

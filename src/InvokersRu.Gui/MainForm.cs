@@ -1176,6 +1176,7 @@ internal sealed class MainForm : Form
     private static bool IsExpectedOperationException(Exception exception)
     {
         return exception is IOException
+            || exception is InvalidDataException
             || exception is InvalidOperationException
             || exception is UnauthorizedAccessException
             || exception is Win32Exception;

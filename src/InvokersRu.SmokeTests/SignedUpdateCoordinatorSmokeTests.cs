@@ -489,6 +489,14 @@ namespace InvokersRu.SmokeTests
                     && exactMigration.TranslationUpdateAvailable
                     && RuntimeUpdateAuthorization.CanApply(exactMigration, InitialNow),
                     "A newly published signed exact profile did not supersede an installed adaptive artifact safely.");
+                foreach (var property in typeof(RuntimeCacheInspection).GetProperties())
+                {
+                    if (property.Name is nameof(RuntimeCacheInspection.Profile) or nameof(RuntimeCacheInspection.Message))
+                        continue;
+                    Require(Equals(property.GetValue(exactMigration.Inspection),
+                            property.GetValue(exactMigration.InstalledInspection)),
+                        $"Exact migration lost observed inspection field {property.Name}; the GUI must receive the full authenticated identity.");
+                }
             });
             Pass();
         }
