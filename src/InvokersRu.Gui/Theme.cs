@@ -102,4 +102,16 @@ internal sealed class ActionButton : Button
             ForeColor = Enabled ? foreground : Color.FromArgb(112, 124, 145);
         };
     }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        // The native disabled renderer ignores ForeColor and painted black-on-grey text.
+        using var brush = new SolidBrush(Enabled ? BackColor : Color.FromArgb(36, 45, 61));
+        e.Graphics.FillRectangle(brush, ClientRectangle);
+        Rectangle textBounds = Rectangle.Inflate(ClientRectangle, -6, -4);
+        TextRenderer.DrawText(e.Graphics, Text, Font, textBounds,
+            Enabled ? ForeColor : Color.FromArgb(163, 174, 194),
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+        if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -4, -4));
+    }
 }

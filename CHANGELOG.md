@@ -1,5 +1,13 @@
 # Changelog
 
+## Windows 3.1.5 Preview — 2026-08-31
+
+- Added user-confirmed EXE updates from a fixed GitHub channel. A separate, domain-separated P-256 manifest pins the installer version, URL, length, SHA-256, expiry and monotonic sequence. Rejects tampering, rollback, untrusted redirects and incomplete downloads before execution. No shell, arbitrary arguments, elevation request, game-process termination or game-file writes in this path.
+- The installer waits for the old GUI to exit, installs to its fixed per-user directory and restarts only the GUI after a self-update. Versions 3.1.2–3.1.4 require one last manual upgrade; existing release links remain aliases. Authenticode is still pending.
+- Replaced fixed-height UI sections with wrapping, auto-sized layouts and vertical scrolling. Short statuses explain the next action; disabled buttons remain readable. Technical output is collapsed under Support details, supports copying and displays readable Cyrillic instead of escaped JSON text.
+- Added updater protocol/download regression tests and a signing command with separate sequence history. Verified layout at normal/narrow widths and enlarged text. Windows 10 VM installation and full interactive self-update handoff are not part of these checks.
+- Translation data 5, game files, installed patch state, backups and macOS DMGs are unchanged.
+
 ## Windows 3.1.4 Preview — 2026-08-31
 
 - Fixed the startup JIT exception when a signed exact translation update supersedes an existing compatible-revision installation. The CLI now preserves every observed EN/UK identity field when rebinding the selected profile, including metadata-only catalog updates; the strict GUI contract remains enforced.

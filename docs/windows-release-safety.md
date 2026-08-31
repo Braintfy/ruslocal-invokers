@@ -56,7 +56,8 @@ The Inno Setup definition is intentionally uneventful:
 - destination selection and previous-directory reuse disabled, with a minimal
   `[Code]` guard that rejects `/DIR`, known game/cache roots and any existing
   junction/symlink component even in silent mode;
-- no `[Run]`, registry payload, service or scheduled task;
+- no registry payload, service or scheduled task;
+- one fixed `[Run]` entry restarts only `{app}\InvokersRu.Gui.exe` after an explicitly confirmed self-update; ordinary manual installs do not auto-launch anything;
 - no automatic closing/restarting of the game;
 - no network call;
 - LZMA normal compression with solid compression disabled;

@@ -41,6 +41,8 @@ namespace InvokersRu.SmokeTests
                 RuntimeCacheProfileOnboardingCheck();
                 FixtureFreeRuntimeCacheSmokeTests.Run(Passed.Add);
                 GuiContractSmokeTests.Run(Passed.Add);
+                PatcherSelfUpdateSmokeTests.Run();
+                Passed.Add("signed EXE self-update rejects tamper, rollback, invalid URLs, truncation and unsafe handoff arguments");
 #if !INVOKERSRU_MUTATION_SMOKES
                 OrdinaryCoreMutationGateCheck();
 #endif

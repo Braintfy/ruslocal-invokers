@@ -23,6 +23,13 @@ namespace InvokersRu.UpdateReleaseTool
                 Dictionary<string, string> options = ParseOptions(args, 1);
                 switch (args[0])
                 {
+                    case "build-patcher-update":
+                        RejectUnknown(options, "repository-root", "installer", "version", "release-tag", "sequence", "private-key", "output-directory", "notes-file");
+                        PatcherReleaseBuilder.Build(Require(options, "repository-root"), Require(options, "installer"),
+                            Require(options, "version"), Require(options, "release-tag"),
+                            checked((long)ParseUlong(Require(options, "sequence"), "sequence")), Require(options, "private-key"),
+                            Require(options, "output-directory"), Require(options, "notes-file"));
+                        return 0;
                     case "keygen":
                         RunKeygen(options);
                         return 0;
@@ -356,6 +363,8 @@ namespace InvokersRu.UpdateReleaseTool
             Console.WriteLine("  build-compatibility --runtime-profile FILE --english-loc1 FILE --base-loc1 FILE");
             Console.WriteLine("    --stamp FILE --catalog FILE --built-loc1 FILE --build-report FILE --output NEW_FILE");
             Console.WriteLine("  self-test --repository-root PATH");
+            Console.WriteLine("  build-patcher-update --repository-root PATH --installer EXE --version X.Y.Z");
+            Console.WriteLine("    --release-tag TAG --sequence N --private-key EXTERNAL_FILE --output-directory NEW_DIRECTORY --notes-file FILE");
         }
     }
 }

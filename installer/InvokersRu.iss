@@ -45,6 +45,7 @@ RestartApplications=no
 RestartIfNeededByRun=no
 ChangesAssociations=no
 ChangesEnvironment=no
+SetupMutex=Local\InvokersRu.Setup.Running
 UsePreviousAppDir=no
 LicenseFile={#SourceDir}\LICENSE.txt
 VersionInfoDescription=InvokersRu {#AppVersion} installer
@@ -69,11 +70,40 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdi
 [Icons]
 Name: "{autoprograms}\InvokersRu"; Filename: "{app}\InvokersRu.Gui.exe"; WorkingDir: "{app}"; Comment: "Русификатор Invokers: Titan Legacy"
 
-; Intentionally no [Run], [Registry], [Tasks], or service entries.
+[Run]
+; Only a user-confirmed self-update restarts the fixed GUI. No game or scripts.
+Filename: "{app}\InvokersRu.Gui.exe"; WorkingDir: "{app}"; Flags: nowait runasoriginaluser; Check: IsSelfUpdate
+
+; No [Registry], [Tasks], or service entries.
 ; The small [Code] guard below only enforces the one fixed per-user directory,
 ; including for silent installs and a hostile /DIR command-line override.
 
 [Code]
+function IsSelfUpdate: Boolean;
+begin
+  Result := ExpandConstant('{param:INVOKERSRU_AUTOUPDATE|0}') = '1';
+end;
+
+function InitializeSetup: Boolean;
+var
+  Attempts: Integer;
+begin
+  { Wait only for the patcher to exit normally; never close the game or kill a process. }
+  if IsSelfUpdate then
+  begin
+    Sleep(500);
+    for Attempts := 1 to 300 do
+    begin
+      if not CheckForMutexes('Local\InvokersRu.Gui.Running') then
+        Break;
+      Sleep(100);
+    end;
+  end;
+  Result := not CheckForMutexes('Local\InvokersRu.Gui.Running');
+  if not Result then
+    SuppressibleMsgBox('Close all InvokersRu patcher windows and run the installer again.', mbError, MB_OK, IDOK);
+end;
+
 function CanonicalDirectory(const Path: String): String;
 begin
   Result := AddBackslash(ExpandFileName(Path));
@@ -155,6 +185,11 @@ var
   FixedDirectory: String;
 begin
   Result := '';
+  if CheckForMutexes('Local\InvokersRu.Gui.Running') then
+  begin
+    Result := 'Close all InvokersRu patcher windows before updating.';
+    Exit;
+  end;
   RequestedDirectory := CanonicalDirectory(WizardDirValue);
   FixedDirectory := CanonicalDirectory(ExpandConstant('{localappdata}\Programs\InvokersRu'));
 

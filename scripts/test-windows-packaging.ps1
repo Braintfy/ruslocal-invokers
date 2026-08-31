@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$PayloadDirectory,
 
-    [string]$AppVersion = '3.1.4-preview'
+    [string]$AppVersion = '3.1.5-preview'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -192,7 +192,7 @@ Assert-True -Condition ($createParentPosition -ge 0 -and $commitPosition -gt $cr
 
 $issText = Get-Content -LiteralPath (Join-Path $repoRoot 'installer\InvokersRu.iss') -Raw -Encoding UTF8
 $minimumWindowsBuild = '10.0.14393'
-$releaseVersion = '3.1.4-preview'
+$releaseVersion = '3.1.5-preview'
 Assert-True -Condition ([regex]::Matches($issText,
     '(?m)^MinVersion=10\.0\.14393\r?$').Count -eq 1) `
     -Message "Installer must require exactly x64 Windows 10 build $minimumWindowsBuild or newer."
@@ -255,8 +255,13 @@ Assert-True -Condition ($issText.IndexOf('ignoreversion', [StringComparison]::Or
     -Message 'Installer still uses ignoreversion.'
 Assert-True -Condition ($issText.IndexOf('replacesameversion', [StringComparison]::OrdinalIgnoreCase) -ge 0) `
     -Message 'Installer may preserve stale same-version binaries while replacing unversioned data.'
-Assert-True -Condition ($issText.IndexOf("`n[Run]", [StringComparison]::OrdinalIgnoreCase) -lt 0) `
-    -Message 'Installer unexpectedly contains a Run section.'
+Assert-True -Condition ([regex]::Matches($issText, '(?m)^Filename:').Count -eq 1 `
+    -and $issText.Contains('Filename: "{app}\InvokersRu.Gui.exe"; WorkingDir: "{app}"; Flags: nowait runasoriginaluser; Check: IsSelfUpdate')) `
+    -Message 'Installer must only restart the fixed GUI after an explicitly requested self-update.'
+foreach ($guard in @("CheckForMutexes('Local\InvokersRu.Gui.Running')", 'for Attempts := 1 to 300 do',
+    "ExpandConstant('{param:INVOKERSRU_AUTOUPDATE|0}') = '1'", 'CloseApplications=no', 'RestartApplications=no')) {
+    Assert-True -Condition ($issText.Contains($guard)) -Message "Self-update installer guard missing: $guard"
+}
 
 $buildScript = Join-Path $PSScriptRoot 'build-installer.ps1'
 Assert-ManifestMutationRejected -SourceManifest $payloadManifestPath -BuildScript $buildScript `

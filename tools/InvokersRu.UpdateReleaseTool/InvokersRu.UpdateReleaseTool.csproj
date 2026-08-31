@@ -10,6 +10,7 @@
     <RootNamespace>InvokersRu.UpdateReleaseTool</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\..\src\InvokersRu.Gui\PatcherUpdateProtocol.cs" Link="PatcherUpdateProtocol.cs" />
     <ProjectReference Include="..\..\src\InvokersRu.Core\InvokersRu.Core.csproj" />
   </ItemGroup>
 </Project>

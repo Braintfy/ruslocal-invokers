@@ -30,266 +30,207 @@ internal sealed class MainForm : Form
     private readonly ActionButton _restoreButton;
     private readonly Button _browseButton;
     private readonly Label _busyLabel;
+    private readonly Button _updatePatcherButton;
+    private VerifiedPatcherInstaller? _pendingInstaller;
     private CliPlanResult? _lastPlan;
     private bool _busy;
 
     public MainForm()
     {
         _gameRoot = LoadSavedCacheRoot();
-
-        Text = "InvokersRu — русификация Titan Legacy";
+        Text = "InvokersRu — русский язык для Titan Legacy";
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(920, 700);
-        MinimumSize = new Size(820, 640);
+        ClientSize = new Size(920, 720);
+        MinimumSize = new Size(680, 580);
         BackColor = Theme.Background;
         ForeColor = Theme.Text;
-        Font = new Font("Segoe UI", 9.5f, FontStyle.Regular, GraphicsUnit.Point);
+        Font = new Font("Segoe UI", 10f, FontStyle.Regular, GraphicsUnit.Point);
         AutoScaleMode = AutoScaleMode.Dpi;
 
-        var root = new TableLayoutPanel
+        var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Theme.Background };
+        var root = VerticalLayout();
+        root.Padding = new Padding(24);
+        scroll.Controls.Add(root);
+        Controls.Add(scroll);
+        root.Controls.Add(CreateHeader(out _updatePatcherButton));
+
+        var gameCard = CreateGameCard(out _pathLabel, out _versionLabel, out _stateLabel, out _statusBadge, out _browseButton);
+        root.Controls.Add(gameCard);
+
+        var helpCard = NewCard();
+        var help = VerticalLayout();
+        help.Controls.Add(FlowText("ПЕРЕД УСТАНОВКОЙ", Theme.Gold, bold: true));
+        help.Controls.Add(FlowText(
+            "1. Выберите украинский язык в игре и дождитесь загрузки.\n"
+            + "2. Полностью закройте игру и лаунчер.\n"
+            + "3. Нажмите «Установить перевод» ниже.", Theme.Text));
+        help.Controls.Add(FlowText("ЧТО СДЕЛАТЬ СЕЙЧАС", Theme.Muted, bold: true));
+        _noticeLabel = FlowText("Проверяем игру и доступные обновления…", Theme.Text);
+        help.Controls.Add(_noticeLabel);
+        helpCard.Controls.Add(help);
+        root.Controls.Add(helpCard);
+
+        var actions = new FlowLayoutPanel
         {
-            Dock = DockStyle.Fill,
-            BackColor = Theme.Background,
-            ColumnCount = 1,
-            RowCount = 5,
-            Padding = new Padding(30, 24, 30, 24)
+            Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true, Margin = new Padding(0, 0, 0, 10)
         };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 82f));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 180f));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 112f));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62f));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        Controls.Add(root);
+        _checkButton = NewAction("Проверить", Theme.Blue, Theme.Blue, Color.White);
+        _applyButton = NewAction("Установить перевод", Theme.Gold, Theme.GoldHover, Theme.Background);
+        _restoreButton = NewAction("Вернуть оригинал", Color.FromArgb(36, 52, 78), Theme.CardHover, Theme.Text);
+        _applyButton.Enabled = _restoreButton.Enabled = false;
+        actions.Controls.AddRange(new Control[] { _checkButton, _applyButton, _restoreButton });
+        root.Controls.Add(actions);
+        _busyLabel = FlowText(string.Empty, Theme.Muted);
+        root.Controls.Add(_busyLabel);
 
-        root.Controls.Add(CreateHeader(), 0, 0);
-
-        CardPanel gameCard = CreateGameCard(
-            out _pathLabel,
-            out _versionLabel,
-            out _stateLabel,
-            out _statusBadge,
-            out _browseButton);
-        gameCard.Margin = new Padding(0, 0, 0, 16);
-        root.Controls.Add(gameCard, 0, 1);
-
-        var noticeCard = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(18, 10, 18, 8), Margin = new Padding(0, 0, 0, 16) };
-        var noticeLayout = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 2,
-            BackColor = Theme.Card,
-            Margin = new Padding(0)
-        };
-        noticeLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28f));
-        noticeLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        noticeLayout.Controls.Add(new Label
-        {
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft,
-            ForeColor = Theme.Gold,
-            Font = new Font("Segoe UI Semibold", 8.5f, FontStyle.Bold, GraphicsUnit.Point),
-            Text = "ПЕРЕД РУСИФИКАЦИЕЙ: выберите украинский язык в игре, дождитесь загрузки, затем полностью закройте игру и лаунчер."
-        }, 0, 0);
-        _noticeLabel = new Label
-        {
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft,
-            ForeColor = Theme.Muted,
-            Font = new Font("Segoe UI", 9.5f, FontStyle.Regular, GraphicsUnit.Point),
-            Text = "Проверяем файлы и версию игры…"
-        };
-        _noticeLabel.Cursor = Cursors.Hand;
-        _noticeLabel.Click += (_, _) => OpenVerifiedPatcherPage();
-        noticeLayout.Controls.Add(_noticeLabel, 0, 1);
-        noticeCard.Controls.Add(noticeLayout);
-        root.Controls.Add(noticeCard, 0, 2);
-
-        var actions = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 4,
-            RowCount = 1,
-            BackColor = Theme.Background,
-            Margin = new Padding(0, 0, 0, 16)
-        };
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 21f));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33f));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33f));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 13f));
-        actions.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-
-        _checkButton = new ActionButton("Проверить", Theme.Blue, Color.FromArgb(86, 151, 247), Color.White) { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 10, 0) };
-        _applyButton = new ActionButton("Установить русификацию", Theme.Gold, Theme.GoldHover, Color.FromArgb(20, 24, 32)) { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 10, 0), Enabled = false };
-        _restoreButton = new ActionButton("Восстановить оригинал", Color.FromArgb(36, 52, 78), Color.FromArgb(47, 66, 98), Theme.Text) { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 10, 0), Enabled = false };
-        _busyLabel = new Label { Dock = DockStyle.Fill, Text = string.Empty, TextAlign = ContentAlignment.MiddleRight, ForeColor = Theme.Muted };
-        actions.Controls.Add(_checkButton, 0, 0);
-        actions.Controls.Add(_applyButton, 1, 0);
-        actions.Controls.Add(_restoreButton, 2, 0);
-        actions.Controls.Add(_busyLabel, 3, 0);
-        root.Controls.Add(actions, 0, 3);
-
-        var logCard = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(18), Margin = new Padding(0) };
-        var logLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Theme.Card };
-        logLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30f));
-        logLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        logLayout.Controls.Add(new Label
-        {
-            Dock = DockStyle.Fill,
-            Text = "ЖУРНАЛ ПРОВЕРКИ",
-            ForeColor = Theme.Gold,
-            Font = new Font("Segoe UI Semibold", 8.5f, FontStyle.Bold, GraphicsUnit.Point),
-            TextAlign = ContentAlignment.MiddleLeft
-        }, 0, 0);
+        var detailsCard = NewCard();
+        var detailsLayout = VerticalLayout();
+        var detailsActions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true };
+        var toggle = NewAction("Показать подробности", Theme.Card, Theme.CardHover, Theme.Text);
+        var copy = NewAction("Скопировать для поддержки", Theme.Card, Theme.CardHover, Theme.Text);
+        detailsActions.Controls.AddRange(new Control[] { toggle, copy });
+        detailsLayout.Controls.Add(FlowText("ПОДРОБНОСТИ ДЛЯ ПОДДЕРЖКИ", Theme.Muted, bold: true));
+        detailsLayout.Controls.Add(FlowText(
+            "Если что-то не работает, скопируйте эти сведения и отправьте автору. Для обычной установки они не нужны.", Theme.Muted));
+        detailsLayout.Controls.Add(detailsActions);
         _log = new RichTextBox
         {
-            Dock = DockStyle.Fill,
-            ReadOnly = true,
-            BorderStyle = BorderStyle.None,
-            BackColor = Color.FromArgb(12, 21, 35),
-            ForeColor = Color.FromArgb(189, 202, 222),
-            Font = new Font("Cascadia Mono", 8.8f, FontStyle.Regular, GraphicsUnit.Point),
-            DetectUrls = false,
-            TabStop = false
+            Dock = DockStyle.Top, Height = 240, Visible = false, ReadOnly = true,
+            BorderStyle = BorderStyle.None, BackColor = Color.FromArgb(12, 21, 35),
+            ForeColor = Theme.Text, Font = new Font("Consolas", 9f),
+            DetectUrls = false, WordWrap = true, ScrollBars = RichTextBoxScrollBars.Vertical,
+            Margin = new Padding(0, 10, 0, 0)
         };
-        logLayout.Controls.Add(_log, 0, 1);
-        logCard.Controls.Add(logLayout);
-        root.Controls.Add(logCard, 0, 4);
+        toggle.Click += (_, _) =>
+        {
+            _log.Visible = !_log.Visible;
+            toggle.Text = _log.Visible ? "Скрыть подробности" : "Показать подробности";
+        };
+        copy.Click += (_, _) =>
+        {
+            try
+            {
+                Clipboard.SetText(_log.TextLength == 0 ? "Проверка ещё не выполнена." : _log.Text);
+                copy.Text = "Скопировано";
+            }
+            catch (System.Runtime.InteropServices.ExternalException)
+            {
+                MessageBox.Show(this, "Не удалось открыть буфер обмена. Попробуйте ещё раз.",
+                    "Поддержка", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        };
+        detailsLayout.Controls.Add(_log);
+        detailsCard.Controls.Add(detailsLayout);
+        root.Controls.Add(detailsCard);
 
         _pathLabel.Text = _gameRoot;
         _browseButton.Click += async (_, _) => await FindOrChooseCacheRootAsync();
-        _checkButton.Click += async (_, _) => await CheckAsync(showFailureDialog: true);
+        _checkButton.Click += async (_, _) =>
+        {
+            if (!await CheckPatcherUpdateAsync(showCurrent: false))
+                await CheckAsync(showFailureDialog: true);
+        };
+        _updatePatcherButton.Click += async (_, _) => await CheckPatcherUpdateAsync(showCurrent: true);
         _applyButton.Click += async (_, _) => await ApplyOrRecoverAsync();
         _restoreButton.Click += async (_, _) => await RestoreAsync();
         Shown += async (_, _) => await InitialCheckAsync();
         FormClosing += OnFormClosing;
     }
 
-    private static Control CreateHeader()
+    private static TableLayoutPanel VerticalLayout() => new()
+    {
+        Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        ColumnCount = 1, GrowStyle = TableLayoutPanelGrowStyle.AddRows,
+        Margin = new Padding(0), ColumnStyles = { new ColumnStyle(SizeType.Percent, 100f) }
+    };
+
+    private static CardPanel NewCard() => new()
+    {
+        Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        Padding = new Padding(18), Margin = new Padding(0, 0, 0, 14)
+    };
+
+    private static Label FlowText(string text, Color color, bool bold = false)
+    {
+        var label = new Label
+        {
+            Text = text, AutoSize = true, Dock = DockStyle.Top, ForeColor = color,
+            UseMnemonic = false, AutoEllipsis = false, Margin = new Padding(0, 0, 0, 8),
+            MaximumSize = new Size(760, 0), TextAlign = ContentAlignment.TopLeft,
+            Font = new Font("Segoe UI", bold ? 9f : 10f, bold ? FontStyle.Bold : FontStyle.Regular)
+        };
+        label.ParentChanged += (_, _) =>
+        {
+            if (label.Parent is not Control parent) return;
+            void ResizeLabel() => label.MaximumSize = new Size(
+                Math.Max(160, parent.ClientSize.Width - parent.Padding.Horizontal - label.Margin.Horizontal), 0);
+            parent.SizeChanged += (_, _) => ResizeLabel();
+            ResizeLabel();
+        };
+        return label;
+    }
+
+    private static ActionButton NewAction(string text, Color normal, Color hover, Color foreground) => new(text, normal, hover, foreground)
+    {
+        AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        MinimumSize = new Size(140, 44), Padding = new Padding(14, 8, 14, 8),
+        Margin = new Padding(0, 0, 10, 8)
+    };
+
+    private static Control CreateHeader(out Button updateButton)
     {
         var header = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 1,
-            BackColor = Theme.Background,
-            Margin = new Padding(0)
+            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 1,
+            Margin = new Padding(0, 0, 0, 16)
         };
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 78f));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76f));
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        header.Controls.Add(new LogoBadge { Anchor = AnchorStyles.Left | AnchorStyles.Top }, 0, 0);
-
-        var titles = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Theme.Background, Margin = new Padding(0) };
-        titles.RowStyles.Add(new RowStyle(SizeType.Absolute, 42f));
-        titles.RowStyles.Add(new RowStyle(SizeType.Absolute, 28f));
-        titles.Controls.Add(new Label
-        {
-            Dock = DockStyle.Fill,
-            Text = "INVOKERS RU",
-            ForeColor = Theme.Text,
-            Font = new Font("Segoe UI Semibold", 21f, FontStyle.Bold, GraphicsUnit.Point),
-            TextAlign = ContentAlignment.BottomLeft
-        }, 0, 0);
-        titles.Controls.Add(new Label
-        {
-            Dock = DockStyle.Fill,
-            Text = "Русификация Invokers: Titan Legacy",
-            ForeColor = Theme.Muted,
-            Font = new Font("Segoe UI", 10f, FontStyle.Regular, GraphicsUnit.Point),
-            TextAlign = ContentAlignment.TopLeft
-        }, 0, 1);
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        header.Controls.Add(new LogoBadge { Anchor = AnchorStyles.Top | AnchorStyles.Left }, 0, 0);
+        var titles = VerticalLayout();
+        var title = FlowText("INVOKERS RU", Theme.Text, bold: true);
+        title.Font = new Font("Segoe UI", 20f, FontStyle.Bold);
+        titles.Controls.Add(title);
+        titles.Controls.Add(FlowText("Русский язык для Invokers: Titan Legacy", Theme.Muted));
         header.Controls.Add(titles, 1, 0);
+        updateButton = NewAction("Обновить патчер", Theme.Card, Theme.CardHover, Theme.Text);
+        header.Controls.Add(updateButton, 2, 0);
         return header;
     }
 
-    private static CardPanel CreateGameCard(
-        out Label pathLabel,
-        out Label versionLabel,
-        out Label stateLabel,
-        out Label statusBadge,
-        out Button browseButton)
+    private static CardPanel CreateGameCard(out Label pathLabel, out Label versionLabel,
+        out Label stateLabel, out Label statusBadge, out Button browseButton)
     {
-        var card = new CardPanel { Dock = DockStyle.Fill };
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 4, BackColor = Theme.Card };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 76f));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 24f));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 27f));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38f));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32f));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-
-        layout.Controls.Add(new Label
-        {
-            Dock = DockStyle.Fill,
-            Text = "УСТАНОВКА ИГРЫ",
-            ForeColor = Theme.Gold,
-            Font = new Font("Segoe UI Semibold", 8.5f, FontStyle.Bold, GraphicsUnit.Point),
-            TextAlign = ContentAlignment.MiddleLeft
-        }, 0, 0);
-
-        statusBadge = new Label
-        {
-            Dock = DockStyle.Fill,
-            Text = "ПРОВЕРКА",
-            TextAlign = ContentAlignment.MiddleCenter,
-            ForeColor = Theme.Text,
-            BackColor = Color.FromArgb(45, 61, 86),
-            Font = new Font("Segoe UI Semibold", 8.5f, FontStyle.Bold, GraphicsUnit.Point),
-            Margin = new Padding(8, 0, 0, 2)
-        };
-        layout.Controls.Add(statusBadge, 1, 0);
-
-        pathLabel = new Label
-        {
-            Dock = DockStyle.Fill,
-            AutoEllipsis = true,
-            ForeColor = Theme.Text,
-            Font = new Font("Segoe UI", 10.5f, FontStyle.Regular, GraphicsUnit.Point),
-            TextAlign = ContentAlignment.MiddleLeft
-        };
-        layout.Controls.Add(pathLabel, 0, 1);
-
-        browseButton = new Button
-        {
-            Dock = DockStyle.Fill,
-            Text = "Найти автоматически",
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(36, 52, 78),
-            ForeColor = Theme.Text,
-            Font = new Font("Segoe UI Semibold", 8.5f, FontStyle.Bold, GraphicsUnit.Point),
-            Margin = new Padding(8, 3, 0, 3),
-            Cursor = Cursors.Hand,
-            TabStop = true
-        };
-        browseButton.FlatAppearance.BorderColor = Color.FromArgb(62, 82, 112);
-        layout.Controls.Add(browseButton, 1, 1);
-
-        versionLabel = new Label
-        {
-            Dock = DockStyle.Fill,
-            Text = "Версия: определяется…",
-            ForeColor = Theme.Muted,
-            TextAlign = ContentAlignment.MiddleLeft
-        };
-        layout.Controls.Add(versionLabel, 0, 2);
-        layout.SetColumnSpan(versionLabel, 2);
-
-        stateLabel = new Label
-        {
-            Dock = DockStyle.Fill,
-            Text = "Состояние: ожидается проверка",
-            ForeColor = Theme.Muted,
-            TextAlign = ContentAlignment.MiddleLeft
-        };
-        layout.Controls.Add(stateLabel, 0, 3);
-        layout.SetColumnSpan(stateLabel, 2);
+        var card = NewCard();
+        var layout = VerticalLayout();
+        var heading = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Margin = new Padding(0) };
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        heading.Controls.Add(FlowText("ВАША ИГРА", Theme.Gold, bold: true), 0, 0);
+        browseButton = NewAction("Найти / выбрать папку", Color.FromArgb(36, 52, 78), Theme.CardHover, Theme.Text);
+        heading.Controls.Add(browseButton, 1, 0);
+        layout.Controls.Add(heading);
+        statusBadge = FlowText("Проверяем игру…", Theme.Text, bold: true);
+        statusBadge.Font = new Font("Segoe UI", 14f, FontStyle.Bold);
+        statusBadge.Padding = new Padding(8);
+        layout.Controls.Add(statusBadge);
+        stateLabel = FlowText("Это может занять несколько секунд.", Theme.Muted);
+        layout.Controls.Add(stateLabel);
+        versionLabel = FlowText("Версия игры: определяется…", Theme.Muted);
+        layout.Controls.Add(versionLabel);
+        layout.Controls.Add(FlowText("ПАПКА ФАЙЛОВ ЯЗЫКА", Theme.Muted, bold: true));
+        pathLabel = FlowText(string.Empty, Theme.Muted);
+        pathLabel.Font = new Font("Segoe UI", 9f);
+        layout.Controls.Add(pathLabel);
         card.Controls.Add(layout);
         return card;
     }
 
     private async Task InitialCheckAsync()
     {
+        if (await CheckPatcherUpdateAsync(showCurrent: false)) return;
         if (!HasCacheTuple(_gameRoot))
         {
             SetBusy(true, "Поиск игры…");
@@ -658,7 +599,7 @@ internal sealed class MainForm : Form
         DialogResult confirmation = MessageBox.Show(
             this,
             "Будет восстановлена сохранённая оригинальная локализация. Игра и лаунчер должны оставаться закрытыми. Продолжить?",
-            "Восстановить оригинал",
+            "Вернуть оригинал",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Question,
             MessageBoxDefaultButton.Button2);
@@ -689,7 +630,7 @@ internal sealed class MainForm : Form
         {
             DialogResult recovery = MessageBox.Show(
                 this,
-                "Патчер обнаружил незавершённую транзакцию. Он сверит журнал и контрольные суммы и восстановит только однозначное состояние. Продолжить?",
+                "Предыдущая установка была прервана. Патчер проверит файлы и попытается завершить восстановление. Продолжить?",
                 "Восстановление после сбоя",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning,
@@ -720,14 +661,13 @@ internal sealed class MainForm : Form
         int sourceRows = plan.Profile.AppliedTranslations + plan.Profile.EnglishFallbacks;
         string coverage = $"{plan.Profile.AppliedTranslations:N0} из {sourceRows:N0} переводимых";
         string selectionSummary = metadataOnly
-            ? "Текстовый файл уже совпадает с новым проверенным результатом. Файл игры переписываться не будет; патчер атомарно обновит только служебные данные состояния и каталога."
+            ? "Перевод уже актуален. Обновятся только сведения о нём в патчере; тексты игры останутся прежними."
             : compatibleRevision
-            ? "Точного опубликованного профиля этой ревизии нет. Патчер проверил неизменный формат и порядок ключей; "
-                + $"Все проверки, включая точное совпадение английского исходника и украинской подсказки, прошли {coverage} строк.\n"
-                + $"Останется на английском: {plan.Profile.EnglishFallbacks:N0}; пустых/служебных строк: {plan.Profile.BaseFallbacks:N0}."
-            : $"Будет установлена русская локализация для версии {plan.Profile.GameVersion}.\n\n"
+            ? "Файлы языка в игре отличаются от исходной версии перевода. Будут установлены только подходящие строки; изменившиеся описания останутся на английском до обновления перевода.\n\n"
+                + $"Русский текст: {coverage}. На английском: {plan.Profile.EnglishFallbacks:N0}."
+            : "Будет установлен русский язык для найденной игры.\n\n"
                 + $"Русский текст: {coverage}.\n"
-                + $"Останется на английском: {plan.Profile.EnglishFallbacks:N0}; пустых/служебных строк: {plan.Profile.BaseFallbacks:N0}.";
+                + $"Останется на английском: {plan.Profile.EnglishFallbacks:N0}.";
         DialogResult confirmation = MessageBox.Show(
             this,
             "Перед продолжением убедитесь: в игре выбран украинский язык, а игра и лаунчер полностью закрыты.\n\n"
@@ -784,171 +724,83 @@ internal sealed class MainForm : Form
     private void RenderPlan(CliPlanResult plan)
     {
         _pathLabel.Text = string.IsNullOrWhiteSpace(plan.CacheRoot) ? _gameRoot : plan.CacheRoot;
-        string englishContent = plan.Observed.EnglishContent ?? "не определён";
-        string baseContent = plan.Observed.BaseContent ?? "не определён";
-        string englishRevision = plan.Observed.EnglishReleaseRevision?.ToString() ?? "?";
-        string baseRevision = plan.Observed.BaseReleaseRevision?.ToString() ?? "?";
-        string content = $"EN: {englishContent} (rev {englishRevision})   •   UK: {baseContent} (rev {baseRevision})";
-        string observedVersion = plan.Observed.GameVersion ?? "не определена";
-        bool compatibleRevision = string.Equals(plan.Profile.Mode, "compatible-revision", StringComparison.Ordinal);
-        string versionText = compatibleRevision
-            ? $"Наблюдаемая версия игры: {observedVersion}"
-            : string.Equals(observedVersion, plan.Profile.GameVersion, StringComparison.Ordinal)
-                ? $"Версия игры: {observedVersion}"
-                : $"Наблюдаемая версия игры: {observedVersion}   •   точный профиль: {plan.Profile.GameVersion}";
-        _versionLabel.Text = $"{versionText}   •   контент: {content}   •   патчер: {plan.PatcherVersion}";
+        _versionLabel.Text = $"Игра: {plan.Observed.GameVersion ?? "версия пока неизвестна"}   •   Патчер: {plan.PatcherVersion}";
+        void Show(string title, string summary, string next, Color color)
+        {
+            SetBadge(title, color);
+            _stateLabel.Text = summary;
+            _stateLabel.ForeColor = color;
+            _noticeLabel.Text = next;
+            _noticeLabel.ForeColor = Theme.Text;
+        }
+        string coverage = $"Доступно русских строк: {plan.Profile.AppliedTranslations:N0}.";
+        if (plan.Profile.EnglishFallbacks > 0)
+            coverage += $" Пока на английском: {plan.Profile.EnglishFallbacks:N0}.";
 
-        if (plan.CanApply)
-        {
-            bool translationUpdate = plan.TranslationUpdateAvailable;
-            bool metadataOnly = string.Equals(plan.TranslationUpdateKind, "metadata-only", StringComparison.Ordinal);
-            bool catalogUpdate = string.Equals(plan.Status, "PatchSupersededByCatalogUpdate", StringComparison.Ordinal);
-            bool afterUpdate = translationUpdate
-                || catalogUpdate
-                || string.Equals(plan.Status, "PatchSupersededByOfficialUpdate", StringComparison.Ordinal);
-            SetBadge(compatibleRevision ? "СОВМЕСТИМАЯ ВЕРСИЯ" : afterUpdate ? "НУЖНО ОБНОВИТЬ ПЕРЕВОД" : "ГОТОВО К УСТАНОВКЕ",
-                compatibleRevision ? Theme.Warning : afterUpdate ? Theme.Warning : Theme.Green);
-            int sourceRows = plan.Profile.AppliedTranslations + plan.Profile.EnglishFallbacks;
-            _stateLabel.Text = $"Перевод: {plan.Profile.AppliedTranslations:N0} / {sourceRows:N0} переводимых строк   •   английских: {plan.Profile.EnglishFallbacks:N0}";
-            _stateLabel.ForeColor = Theme.Green;
-            _noticeLabel.Text = metadataOnly
-                ? "Новый проверенный каталог даёт тот же текстовый файл. Патчер не будет переписывать файл игры: обновятся только атомарные служебные данные, чтобы дальнейшее восстановление не зависело от старого каталога."
-                : compatibleRevision
-                ? $"Точного опубликованного профиля этой ревизии нет. Формат, локали и порядок ключей совместимы; {plan.Profile.AppliedTranslations:N0} из {sourceRows:N0} переводимых строк прошли все проверки, включая точное совпадение английского исходника и украинской подсказки. Остальные {plan.Profile.EnglishFallbacks:N0} останутся на английском; пустых/служебных: {plan.Profile.BaseFallbacks:N0}."
-                : translationUpdate || catalogUpdate
-                    ? "Найден более свежий проверенный перевод для этой версии игры. Новый файл будет собран из закреплённой копии оригинала и атомарно заменит старый перевод одной операцией."
-                    : afterUpdate
-                        ? "Игра обновилась и вернула официальный файл. Старую резервную копию патчер сохранит в истории и установит перевод, собранный точно для новой версии."
-                        : "Версия, файлы игры, каталог и ожидаемый результат совпадают. Оригинал будет сохранён перед атомарной заменой.";
-            if (compatibleRevision && plan.Profile.EnglishFallbacks > 0)
-                _noticeLabel.Text += " Когда в GitHub появятся свежие строки для этой ревизии, патчер сможет перевести оставшийся английский текст без обновления EXE.";
-            _noticeLabel.Text += CatalogSourceNotice(plan);
-            _noticeLabel.ForeColor = afterUpdate ? Theme.Warning : Theme.Text;
-        }
-        else if (plan.CanRestore)
-        {
-            bool blockedTranslationUpdate = (plan.TranslationUpdateAvailable && !plan.CanApply)
-                || plan.UpdateProblemBlocksApply;
-            SetBadge(blockedTranslationUpdate ? "ОБНОВЛЕНИЕ ЗАБЛОКИРОВАНО" : "РУСИФИКАЦИЯ АКТИВНА",
-                blockedTranslationUpdate ? Theme.Warning : Theme.Blue);
-            _stateLabel.Text = $"Установлено русских строк: {plan.State?.AppliedTranslations ?? plan.Profile.AppliedTranslations:N0}   •   резервная копия проверена";
-            _stateLabel.ForeColor = blockedTranslationUpdate ? Theme.Warning : Theme.Blue;
-            _noticeLabel.Text = (blockedTranslationUpdate
-                    ? "Установленный перевод можно восстановить, но предложенное обновление сейчас нельзя применить: подписанные данные, версия патчера или каталог не прошли текущую проверку. "
-                    : "Русификация уже установлена. ")
-                + "Оригинал можно восстановить из закреплённой резервной копии; перед восстановлением патчер ещё раз проверит состояние и контрольные суммы."
-                + CatalogSourceNotice(plan);
-            _noticeLabel.ForeColor = blockedTranslationUpdate ? Theme.Warning : Theme.Text;
-        }
-        else if (string.Equals(plan.Status, "MissingFiles", StringComparison.Ordinal))
-        {
-            SetBadge("ИГРА НЕ НАЙДЕНА", Theme.Danger);
-            _stateLabel.Text = "Состояние: файлы игры отсутствуют по стандартному пути";
-            _stateLabel.ForeColor = Theme.Danger;
-            _noticeLabel.Text = $"Файлы локализации не найдены в {_gameRoot}. Нажмите «Найти автоматически»; патчер проверит доступные локальные диски и при необходимости предложит ручной выбор i18n.";
-            _noticeLabel.ForeColor = Theme.Danger;
-        }
-        else if (string.Equals(plan.PlanAction, "REFUSE_PATCHER_OR_SIGNED_DATA_NOT_CURRENT", StringComparison.Ordinal))
-        {
-            bool patcherTooOld = plan.ChannelAuthority?.PatcherDisposition == "TooOld";
-            bool expired = plan.Update?.Expired == true;
-            bool lkgOnly = string.Equals(plan.Catalog.Source, "LastKnownGood", StringComparison.Ordinal);
-            SetBadge(patcherTooOld ? "НУЖЕН НОВЫЙ ПАТЧЕР" : "ДАННЫЕ НЕ ГОТОВЫ", Theme.Warning);
-            _stateLabel.Text = patcherTooOld
-                ? $"Установлен патчер {plan.PatcherVersion}; канал требует {plan.ChannelAuthority?.MinimumPatcherVersion ?? "новую версию"}"
-                : expired ? "Срок действия выбранных подписанных данных истёк"
-                : lkgOnly ? "Доступна только предыдущая проверенная копия данных"
-                : "Подписанный канал не предоставил пригодный каталог для новой установки";
-            _stateLabel.ForeColor = Theme.Warning;
-            _noticeLabel.Text = patcherTooOld
-                ? "Формат данных изменился, и эта версия патчера больше не может установить обновление. Нажмите этот текст, чтобы открыть проверенную страницу Releases. Если русификация уже установлена, восстановление оригинала остаётся доступным."
-                : expired ? "Установка заблокирована до получения актуальных подписанных данных. Уже установленный перевод и его резервная копия не изменяются."
-                : lkgOnly ? "Предыдущая проверенная копия разрешена только для обслуживания точно записанного установленного артефакта. Для новой установки снова нажмите «Проверить» при доступной сети."
-                : "Установка заблокирована до получения пригодного каталога с подтверждённой контрольной суммой. Проверьте сеть и снова нажмите «Проверить».";
-            _noticeLabel.ForeColor = Theme.Warning;
-        }
-        else if (!plan.IsVersionRisk
-            && (plan.ProcessConflicts.Length > 0
-                || string.Equals(plan.PlanAction, "REFUSE_CLOSE_GAME_AND_LAUNCHER", StringComparison.Ordinal)))
-        {
-            SetBadge("ЗАКРОЙТЕ ИГРУ", Theme.Warning);
-            _stateLabel.Text = $"Состояние: обнаружены запущенные процессы ({plan.ProcessConflicts.Length})";
-            _stateLabel.ForeColor = Theme.Warning;
-            _noticeLabel.Text = string.Equals(plan.Status, "RecoveryRequired", StringComparison.Ordinal)
-                ? "Есть незавершённая транзакция, но восстановление нельзя запускать, пока игра или лаунчер открыты. Полностью закройте их и нажмите «Проверить»."
-                : "Полностью закройте игру и лаунчер, включая значок в системном трее, затем нажмите «Проверить». Патчер сам процессы не завершает.";
-            _noticeLabel.ForeColor = Theme.Warning;
-        }
-        else if (string.Equals(plan.Status, "InconsistentState", StringComparison.Ordinal))
-        {
-            bool tupleMismatch = plan.Diagnostic.Kind is "translation-data" or "structural-boundary";
-            SetBadge(tupleMismatch ? "ДАННЫЕ И СОСТОЯНИЕ РАСХОДЯТСЯ" : "СОСТОЯНИЕ НЕ СОГЛАСОВАНО", Theme.Danger);
-            _stateLabel.Text = tupleMismatch
-                ? $"После записанной установки изменился компонент: {DiagnosticComponentName(plan.Diagnostic.Component)}"
-                : "Состояние патчера, журнал или файлы не прошли взаимную проверку";
-            _stateLabel.ForeColor = Theme.Danger;
-            _noticeLabel.Text = "Это несогласованность локального состояния после обновления игры, ручного изменения или оборванной операции, а не вывод о версии клиента. "
-                + DiagnosticComparison(plan)
-                + " Принудительная запись и восстановление отключены: не запускайте игру и не меняйте файлы вручную; сохраните журнал проверки и обратитесь в поддержку проекта.";
-            _noticeLabel.ForeColor = Theme.Danger;
-        }
+        if (plan.Status == "MissingFiles")
+            Show("Файлы языка не найдены", "Игра ещё не скачала украинский язык или её папка находится в другом месте.",
+                "Выберите украинский язык в игре и дождитесь загрузки. Затем закройте игру и нажмите «Проверить». "
+                + "Если папка не найдена, нажмите «Найти / выбрать папку».", Theme.Warning);
+        else if (plan.Status == "InconsistentState")
+            Show("Нужна повторная проверка", "Файлы игры изменились после установки перевода. " + FriendlyRevisionDifference(plan),
+                "Нажмите «Проверить». Если сообщение осталось, скопируйте подробности для поддержки ниже. "
+                + "Не удаляйте файлы и резервные копии вручную.", Theme.Danger);
         else if (plan.IsVersionRisk)
+            Show("Нужно обновление перевода", FriendlyRevisionDifference(plan),
+                "Нажмите «Проверить», чтобы получить свежие данные. Если обновления ещё нет, дождитесь его. "
+                + "Сам номер версии игры не запрещает установку; сейчас не прошли проверки её файлов.", Theme.Warning);
+        else if (plan.UpdateProblemBlocksApply)
+            Show("Обновление пока недоступно", "Не удалось подтвердить подходящие данные перевода.",
+                "Проверьте подключение к интернету и нажмите «Проверить». При необходимости используйте «Обновить патчер».", Theme.Warning);
+        else if (plan.IsPatched && !plan.TranslationUpdateAvailable)
+            Show("Русский язык установлен", $"Установлено русских строк: {plan.State?.AppliedTranslations ?? plan.Profile.AppliedTranslations:N0}.",
+                plan.ProcessConflicts.Length > 0
+                    ? "Можно продолжать играть. Чтобы обновить или убрать перевод, сначала закройте игру и лаунчер."
+                    : "Можно запускать игру. Оставьте украинский язык в настройках — он теперь содержит русский перевод. "
+                        + "Кнопка «Вернуть оригинал» убирает русификацию.", Theme.Green);
+        else if (plan.ProcessConflicts.Length > 0 || plan.PlanAction == "REFUSE_CLOSE_GAME_AND_LAUNCHER")
+            Show("Закройте игру и лаунчер", "Перед изменением перевода они должны быть полностью закрыты.",
+                "Закройте игру и лаунчер, в том числе значок лаунчера рядом с часами Windows. Затем нажмите «Проверить». "
+                + "Патчер сам их не закрывает.", Theme.Warning);
+        else if (plan.CanRecover || plan.Status == "RecoveryRequired")
+            Show("Установка была прервана", "Предыдущую операцию нужно завершить или отменить.",
+                plan.CanRecover ? "Нажмите «Исправить установку». Не запускайте игру до завершения."
+                    : "Скопируйте подробности для поддержки. Не удаляйте резервные копии и не меняйте файлы вручную.", Theme.Warning);
+        else if (plan.CanApply)
         {
-            bool translationData = string.Equals(plan.Diagnostic.Kind, "translation-data", StringComparison.Ordinal);
-            SetBadge(translationData ? "НУЖНЫ СВЕЖИЕ ДАННЫЕ ПЕРЕВОДА" : "НУЖНА ПОДДЕРЖКА ФОРМАТА",
-                translationData ? Theme.Warning : Theme.Danger);
-            _stateLabel.Text = translationData
-                ? $"Не совпадают данные перевода: {DiagnosticComponentName(plan.Diagnostic.Component)}"
-                : $"Структурная граница: {DiagnosticComponentName(plan.Diagnostic.Component)}";
-            _stateLabel.ForeColor = Theme.Danger;
-            _noticeLabel.Text = (translationData
-                    ? "Версия клиента сама по себе не признана несовместимой. Текущий каталог не может подтвердить перевод для этих данных; дождитесь свежего каталога GitHub и снова нажмите «Проверить». "
-                    : "Формат LOC1, фиксированный путь, locale slot, семейство GUID или порядок ключей вышли за поддерживаемые границы. Нужна новая поддержка патчера/данных; принудительная установка отключена. ")
-                + DiagnosticComparison(plan)
-                + (plan.ProcessConflicts.Length > 0 ? " Игра или лаунчер сейчас также запущены." : string.Empty);
-            _noticeLabel.ForeColor = translationData ? Theme.Warning : Theme.Danger;
+            bool updating = plan.TranslationUpdateAvailable || plan.Status is "PatchSupersededByOfficialUpdate" or "PatchSupersededByCatalogUpdate";
+            Show(updating ? "Можно обновить перевод" : "Всё готово к установке", coverage,
+                plan.TranslationUpdateKind == "metadata-only"
+                    ? "Тексты уже актуальны. Нажмите «Обновить перевод», чтобы сохранить новые служебные данные."
+                    : $"Нажмите «{(updating ? "Обновить перевод" : "Установить перевод")}». Оригинал сохранится в резервной копии."
+                        + (plan.Profile.EnglishFallbacks > 0 ? " Непереведённые строки останутся на английском до следующего обновления." : ""),
+                Theme.Green);
         }
-        else if (string.Equals(plan.Status, "RecoveryRequired", StringComparison.Ordinal))
-        {
-            SetBadge("НУЖНО ВОССТАНОВЛЕНИЕ", Theme.Warning);
-            _stateLabel.Text = "Состояние: обнаружена незавершённая транзакция";
-            _stateLabel.ForeColor = Theme.Warning;
-            _noticeLabel.Text = plan.InstallationWritesEnabled
-                ? "Не запускайте игру и не изменяйте её файлы вручную. Нажмите «Восстановить после сбоя»: патчер продолжит только при однозначных контрольных суммах."
-                : "Не запускайте игру и не изменяйте её файлы вручную. Эта диагностическая сборка не имеет права записи.";
-            _noticeLabel.ForeColor = Theme.Warning;
-        }
-        else if (string.Equals(plan.PlanAction, "REFUSE_MISSING_OR_MISMATCHED_CATALOG", StringComparison.Ordinal))
-        {
-            SetBadge("ОБНОВИТЕ ПЕРЕВОД", Theme.Warning);
-            _stateLabel.Text = "Состояние: файл перевода отсутствует или не совпадает с выбранными проверенными данными";
-            _stateLabel.ForeColor = Theme.Warning;
-            _noticeLabel.Text = "Не совпадают именно данные перевода, а не версия клиента. "
-                + DiagnosticComparison(plan)
-                + " Нажмите «Проверить» при доступной сети; патчер повторно скачает только каталог перевода.";
-            _noticeLabel.ForeColor = Theme.Warning;
-        }
-        else if (string.Equals(plan.PlanAction, "REFUSE_DEV_WRITES_DISABLED", StringComparison.Ordinal))
-        {
-            SetBadge("ДИАГНОСТИЧЕСКАЯ СБОРКА", Theme.Warning);
-            _stateLabel.Text = $"Версия {plan.Profile.GameVersion} распознана, но эта сборка не имеет права записи";
-            _stateLabel.ForeColor = Theme.Warning;
-            _noticeLabel.Text = "Проверка успешна. Для установки нужен официальный пакет патчера со встроенным подписанным профилем совместимости.";
-            _noticeLabel.ForeColor = Theme.Warning;
-        }
+        else if (plan.PlanAction == "REFUSE_DEV_WRITES_DISABLED")
+            Show("Это сборка для проверки", "Она проверяет файлы, но не устанавливает перевод.",
+                "Для установки скачайте обычный Windows-установщик со страницы релиза.", Theme.Warning);
         else
-        {
-            SetBadge("УСТАНОВКА ЗАБЛОКИРОВАНА", Theme.Warning);
-            _stateLabel.Text = $"Состояние: {DisplayStatus(plan.Status)}";
-            _stateLabel.ForeColor = Theme.Warning;
-            _noticeLabel.Text = "Проверка не разрешила запись. Подробности сохранены в журнале.";
-            _noticeLabel.ForeColor = Theme.Warning;
-        }
+            Show("Нужна проверка", "Патчер пока не может установить перевод.",
+                "Нажмите «Проверить». Если это не помогло, скопируйте подробности для поддержки ниже.", Theme.Warning);
 
-        // A failed freshness check and a patcher-version warning remain relevant in every state,
-        // including the exact refusal states where the player is told to wait for newer data.
-        _noticeLabel.Text += NonBlockingRefreshNotice(plan) + PatcherVersionNotice(plan);
+        if (plan.UpdateProblem != null && !plan.UpdateProblemBlocksApply)
+            _noticeLabel.Text += " GitHub сейчас недоступен; используется сохранённый перевод.";
+        _noticeLabel.Text += PatcherVersionNotice(plan);
         UpdateButtons();
+    }
+
+    private static string FriendlyRevisionDifference(CliPlanResult plan)
+    {
+        return plan.Diagnostic.Component switch
+        {
+            "english-source" => $"Изменился английский текст игры: у вас база № {plan.Observed.EnglishReleaseRevision?.ToString() ?? "?"}, "
+                + $"перевод подготовлен для № {plan.Profile.EnglishReleaseRevision}.",
+            "ukrainian-base" => $"Изменилась украинская база: у вас № {plan.Observed.BaseReleaseRevision?.ToString() ?? "?"}, "
+                + $"перевод подготовлен для № {plan.Profile.BaseReleaseRevision}.",
+            "catalog-sha256" => "Файл перевода отсутствует или повреждён.",
+            "version-stamp" => "Игра обновила сведения о файлах языка.",
+            _ => "Файлы языка отличаются от ожидаемых; подробности доступны ниже."
+        };
     }
 
     private void RenderFailure(string message)
@@ -957,7 +809,8 @@ internal sealed class MainForm : Form
         _versionLabel.Text = "Версия: не подтверждена";
         _stateLabel.Text = "Состояние: проверка не завершена";
         _stateLabel.ForeColor = Theme.Danger;
-        _noticeLabel.Text = message;
+        _noticeLabel.Text = "Не удалось завершить проверку. Нажмите «Проверить» ещё раз. Если ошибка повторяется, "
+            + "скопируйте подробности для поддержки ниже.";
         _noticeLabel.ForeColor = Theme.Danger;
         UpdateButtons();
     }
@@ -984,15 +837,16 @@ internal sealed class MainForm : Form
     {
         _checkButton.Enabled = !_busy;
         _browseButton.Enabled = !_busy;
+        _updatePatcherButton.Enabled = !_busy;
         _applyButton.Text = _lastPlan?.CanRecover == true
-            ? "Восстановить после сбоя"
+            ? "Исправить установку"
             : string.Equals(_lastPlan?.TranslationUpdateKind, "metadata-only", StringComparison.Ordinal)
-                ? "Обновить служебные данные"
+                ? "Обновить перевод"
             : _lastPlan?.TranslationUpdateAvailable == true
                 || string.Equals(_lastPlan?.Status, "PatchSupersededByOfficialUpdate", StringComparison.Ordinal)
                 || string.Equals(_lastPlan?.Status, "PatchSupersededByCatalogUpdate", StringComparison.Ordinal)
-                ? "Обновить русификацию"
-                : "Установить русификацию";
+                ? "Обновить перевод"
+                : "Установить перевод";
         _applyButton.Enabled = !_busy && (_lastPlan?.CanApply == true || _lastPlan?.CanRecover == true);
         _restoreButton.Enabled = !_busy && _lastPlan?.CanRestore == true;
     }
@@ -1000,6 +854,18 @@ internal sealed class MainForm : Form
     private void AppendLog(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return;
+        try
+        {
+            string trimmed = text.Trim();
+            if (trimmed.StartsWith('{') || trimmed.StartsWith('['))
+                text = System.Text.Json.Nodes.JsonNode.Parse(trimmed)?.ToJsonString(new System.Text.Json.JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                    Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+                }) ?? text;
+        }
+        catch (System.Text.Json.JsonException) { }
+        if (_log.TextLength > 180000) _log.Text = _log.Text[^90000..];
         string timestamp = DateTime.Now.ToString("HH:mm:ss", System.Globalization.CultureInfo.CurrentCulture);
         if (_log.TextLength > 0) _log.AppendText(Environment.NewLine + Environment.NewLine);
         _log.AppendText($"[{timestamp}] {text.Trim()}");
@@ -1122,6 +988,53 @@ internal sealed class MainForm : Form
     private static string ShortGuid(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? "не читается" : value[..Math.Min(8, value.Length)];
+    }
+
+    private async Task<bool> CheckPatcherUpdateAsync(bool showCurrent)
+    {
+        if (_busy) return false;
+        SetBusy(true, "Патчер…");
+        bool started = false;
+        try
+        {
+            using var client = new PatcherUpdateClient();
+            VerifiedPatcherUpdate update = await client.CheckAsync();
+            Version installed = typeof(MainForm).Assembly.GetName().Version ?? new Version(0, 0, 0);
+            if (update.Version <= installed)
+            {
+                AppendLog($"Обновление приложения: установлена актуальная версия {installed.Major}.{installed.Minor}.{installed.Build}.");
+                if (showCurrent) MessageBox.Show(this, "Установлена актуальная версия патчера.", "Обновление приложения",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return false;
+            }
+            AppendLog($"Доступен патчер {update.Version}. Подпись манифеста проверена.");
+            if (MessageBox.Show(this,
+                $"Доступна версия патчера {update.Version}.\n\n{update.Notes}\n\n"
+                + "Скачать и установить сейчас? Патчер закроется и откроется заново после установки. "
+                + "Перевод игры и резервные копии не изменятся. Windows может показать предупреждение о неизвестном издателе.",
+                "Обновление патчера", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return false;
+            AppendLog("Скачиваем установщик по подписанному описанию обновления. Проверяем размер, SHA-256 и версию EXE.");
+            _pendingInstaller = await client.DownloadAsync(update, installed,
+                new Progress<int>(percent => _busyLabel.Text = $"Загрузка новой версии: {percent}%"));
+            Process? setup = Process.Start(PatcherUpdateClient.CreateInstallerStartInfo(_pendingInstaller));
+            if (setup == null) throw new InvalidOperationException("Windows не запустила установщик.");
+            setup.Dispose();
+            started = true;
+        }
+        catch (Exception exception) when (IsExpectedOperationException(exception)
+            || exception is System.Net.Http.HttpRequestException or OperationCanceledException
+            or System.Security.Cryptography.CryptographicException)
+        {
+            _pendingInstaller?.Dispose();
+            _pendingInstaller = null;
+            AppendLog("Автообновление приложения недоступно: " + exception.Message);
+            if (showCurrent) MessageBox.Show(this, "Обновление не установлено. " + exception.Message,
+                "Обновление патчера", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally { SetBusy(false, string.Empty); }
+        if (started) Close(); // Release the running mutex by exiting normally, never kill other applications.
+        return started;
     }
 
     private void OpenVerifiedPatcherPage()

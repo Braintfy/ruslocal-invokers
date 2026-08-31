@@ -19,13 +19,17 @@ Only Windows and macOS builds are currently distributed. Legacy Android tools re
 
 ### Windows
 
-**3.1.4 hotfix:** if 3.1.3 shows a JIT exception about EN/UK structure and revisions, install the current EXE over it. Do not delete patch state or backups. Previous 3.1.2 and 3.1.3 direct download links also serve the fixed build.
+**Windows 3.1.5:** clearer instructions, wrapping text, readable buttons, and updates for the patcher itself. Includes the 3.1.4 JIT fix. Do not delete patch state or backups.
 
 1. Download the Windows installer from [Releases](https://github.com/Braintfy/ruslocal-invokers/releases/latest).
 2. Select **Ukrainian** in the game, wait for the download, then close the game and launcher completely.
 3. Run the localizer, select **Check**, then install or update the translation.
 
-**Upgrading from 3.1.2:** install **3.1.4** over the existing version once. A GitHub URL-handling bug prevents 3.1.2 from downloading translation updates; that version cannot replace its own EXE. After upgrading, Check downloads signed translation data without reinstalling the program. The [previous direct link](https://github.com/Braintfy/ruslocal-invokers/releases/download/v3.1.2-preview/InvokersRu-3.1-Preview-3.1.2-preview-win-x64.exe) remains an alias for the fixed installer; its internal version is 3.1.4.
+**Upgrading an old patcher:** install **3.1.5** over versions 3.1.2–3.1.4 once. It then checks GitHub for application updates on startup and when you click Check. With your approval, it downloads the verified installer and restarts. There is also an Update patcher button. Offline checks do not prevent use of the installed version. The [previous direct link](https://github.com/Braintfy/ruslocal-invokers/releases/download/v3.1.2-preview/InvokersRu-3.1-Preview-3.1.2-preview-win-x64.exe) still works; its internal version is 3.1.5.
+
+Translation data updates remain separate: click Update translation when offered to apply new text. Technical output is hidden under Support details, with show and copy buttons. Windows may warn about an unknown publisher: Authenticode signing is still pending; the signed update description and SHA-256 are verified independently.
+
+Maintainers: [publishing patcher self-updates](docs/patcher-self-update.md).
 
 If EN/UK changed after installation, do not manually delete state or backups. Upgrade the patcher, redownload the official Ukrainian language through the game, close the game and launcher, then check again. If it still refuses, include the check log in your report. Changed English rows without a matching translation remain English: the client version alone does not block installation.
 

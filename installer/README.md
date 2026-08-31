@@ -155,5 +155,9 @@ a configured or fake Sign Tool name is never treated as signature evidence.
 
 Code signing materially reduces warnings, but no project can promise that every
 antivirus product will always accept every new binary. Avoiding obfuscation,
-packers, script launchers, elevation, injection and self-updating executables
-keeps the package transparent and easier to verify.
+packers, script launchers, elevation and injection keeps the package transparent
+and easier to verify. Since 3.1.5, the GUI can offer a separately signed and
+hash-pinned installer update with user consent; it never rewrites itself in
+place or executes commands supplied by a manifest. See
+[patcher self-updates](../docs/patcher-self-update.md) for the trust boundary
+and publication procedure.
