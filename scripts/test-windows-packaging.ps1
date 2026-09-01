@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$PayloadDirectory,
 
-    [string]$AppVersion = '3.1.5-preview'
+    [string]$AppVersion = '3.1.6-preview'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -192,7 +192,7 @@ Assert-True -Condition ($createParentPosition -ge 0 -and $commitPosition -gt $cr
 
 $issText = Get-Content -LiteralPath (Join-Path $repoRoot 'installer\InvokersRu.iss') -Raw -Encoding UTF8
 $minimumWindowsBuild = '10.0.14393'
-$releaseVersion = '3.1.5-preview'
+$releaseVersion = '3.1.6-preview'
 Assert-True -Condition ([regex]::Matches($issText,
     '(?m)^MinVersion=10\.0\.14393\r?$').Count -eq 1) `
     -Message "Installer must require exactly x64 Windows 10 build $minimumWindowsBuild or newer."

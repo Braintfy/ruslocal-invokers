@@ -323,12 +323,20 @@ namespace InvokersRu.Core.Patching
             if (supersededByOfficialUpdate)
             {
                 MutationTestHooks.InvokeBeforeSupersededStateArchive(statePath);
-                ArchiveSupersededStateUnderLock(
-                    cacheRoot,
-                    targetPath,
-                    statePath,
-                    profile,
-                    inspection.OfficialUpdatePredecessor);
+                if (inspection.SnapshotlessStateSha256 != null)
+                {
+                    ArchiveSnapshotlessLegacyStateUnderLock(
+                        cacheRoot, targetPath, statePath, profile, inspection.SnapshotlessStateSha256);
+                }
+                else
+                {
+                    ArchiveSupersededStateUnderLock(
+                        cacheRoot,
+                        targetPath,
+                        statePath,
+                        profile,
+                        inspection.OfficialUpdatePredecessor);
+                }
             }
             else if (supersededByCatalogUpdate)
             {
@@ -978,6 +986,124 @@ namespace InvokersRu.Core.Patching
             if (!valid)
                 throw new InvalidDataException($"Superseded runtime-cache state is not safe to archive: {problem}");
 
+            PreserveSupersededState(statePath, state);
+        }
+
+        internal static bool TryInspectSnapshotlessLegacyOfficialUpdate(
+            string cacheRoot,
+            string statePath,
+            RuntimeCacheCompatibility profile,
+            out RuntimeCacheInspection inspection)
+        {
+            inspection = Inspect(cacheRoot, profile, statePath);
+            if (inspection.Status != InstallationStatus.InconsistentState
+                || inspection.State == null
+                || inspection.Journal != null
+                || !TryValidateSnapshotlessLegacyState(
+                    Path.GetFullPath(cacheRoot),
+                    inspection.TargetPath,
+                    statePath,
+                    inspection.State,
+                    profile,
+                    expectedStateSha256: null,
+                    out string stateSha256,
+                    out _))
+                return false;
+
+            inspection.Status = InstallationStatus.PatchSupersededByOfficialUpdate;
+            inspection.Message = "The game replaced a legacy compatible patch with a newer compatible language tuple; the old state has no source snapshots and will be preserved before applying the current translation.";
+            inspection.SnapshotlessStateSha256 = stateSha256;
+            return true;
+        }
+
+        private static void ArchiveSnapshotlessLegacyStateUnderLock(
+            string cacheRoot,
+            string targetPath,
+            string statePath,
+            RuntimeCacheCompatibility profile,
+            string expectedStateSha256)
+        {
+            VerifyExactTuple(cacheRoot, profile);
+            PatchState state = PatchPlanner.TryLoadState(statePath)
+                ?? throw new InvalidDataException("Legacy runtime-cache state disappeared or became unreadable after locking.");
+            if (!TryValidateSnapshotlessLegacyState(
+                    cacheRoot, targetPath, statePath, state, profile, expectedStateSha256,
+                    out _, out string problem))
+                throw new InvalidDataException($"Legacy runtime-cache state is not safe to archive: {problem}");
+            PreserveSupersededState(statePath, state);
+        }
+
+        private static bool TryValidateSnapshotlessLegacyState(
+            string cacheRoot,
+            string targetPath,
+            string statePath,
+            PatchState state,
+            RuntimeCacheCompatibility profile,
+            string? expectedStateSha256,
+            out string stateSha256,
+            out string problem)
+        {
+            stateSha256 = string.Empty;
+            problem = string.Empty;
+            try
+            {
+                if (profile.Mode != CompatibleRevisionProfileBuilder.Mode
+                    || !profile.Certified || profile.Readiness != "ready"
+                    || profile.ExpectedOutputSha256 == null
+                    || profile.ExpectedAppliedTranslations < 1
+                    || state.Schema != 1
+                    || !IsSafeProfileId(state.BuildId)
+                    || string.Equals(state.BuildId, profile.Id, StringComparison.Ordinal)
+                    || !IsRecordedHash(state.OriginalSha256)
+                    || !IsRecordedHash(state.PatchedSha256)
+                    || !IsRecordedHash(state.TranslationsSha256)
+                    || state.AppliedTranslations is < 1 or > 100_000
+                    || state.AppliedAt == default
+                    || !PathEquals(state.GameRoot, cacheRoot)
+                    || !PathEquals(state.TargetPath, targetPath)
+                    || Hashing.FixedEqualsHex(profile.BaseSha256, state.OriginalSha256)
+                    || Hashing.FixedEqualsHex(profile.BaseSha256, state.PatchedSha256))
+                    throw new InvalidDataException("legacy state/current compatible identity is not a superseded tuple");
+
+                string stateRoot = Path.GetDirectoryName(Path.GetFullPath(statePath))
+                    ?? throw new InvalidDataException("Runtime-cache state has no parent directory.");
+                string expectedBackup = Path.Combine(
+                    stateRoot, "backups", SafeProfileId(state.BuildId), $"{state.OriginalSha256}.{TargetFileName}");
+                if (!PathEquals(state.BackupPath, expectedBackup))
+                    throw new InvalidDataException("legacy state backup path is not canonical");
+                VerifyExactImmutableBackup(expectedBackup, state.OriginalSha256, "snapshotless legacy runtime-cache backup");
+                (string englishSnapshot, string stampSnapshot) = ResolveCompatibleSourceSnapshotPaths(expectedBackup);
+                PatchService.RejectExistingReparseComponents(englishSnapshot, "snapshotless legacy English snapshot");
+                PatchService.RejectExistingReparseComponents(stampSnapshot, "snapshotless legacy stamp snapshot");
+                if (File.Exists(englishSnapshot) || File.Exists(stampSnapshot))
+                    throw new InvalidDataException("legacy source snapshots are partial or present but failed authentication");
+
+                Loc1Document previousBase = Loc1Codec.Parse(BoundedArtifactReader.ReadRuntimeLoc1(
+                    expectedBackup, "snapshotless legacy Ukrainian backup"));
+                if (previousBase.FormatVersion != 4 || previousBase.LocaleId != profile.BaseLocaleId
+                    || previousBase.ContentGuid != profile.ContentGuid || previousBase.Entries.Count != profile.EntryCount)
+                    throw new InvalidDataException("legacy backup is outside the current compatible content family");
+
+                PatchService.RejectExistingReparseComponents(statePath, "snapshotless legacy state");
+                FileInfo stateInfo = new FileInfo(statePath);
+                if (!stateInfo.Exists || (stateInfo.Attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0
+                    || stateInfo.Length is < 1 or > 64 * 1024)
+                    throw new InvalidDataException("legacy state file is missing, linked, or oversized");
+                stateSha256 = Hashing.Sha256File(statePath);
+                if (expectedStateSha256 != null && !Hashing.FixedEqualsHex(stateSha256, expectedStateSha256))
+                    throw new InvalidDataException("legacy state changed after the installation plan was shown");
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                or InvalidDataException or InvalidOperationException or Loc1FormatException)
+            {
+                problem = exception.Message;
+                return false;
+            }
+        }
+
+        private static void PreserveSupersededState(string statePath, PatchState state)
+        {
             string stateRoot = Path.GetDirectoryName(Path.GetFullPath(statePath))
                 ?? throw new InvalidDataException("Runtime-cache state has no parent directory.");
             string historyRoot = Path.Combine(stateRoot, "history", "superseded");
@@ -1711,6 +1837,9 @@ namespace InvokersRu.Core.Patching
         }
 
         private static string SafeProfileId(string value) => $"{value}-{Hashing.Sha256Text(value).Substring(0, 12)}";
+
+        private static bool IsSafeProfileId(string value) => value.Length is > 0 and <= 128
+            && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
 
         private static bool PathEquals(string left, string right) => string.Equals(
             Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),

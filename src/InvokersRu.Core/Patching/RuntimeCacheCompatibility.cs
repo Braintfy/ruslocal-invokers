@@ -339,6 +339,7 @@ namespace InvokersRu.Core.Patching
         public string? OrderedKeysetSha256 { get; set; }
         public RuntimeCacheCompatibility Profile { get; set; } = new RuntimeCacheCompatibility();
         internal RuntimeCacheCompatibility? OfficialUpdatePredecessor { get; set; }
+        internal string? SnapshotlessStateSha256 { get; set; }
         public PatchState? State { get; set; }
         public PatchJournal? Journal { get; set; }
     }

@@ -1011,6 +1011,11 @@ namespace InvokersRu.Cli
                     selectedProfile,
                     statePath,
                     officialUpdatePredecessor);
+                if (installed == null
+                    && selectedInspection.Status == InstallationStatus.InconsistentState
+                    && RuntimeCacheService.TryInspectSnapshotlessLegacyOfficialUpdate(
+                        root, statePath, selectedProfile, out RuntimeCacheInspection legacyOfficialUpdate))
+                    selectedInspection = legacyOfficialUpdate;
                 if (installed != null && translationUpdate
                     && selectedInspection.Status != InstallationStatus.PatchSupersededByCatalogUpdate)
                     return null;

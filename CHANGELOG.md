@@ -1,5 +1,11 @@
 # Changelog
 
+## Windows 3.1.6 Preview — 2026-09-01
+
+- Fixed upgrades from legacy compatible-revision installations that predate immutable EN/stamp snapshots. After the game replaces the old patch with a newer structurally compatible official EN/UK tuple, the patcher can preserve the stale state and original backup in history, then apply only catalog rows whose current English source and Ukrainian hint hashes match exactly.
+- The fallback is deliberately narrow: it requires a current signed catalog, a ready compatible profile, a canonical valid legacy state and backup, a different newer tuple in the same LOC1 family, and both legacy source snapshots to be absent. Partial or tampered snapshots, changed state during confirmation, noncanonical paths, corrupted backups and running game/launcher processes remain blocked.
+- Added a mutation regression covering state archival, TOCTOU rejection, new compatible installation and verified restoration. Translation data 5 is unchanged; changed EN/UK 83 strings without exact catalog matches remain English until the translation catalog is refreshed.
+
 ## Windows 3.1.5 Preview — 2026-08-31
 
 - Added user-confirmed EXE updates from a fixed GitHub channel. A separate, domain-separated P-256 manifest pins the installer version, URL, length, SHA-256, expiry and monotonic sequence. Rejects tampering, rollback, untrusted redirects and incomplete downloads before execution. No shell, arbitrary arguments, elevation request, game-process termination or game-file writes in this path.

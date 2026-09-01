@@ -1235,6 +1235,59 @@ namespace InvokersRu.SmokeTests
                 Require(!File.Exists(statePath)
                     && Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), Hashing.Sha256Bytes(baseB)),
                     "Compatible future revision did not restore its own immutable official backup.");
+
+                // Legacy compatible installs created before immutable EN/stamp snapshots must not strand
+                // a user after the launcher writes a newer official tuple. The old JSON and base backup
+                // are preserved, while partial/tampered snapshots remain fail-closed.
+                File.WriteAllBytes(englishPath, englishA);
+                File.WriteAllBytes(targetPath, baseA);
+                File.WriteAllBytes(stampPath, stampA);
+                RuntimeCacheInspection legacyOriginal = RuntimeCacheService.Inspect(cacheRoot, builtA.Profile, statePath);
+                PatchApplyResult legacyApplied = RuntimeCacheService.Apply(legacyOriginal, catalogPath, statePath);
+                string legacyBackup = legacyApplied.State.BackupPath;
+                (englishSnapshot, stampSnapshot) = RuntimeCacheService.ResolveCompatibleSourceSnapshotPaths(legacyBackup);
+                File.Delete(englishSnapshot);
+                File.Delete(stampSnapshot);
+                File.WriteAllBytes(englishPath, englishB);
+                File.WriteAllBytes(targetPath, baseB);
+                File.WriteAllBytes(stampPath, stampB);
+
+                RuntimeUpdateResolution snapshotless = RuntimeUpdateResolver.Resolve(
+                    cacheRoot, statePath, builtA.Profile, catalogPath, coordinator: null);
+                Require(snapshotless.Profile.Mode == CompatibleRevisionProfileBuilder.Mode
+                    && snapshotless.Inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate
+                    && snapshotless.Inspection.SnapshotlessStateSha256 != null
+                    && Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), Hashing.Sha256Bytes(baseB)),
+                    "A newer compatible tuple stranded valid legacy state whose EN/stamp snapshots never existed.");
+
+                byte[] legacyState = File.ReadAllBytes(statePath);
+                MutationTestHooks.BeforeSupersededStateArchive = path =>
+                {
+                    PatchState changed = PatchPlanner.TryLoadState(path)
+                        ?? throw new InvalidOperationException("Legacy state disappeared before archive race test.");
+                    changed.AppliedTranslations--;
+                    File.WriteAllText(path, JsonSerializer.Serialize(changed), new UTF8Encoding(false));
+                };
+                try
+                {
+                    ExpectCompatibleRejected(() => RuntimeCacheService.Apply(
+                        snapshotless.Inspection, snapshotless.CatalogPath, statePath));
+                }
+                finally
+                {
+                    MutationTestHooks.BeforeSupersededStateArchive = null;
+                    File.WriteAllBytes(statePath, legacyState);
+                }
+                Require(Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), Hashing.Sha256Bytes(baseB)),
+                    "A raced legacy-state archive changed the official target before rejection.");
+
+                PatchApplyResult snapshotlessApplied = RuntimeCacheService.Apply(
+                    snapshotless.Inspection, snapshotless.CatalogPath, statePath);
+                Require(File.Exists(legacyBackup)
+                    && Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), snapshotlessApplied.State.PatchedSha256)
+                    && Directory.GetFiles(Path.Combine(stateRoot, "history", "superseded"), "*.json").Length == 2,
+                    "Snapshotless legacy transition did not preserve the old backup/state and install the new compatible artifact.");
+                RuntimeCacheService.Restore(statePath, snapshotless.Profile);
             }
             finally
             {

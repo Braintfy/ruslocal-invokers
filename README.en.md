@@ -19,13 +19,13 @@ Only Windows and macOS builds are currently distributed. Legacy Android tools re
 
 ### Windows
 
-**Windows 3.1.5:** clearer instructions, wrapping text, readable buttons, and updates for the patcher itself. Includes the 3.1.4 JIT fix. Do not delete patch state or backups.
+**Windows 3.1.6:** compatible translation rows can be installed after newer game revisions, including migration from legacy installs without EN/stamp snapshots. Stale state and its original backup are preserved; changed rows remain English. It also includes the clearer 3.1.5 UI and self-updater. Do not delete patch state or backups.
 
 1. Download the Windows installer from [Releases](https://github.com/Braintfy/ruslocal-invokers/releases/latest).
 2. Select **Ukrainian** in the game, wait for the download, then close the game and launcher completely.
 3. Run the localizer, select **Check**, then install or update the translation.
 
-**Upgrading an old patcher:** install **3.1.5** over versions 3.1.2–3.1.4 once. It then checks GitHub for application updates on startup and when you click Check. With your approval, it downloads the verified installer and restarts. There is also an Update patcher button. Offline checks do not prevent use of the installed version. The [previous direct link](https://github.com/Braintfy/ruslocal-invokers/releases/download/v3.1.2-preview/InvokersRu-3.1-Preview-3.1.2-preview-win-x64.exe) still works; its internal version is 3.1.5.
+**Upgrading an old patcher:** 3.1.5 offers **3.1.6** through its updater. Install the current EXE over versions 3.1.2–3.1.4 once. It then checks GitHub for application updates on startup and when you click Check. The [previous direct link](https://github.com/Braintfy/ruslocal-invokers/releases/download/v3.1.2-preview/InvokersRu-3.1-Preview-3.1.2-preview-win-x64.exe) still works; its internal version is 3.1.6.
 
 Translation data updates remain separate: click Update translation when offered to apply new text. Technical output is hidden under Support details, with show and copy buttons. Windows may warn about an unknown publisher: Authenticode signing is still pending; the signed update description and SHA-256 are verified independently.
 
