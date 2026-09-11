@@ -34,6 +34,18 @@ namespace InvokersRu.SmokeTests
                 && parsed.Observed.GameVersion == "0.60.1247",
                 "A valid exact ready-to-apply response was rejected or lost its observed/catalog identity.");
 
+            JsonObject protectedGame = Clone(ready);
+            protectedGame["protection_check"]!["status"] = "blocked";
+            protectedGame["protection_check"]!["evidence"] = new JsonArray("dl_uk_UA.bin.sig");
+            protectedGame["plan"] = "REFUSE_GAME_PROTECTION";
+            protectedGame["can_apply"] = false;
+            Require(!Parse(protectedGame, 0).CanApply, "Protection evidence did not block installation.");
+            protectedGame["can_apply"] = true;
+            ExpectInvalid(protectedGame, 0, "protection bypass in CLI buttons");
+            JsonObject missingProtection = Clone(ready);
+            missingProtection.Remove("protection_check");
+            ExpectInvalid(missingProtection, 0, "missing protection preflight");
+
             JsonObject compatible = Clone(ready);
             Profile(compatible)["mode"] = "compatible-revision";
             compatible["message"] = "Compatible revision with exact per-row source and hint matching.";
@@ -370,7 +382,7 @@ namespace InvokersRu.SmokeTests
                 "A valid patched state was not accepted for restore.");
 
             JsonObject freshLkg = Clone(ready);
-            freshLkg["schema"] = 3;
+            freshLkg["schema"] = 4;
             Catalog(freshLkg)["source"] = "LastKnownGood";
             freshLkg["update"] = CurrentLkgUpdateObject();
             freshLkg["channel_authority"] = ChannelAuthority(CurrentLkgUpdateObject());
@@ -432,7 +444,7 @@ namespace InvokersRu.SmokeTests
                 "catalog-superseded state without canonical content-update kind");
 
             JsonObject tooOld = Clone(ready);
-            tooOld["schema"] = 3;
+            tooOld["schema"] = 4;
             tooOld["patcher_version"] = "3.1.0";
             Catalog(tooOld)["source"] = "LastKnownGood";
             tooOld["update"] = TooOldUpdateObject();
@@ -447,7 +459,7 @@ namespace InvokersRu.SmokeTests
                 "A newest too-old channel head did not block an older selected LKG catalog.");
 
             JsonObject freshTooOld = Clone(ready);
-            freshTooOld["schema"] = 3;
+            freshTooOld["schema"] = 4;
             freshTooOld["patcher_version"] = "3.1.0";
             freshTooOld["catalog"] = new JsonObject
             {
@@ -482,7 +494,7 @@ namespace InvokersRu.SmokeTests
                 "GUI accepted ChannelHead metadata whose profile policy was not signed by that authority.");
 
             JsonObject corruptAcceptedHead = Clone(ready);
-            corruptAcceptedHead["schema"] = 3;
+            corruptAcceptedHead["schema"] = 4;
             Catalog(corruptAcceptedHead)["source"] = "embedded";
             corruptAcceptedHead["update_problem"] = "Newest accepted metadata no longer authenticates.";
             corruptAcceptedHead["update_problem_blocks_apply"] = true;
@@ -492,7 +504,7 @@ namespace InvokersRu.SmokeTests
                 "A corrupt accepted channel head allowed the embedded bootstrap catalog to be applied.");
 
             JsonObject corruptHeadPatched = Clone(patched);
-            corruptHeadPatched["schema"] = 3;
+            corruptHeadPatched["schema"] = 4;
             Catalog(corruptHeadPatched)["source"] = "embedded";
             corruptHeadPatched["update_problem"] = "Newest accepted metadata no longer authenticates.";
             corruptHeadPatched["update_problem_blocks_apply"] = true;
@@ -539,7 +551,7 @@ namespace InvokersRu.SmokeTests
                 "RecoveryRequired with the CLI's intentional exit code 5 was rejected.");
 
             JsonObject historicalRecovery = Clone(recovery);
-            historicalRecovery["schema"] = 3;
+            historicalRecovery["schema"] = 4;
             historicalRecovery["profile"]!["id"] = "runtime-cache-win64-historical-profile";
             Catalog(historicalRecovery)["source"] = "embedded";
             Catalog(historicalRecovery)["sha256"] = HashC;
@@ -812,7 +824,7 @@ namespace InvokersRu.SmokeTests
         {
             return new JsonObject
             {
-                ["schema"] = 3,
+                ["schema"] = 4,
                 ["patcher_version"] = "3.0.0.0",
                 ["installation_writes_enabled"] = true,
                 ["status"] = "CompatibleOriginal",
@@ -895,6 +907,12 @@ namespace InvokersRu.SmokeTests
                 ["state"] = null,
                 ["journal"] = null,
                 ["process_conflicts"] = new JsonArray(),
+                ["protection_check"] = new JsonObject
+                {
+                    ["status"] = "no-known-markers",
+                    ["checked_paths"] = new JsonArray(Path.GetFullPath(Path.GetTempPath())),
+                    ["evidence"] = new JsonArray()
+                },
                 ["plan"] = "READY_TO_APPLY",
                 ["can_apply"] = true,
                 ["can_restore"] = false,

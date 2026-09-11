@@ -19,13 +19,13 @@ Only Windows and macOS builds are currently distributed. Legacy Android tools re
 
 ### Windows
 
-**Windows 3.1.6:** compatible translation rows can be installed after newer game revisions, including migration from legacy installs without EN/stamp snapshots. Stale state and its original backup are preserved; changed rows remain English. It also includes the clearer 3.1.5 UI and self-updater. Do not delete patch state or backups.
+**Windows 3.1.7:** installation checks for known game protection components and localization integrity metadata, and pauses with an explanation when detected. Newer language revisions remain supported. Reapplication after an official game update is also fixed. Do not delete patch state or backups.
 
 1. Download the Windows installer from [Releases](https://github.com/Braintfy/ruslocal-invokers/releases/latest).
 2. Select **Ukrainian** in the game, wait for the download, then close the game and launcher completely.
 3. Run the localizer, select **Check**, then install or update the translation.
 
-**Upgrading an old patcher:** 3.1.5 offers **3.1.6** through its updater. Install the current EXE over versions 3.1.2–3.1.4 once. It then checks GitHub for application updates on startup and when you click Check. The [previous direct link](https://github.com/Braintfy/ruslocal-invokers/releases/download/v3.1.2-preview/InvokersRu-3.1-Preview-3.1.2-preview-win-x64.exe) still works; its internal version is 3.1.6.
+**Upgrading an old patcher:** versions 3.1.5–3.1.6 offer **3.1.7** through their updater. Install the current EXE over versions 3.1.2–3.1.4 once. It then checks GitHub for application updates on startup and when you click Check. The [previous direct link](https://github.com/Braintfy/ruslocal-invokers/releases/download/v3.1.2-preview/InvokersRu-3.1-Preview-3.1.2-preview-win-x64.exe) is preserved.
 
 Translation data updates remain separate: click Update translation when offered to apply new text. Technical output is hidden under Support details, with show and copy buttons. Windows may warn about an unknown publisher: Authenticode signing is still pending; the signed update description and SHA-256 are verified independently.
 
@@ -45,6 +45,10 @@ Do not reopen the language selector after installation: the client downloads the
 The Mac localizer's **Открыть игру** button starts the native client with `uk_UA`, preventing the official launcher from reselecting English through `-language en_US`.
 
 ## What changes
+
+**Protection checks and account risk.** Windows 3.1.7 and Mac script 2.9.0 inspect the selected cache and discovered game installation before writing. Recognized anti-cheat files or localization signature/checksum metadata pause installation. Do not delete those files or disable protection; send the diagnostic details to the maintainer. Restoring a verified original backup remains available with the game closed.
+
+This is not an anti-ban guarantee. Unknown protection, server checks, and changes to game rules cannot reliably be detected from local files. When the game installation cannot be located, only the cache is checked; Windows support details list the checked paths. No detected markers does not mean an account cannot be banned. Avoid applying the translation if the developers prohibit it. [Technical scope and limitations](docs/game-protection-checks.md).
 
 The localizer composes `dl_uk_UA.bin` from the installed game files and the public translation catalog. It modifies only the user localization cache; game executables, code signature, and protection remain untouched. A verified backup is created before replacement, and **Восстановить оригинал** restores it.
 

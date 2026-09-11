@@ -330,6 +330,12 @@ namespace InvokersRu.Cli
                     channelAuthority,
                     remoteProblem,
                     remoteProblemBlocksApply);
+                // An exact current profile authenticates the new tuple, but not the state left by
+                // the previous installation. The compatible resolver already authenticated that
+                // transition, including the immutable predecessor and its full inspection. Keep
+                // it instead of re-inspecting the old state against unrelated new exact pins.
+                if (compatibleInstalled?.Inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate)
+                    return compatibleInstalled;
             }
             RuntimeCacheCompatibility? installedProfile = compatibleInstalled?.InstalledProfile
                 ?? embeddedHistorical?.InstalledProfile

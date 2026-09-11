@@ -1,5 +1,13 @@
 # Changelog
 
+## Windows 3.1.7 Preview / Mac script 2.9.0 / translation data 9 — 2026-09-11
+
+- Updated the Russian catalog for EN/UK `Prod_0.60.0_97`: 2 changed English sources, 15 changed Ukrainian hints, and 2 removed ClanBoss IDs. Composition applies 41,040 Russian rows, with one legacy service entry in English and 254 empty base entries; zero validation errors.
+- Added conservative pre-write checks for known anti-cheat components and localization integrity sidecars in the selected cache and discovered game installation. Detection or an incomplete scan blocks installation with an explanation. Checks repeat immediately before replacement; verified restoration remains available. No protection is disabled or bypassed, and account safety against unknown/server-side checks is not guaranteed.
+- Fixed an exact signed profile masking an authenticated official-update transition from an older compatible installation. Preserve the validated transition and backups when the game replaces the translated language files.
+- Windows 3.1.5+ receives 3.1.7 through its signed app updater. Mac bundle 3.0.0 downloads script 2.9.0; a replacement DMG is unnecessary. Translation data 9 requires Windows 3.1.7 so the new preflight is present.
+
+
 ## Windows 3.1.6 Preview — 2026-09-01
 
 - Fixed upgrades from legacy compatible-revision installations that predate immutable EN/stamp snapshots. After the game replaces the old patch with a newer structurally compatible official EN/UK tuple, the patcher can preserve the stale state and original backup in history, then apply only catalog rows whose current English source and Ukrainian hint hashes match exactly.

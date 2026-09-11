@@ -5,7 +5,7 @@
 set -uo pipefail
 
 # Version of this script. It updates itself from the repository; the bundle around it stays frozen.
-APP_VERSION="2.8.0"
+APP_VERSION="2.9.0"
 # Version of the application bundle, which only changes when the launcher or the CLI has to change.
 BUNDLE_VERSION="3.0.0"
 # Oldest bundle that still works. Kept apart from BUNDLE_VERSION so rebuilding the image does not tell
@@ -228,6 +228,80 @@ game_bundle() {
     hit="$(mdfind "kMDItemCFBundleIdentifier == 'hitzone.anima.spirit.guardians'" 2>/dev/null | head -1)"
     if [ -n "$hit" ] && [ -d "$hit" ]; then printf '%s\n' "$hit"; return 0; fi
     [ -d "/Applications/Invokers.app" ] && { printf '%s\n' "/Applications/Invokers.app"; return 0; }
+    return 1
+}
+
+# A precaution, not a promise about account bans: server-side rules and unknown protections cannot
+# be detected locally. Only inspect the selected localization cache and the discovered Invokers app;
+# ordinary app signing (_CodeSignature/CodeResources), .ver and .src are not protection evidence.
+# Do not follow symlinks into unrelated applications or system directories.
+protection_reason() {
+    local cache_root="$1" marker bundle found
+    if [ ! -r "$cache_root" ] || [ ! -x "$cache_root" ] || [ -L "$cache_root" ]; then
+        printf 'Не удалось проверить папку локализации: %s' "$cache_root"
+        return 0
+    fi
+    for marker in "$ENGLISH_NAME" "$TARGET_NAME" "${TARGET_NAME}.ver"; do
+        if [ -L "${cache_root}/${marker}" ]; then
+            printf 'Языковой файл является ссылкой и не может быть проверен: %s/%s' "$cache_root" "$marker"
+            return 0
+        fi
+    done
+    found="$(find "$cache_root" -type d ! -path "$cache_root" -prune -o -print 2>>"$LOG_FILE" | LC_ALL=C awk '
+        function sidecar(name) {
+            return name ~ /^(dl_)?(en_us|uk_ua)\.bin(\.(br|gz))?(\.(ver|src))?\.(sig|signature|sha256|sha512|hmac|p7s|manifest|checksum)$/ ||
+                   name ~ /^(localization|i18n)[._-](manifest|checksums?|signatures?)(\.json)?(\.(sig|signature|sha256|sha512|hmac|p7s|manifest|checksum))?$/
+        }
+        { name=$0; sub(/^.*\//, "", name); if (!first && sidecar(tolower(name))) first=$0 }
+        END { if (first) print first }
+    ')" || { printf 'Не удалось полностью проверить папку локализации: %s' "$cache_root"; return 0; }
+    if [ -n "$found" ]; then
+        printf 'Обнаружен файл проверки локализации: %s' "$found"
+        return 0
+    fi
+
+    bundle="$(game_bundle || true)"
+    [ -n "$bundle" ] || return 0
+    if [ -L "$bundle" ] || [ ! -r "$bundle" ] || [ ! -x "$bundle" ]; then
+        printf 'Не удалось проверить найденное приложение игры: %s' "$bundle"
+        return 0
+    fi
+    # find walks only this app, never the disk. awk consumes the complete list so unreadable
+    # subdirectories produce a failure instead of a partial scan being reported as successful.
+    found="$(find "$bundle" -print 2>>"$LOG_FILE" | LC_ALL=C awk '
+        function anticheat(name) {
+            return name == "easyanticheat" || name == "easyanticheat_eos" || name ~ /^easyanticheat.*\.(exe|dll|sys|dylib|so)$/ ||
+                   name == "battleye" || name ~ /^beservice.*\.exe$/ || name == "bedaisy.sys" ||
+                   name ~ /^beclient.*\.(dll|dylib|so)$/ || name ~ /^lib(easyanticheat|beclient).*\.(dylib|so)$/ ||
+                   name ~ /^equ8/ || name ~ /^xigncode/ || name ~ /^xhunter.*\.sys$/ || name == "x3.xem" ||
+                   name ~ /^ace-base/ || name == "anticheatexpert" ||
+                   name ~ /^anticheat\.(exe|dll|sys|dylib|so)$/ || name == "gameguard" || name == "gameguard.des"
+        }
+        { name=$0; sub(/^.*\//, "", name); if (!first && anticheat(tolower(name))) first=$0 }
+        END { if (first) print first }
+    ')" || { printf 'Не удалось полностью проверить файлы игры: %s' "$bundle"; return 0; }
+    if [ -n "$found" ]; then
+        printf 'Обнаружен компонент защиты игры: %s' "$found"
+        return 0
+    fi
+}
+
+require_patch_preflight() {
+    local reason
+    if game_running; then
+        say_error "Игра была запущена во время подготовки. Полностью закройте игру и лаунчер, затем повторите установку."
+        return 1
+    fi
+    reason="$(protection_reason "$1")" || reason="Не удалось завершить проверку файлов игры."
+    [ -n "$reason" ] || return 0
+    printf 'PROTECTION_CHECK_BLOCKED: %s\n' "$reason" >>"$LOG_FILE"
+    say_error "Установка перевода остановлена.
+
+${reason}
+
+Изменение локализации при наличии защиты может привести к блокировке аккаунта. Не удаляйте эти файлы и не отключайте защиту. Дождитесь проверки совместимости; если перевод уже установлен, закройте игру и воспользуйтесь «Восстановить оригинал».
+
+Проверка локальных файлов не может гарантировать отсутствие банов или обнаружить серверные ограничения."
     return 1
 }
 
@@ -724,6 +798,7 @@ do_install() {
         return 1
     fi
 
+    require_patch_preflight "$cache_root" || return 1
     progress_start "downloading overlay"
     if ! refresh_overlay; then
         say_error "Не удалось загрузить перевод и нет сохранённой копии.
@@ -783,6 +858,8 @@ do_install() {
         fi
     fi
 
+    # Recheck after downloads/build/backup: the launcher may have added protection in that time.
+    require_patch_preflight "$cache_root" || return 1
     if ! atomic_install "$built" "$target"; then
         say_error "Не удалось записать файл перевода. Ничего не изменено."
         return 1
@@ -846,6 +923,10 @@ do_restore() {
         say_info "В игре уже стоит оригинальный файл."
         return 0
     fi
+    if game_running; then
+        say_error "Полностью закройте игру и лаунчер перед восстановлением оригинала."
+        return 1
+    fi
     if ! atomic_install "$backup" "$target"; then
         say_error "Не удалось восстановить оригинал."
         return 1
@@ -885,7 +966,7 @@ gui_emit() {
 
 gui_status() {
     local cache_root target version client state title detail current original patched running="no"
-    local language language_label can_install="no"
+    local language language_label can_install="no" protection
     cache_root="$(find_cache_root || true)"
     game_running && running="yes"
     language="$(preferred_language)"
@@ -957,6 +1038,14 @@ gui_status() {
     fi
     if [ -f "$target" ] && { [ -z "$language" ] || [ "$language" = "8" ]; }; then
         can_install="yes"
+    fi
+    protection="$(protection_reason "$cache_root")" || protection="Не удалось завершить проверку файлов игры."
+    if [ -n "$protection" ]; then
+        state="changed"
+        title="Установка остановлена: проверка защиты"
+        detail="Возможна защита файлов игры. Подробности — в журнале. Закройте игру и восстановите оригинал."
+        can_install="no"
+        printf 'PROTECTION_CHECK_BLOCKED: %s\n' "$protection" >>"$LOG_FILE"
     fi
     gui_emit STATE "$state"
     gui_emit TITLE "$title"
@@ -1063,9 +1152,9 @@ esac
 if [ "$RESUMING" = false ]; then
     choice="$(ask "Неофициальный любительский русификатор Invokers: Titan Legacy.
 
-Приложение не связано с HitZone Inc. Оно изменяет только один файл кэша локализации внутри папки данных игры и не трогает саму игру, её подпись и защиту. Оригинал сохраняется, откат доступен в любой момент.
+Приложение не связано с HitZone Inc. Оно изменяет один файл кэша локализации внутри папки данных игры и сохраняет оригинал. При известных локальных признаках защиты установка останавливается. Проверка не обнаруживает все возможные защиты и серверные ограничения и не гарантирует отсутствие банов.
 
-Для текущего клиента 0.60.1289 применяется 40 997 строк из 41 292; строки, не прошедшие строгую проверку, остаются оригинальными. Перевод любительский. Используйте на свой риск." "Выход" "Продолжить")"
+Перевод загружается из каталога проекта и собирается для найденных языковых файлов. Количество переведённых строк будет показано после установки; строки, не прошедшие проверку, остаются оригинальными. Перевод любительский. Используйте на свой риск." "Выход" "Продолжить")"
     [ "$choice" = "Продолжить" ] || exit 0
 fi
 

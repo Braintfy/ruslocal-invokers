@@ -739,6 +739,7 @@ namespace InvokersRu.Cli
                 ? PatchService.FindRuntimeCacheProcessConflicts()
                 : Array.Empty<string>();
             bool remoteApplyAuthorized = RuntimeUpdateAuthorization.CanApply(resolution, DateTimeOffset.UtcNow);
+            GameProtectionCheck protection = GameProtectionGuard.Inspect(cacheRoot);
             bool restorationAuthorized = RuntimeUpdateAuthorization.CanRestoreOrRecover(resolution);
             bool translationUpdateAvailable = resolution.TranslationUpdateAvailable
                 || inspection.Status == InstallationStatus.PatchSupersededByCatalogUpdate;
@@ -750,6 +751,7 @@ namespace InvokersRu.Cli
                 translationUpdateAvailable,
                 remoteApplyAuthorized,
                 restorationAuthorized);
+            if (protection.BlocksApply) action = "REFUSE_GAME_PROTECTION";
             if (options.Has("json"))
             {
                 VerifiedSignedUpdate? selectedUpdate = resolution.Bundle?.Update;
@@ -792,7 +794,7 @@ namespace InvokersRu.Cli
                 };
                 Console.WriteLine(JsonSerializer.Serialize(new
                 {
-                    schema = 3,
+                    schema = 4,
                     patcher_version = GetPatcherVersion(),
                     installation_writes_enabled = InstallationWritesEnabled,
                     status = inspection.Status.ToString(),
@@ -890,13 +892,19 @@ namespace InvokersRu.Cli
                         transaction_id = inspection.Journal.TransactionId
                     },
                     process_conflicts = conflicts,
+                    protection_check = new
+                    {
+                        status = protection.Status,
+                        checked_paths = protection.CheckedPaths,
+                        evidence = protection.Evidence
+                    },
                     plan = plan ? action : null,
                     can_apply = plan && (translationUpdateAvailable
                         || inspection.Status == InstallationStatus.CompatibleOriginal
                         || inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate
                         || inspection.Status == InstallationStatus.PatchSupersededByCatalogUpdate)
                         && conflicts.Count == 0 && InstallationWritesEnabled && profile.Certified
-                        && catalog.ExactMatch && remoteApplyAuthorized,
+                        && catalog.ExactMatch && remoteApplyAuthorized && !protection.BlocksApply,
                     can_restore = plan && (inspection.Status == InstallationStatus.PatchedByThisTool
                             || inspection.Status == InstallationStatus.PatchSupersededByCatalogUpdate
                             || resolution.InstalledInspection?.Status == InstallationStatus.PatchedByThisTool)
@@ -909,6 +917,7 @@ namespace InvokersRu.Cli
             Console.WriteLine($"Status: {inspection.Status}");
             Console.WriteLine(inspection.Message);
             Console.WriteLine($"Cache root: {inspection.CacheRoot}");
+            Console.WriteLine($"Protection preflight: {protection.Status}; {string.Join("; ", protection.Evidence)}");
             Console.WriteLine($"English SHA-256: {inspection.EnglishSha256 ?? "n/a"}");
             Console.WriteLine($"Base SHA-256: {inspection.BaseSha256 ?? "n/a"}");
             Console.WriteLine($"Stamp SHA-256: {inspection.StampSha256 ?? "n/a"}");
@@ -1159,6 +1168,7 @@ namespace InvokersRu.Cli
             EnsureInstallationWritesEnabled();
             RequireRiskAcknowledgement(options);
             string cacheRoot = ResolveCacheRootForMutation(options);
+            GameProtectionGuard.RequireAllowed(cacheRoot);
             RuntimeUpdateResolution resolution = ResolveRuntimeMutation(cacheRoot, out SignedUpdateCoordinator? coordinator);
             using (coordinator)
             {

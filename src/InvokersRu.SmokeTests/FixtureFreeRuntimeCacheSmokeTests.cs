@@ -1252,12 +1252,27 @@ namespace InvokersRu.SmokeTests
                 File.WriteAllBytes(targetPath, baseB);
                 File.WriteAllBytes(stampPath, stampB);
 
+                RuntimeUpdateResolution snapshotlessChangedKeyset = RuntimeUpdateResolver.Resolve(
+                    cacheRoot, statePath, builtA.Profile, catalogPath, coordinator: null);
+                Require(snapshotlessChangedKeyset.Inspection.Status != InstallationStatus.PatchSupersededByOfficialUpdate
+                    && snapshotlessChangedKeyset.Inspection.SnapshotlessStateSha256 == null,
+                    "Snapshotless legacy recovery accepted an expanded keyset without source snapshots.");
+
+                // Snapshotless recovery deliberately requires the same entry count. The earlier A->B
+                // case tests added entries with authenticated snapshots; this legacy case has neither.
+                byte[] snapshotlessEnglish = CreateLoc1(1, 271, 0x11115555,
+                    new[] { "Open", "Exit" }, "Prod_synthetic_271");
+                byte[] snapshotlessBase = CreateLoc1(8, 271, 0x33337777,
+                    new[] { "Відкрити", "Вийти" }, "Prod_synthetic_271");
+                File.WriteAllBytes(englishPath, snapshotlessEnglish);
+                File.WriteAllBytes(targetPath, snapshotlessBase);
+
                 RuntimeUpdateResolution snapshotless = RuntimeUpdateResolver.Resolve(
                     cacheRoot, statePath, builtA.Profile, catalogPath, coordinator: null);
                 Require(snapshotless.Profile.Mode == CompatibleRevisionProfileBuilder.Mode
                     && snapshotless.Inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate
                     && snapshotless.Inspection.SnapshotlessStateSha256 != null
-                    && Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), Hashing.Sha256Bytes(baseB)),
+                    && Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), Hashing.Sha256Bytes(snapshotlessBase)),
                     "A newer compatible tuple stranded valid legacy state whose EN/stamp snapshots never existed.");
 
                 byte[] legacyState = File.ReadAllBytes(statePath);
@@ -1278,7 +1293,7 @@ namespace InvokersRu.SmokeTests
                     MutationTestHooks.BeforeSupersededStateArchive = null;
                     File.WriteAllBytes(statePath, legacyState);
                 }
-                Require(Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), Hashing.Sha256Bytes(baseB)),
+                Require(Hashing.FixedEqualsHex(Hashing.Sha256File(targetPath), Hashing.Sha256Bytes(snapshotlessBase)),
                     "A raced legacy-state archive changed the official target before rejection.");
 
                 PatchApplyResult snapshotlessApplied = RuntimeCacheService.Apply(
@@ -1674,7 +1689,7 @@ namespace InvokersRu.SmokeTests
 
             using JsonDocument document = JsonDocument.Parse(standardOut.ToString());
             JsonElement response = document.RootElement;
-            Require(response.GetProperty("schema").GetInt32() == 3
+            Require(response.GetProperty("schema").GetInt32() == 4
                 && response.GetProperty("patcher_version").ValueKind == JsonValueKind.String
                 && !response.GetProperty("installation_writes_enabled").GetBoolean()
                 && response.GetProperty("status").ValueKind == JsonValueKind.String

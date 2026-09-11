@@ -452,6 +452,26 @@ namespace InvokersRu.SmokeTests
                 cacheStore.StoreCatalog(exactCompressed, exactHead.Update);
                 stateStore.RecordAcceptedManifest(exactHead.Update);
 
+                // A signed exact profile can arrive after the game has replaced the old installed
+                // patch. Keep the authenticated official-update transition found by adaptive resolution.
+                RuntimeUpdateResolution exactHeadAfterGameUpdate = RuntimeUpdateResolver.Resolve(
+                    legacyCacheRoot, legacyStatePath, legacyExact, catalogPath, coordinator);
+                Require(exactHeadAfterGameUpdate.Inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate
+                    && exactHeadAfterGameUpdate.Inspection.OfficialUpdatePredecessor?.Id == legacyExact.Id
+                    && RuntimeUpdateAuthorization.CanApply(exactHeadAfterGameUpdate, InitialNow)
+                    && !RuntimeUpdateAuthorization.CanRestoreOrRecover(exactHeadAfterGameUpdate),
+                    $"A new exact channel profile discarded the authenticated game-update transition: "
+                    + $"status={exactHeadAfterGameUpdate.Inspection.Status}, "
+                    + $"predecessor={exactHeadAfterGameUpdate.Inspection.OfficialUpdatePredecessor?.Id ?? "null"}.");
+                File.WriteAllBytes(legacyBackupPath, baseRaw);
+                RuntimeUpdateResolution tamperedPredecessor = RuntimeUpdateResolver.Resolve(
+                    legacyCacheRoot, legacyStatePath, legacyExact, catalogPath, coordinator);
+                Require(tamperedPredecessor.Inspection.Status != InstallationStatus.PatchSupersededByOfficialUpdate
+                    && tamperedPredecessor.Inspection.OfficialUpdatePredecessor == null
+                    && !RuntimeUpdateAuthorization.CanRestoreOrRecover(tamperedPredecessor),
+                    "An altered predecessor backup authenticated a transition to the new exact profile.");
+                File.WriteAllBytes(legacyBackupPath, oldBaseRaw);
+
                 File.WriteAllBytes(targetPath, patchedRaw);
                 File.WriteAllText(statePath, JsonSerializer.Serialize(ExactState()));
                 const string precedenceId = "71717171717171717171717171717171";
@@ -497,6 +517,47 @@ namespace InvokersRu.SmokeTests
                             property.GetValue(exactMigration.InstalledInspection)),
                         $"Exact migration lost observed inspection field {property.Name}; the GUI must receive the full authenticated identity.");
                 }
+
+                // The channel may later omit that exact profile. Its verified history and immutable
+                // backup must still authorize restoring the exact artifact that is actually installed.
+                string exactBackupPath = Path.Combine(
+                    Path.GetDirectoryName(statePath)!, "backups",
+                    $"{exactMigration.Profile.Id}-{Hashing.Sha256Text(exactMigration.Profile.Id).Substring(0, 12)}",
+                    $"{exactMigration.Profile.BaseSha256}.dl_uk_UA.bin");
+                Directory.CreateDirectory(Path.GetDirectoryName(exactBackupPath)!);
+                File.WriteAllBytes(exactBackupPath, baseRaw);
+                File.WriteAllBytes(targetPath, exactOutput);
+                var exactInstalledState = new PatchState
+                {
+                    BuildId = exactMigration.Profile.Id,
+                    GameRoot = Path.GetFullPath(cacheRoot),
+                    TargetPath = Path.GetFullPath(targetPath),
+                    BackupPath = exactBackupPath,
+                    OriginalSha256 = exactMigration.Profile.BaseSha256,
+                    PatchedSha256 = exactMigration.Profile.ExpectedOutputSha256!,
+                    TranslationsSha256 = exactMigration.Profile.TranslationCatalogSha256!,
+                    AppliedTranslations = exactMigration.Profile.ExpectedAppliedTranslations,
+                    AppliedAt = InitialNow
+                };
+                File.WriteAllText(statePath, JsonSerializer.Serialize(exactInstalledState));
+                SignedFixture adaptiveHead = SignFixture(key, publicKey,
+                    CreateManifest(72, "invokersru-data-policy-adaptive-again", exactCompressed, exactCatalog, 2),
+                    InitialNow);
+                cacheStore.StoreEnvelope(adaptiveHead.EnvelopeUtf8, adaptiveHead.Update);
+                cacheStore.StoreCatalog(exactCompressed, adaptiveHead.Update);
+                stateStore.RecordAcceptedManifest(adaptiveHead.Update);
+                RuntimeUpdateResolution exactHistoryRestore = RuntimeUpdateResolver.Resolve(
+                    cacheRoot, statePath, family, catalogPath, coordinator);
+                Require(exactHistoryRestore.InstalledProfile?.Id == signedExactProfile.ProfileId
+                    && exactHistoryRestore.InstalledInspection?.Status == InstallationStatus.PatchedByThisTool
+                    && RuntimeUpdateAuthorization.CanRestoreOrRecover(exactHistoryRestore),
+                    "An exact installed artifact lost restore authorization when the channel returned to adaptive profiles.");
+                exactInstalledState.PatchedSha256 = new string('A', 64);
+                File.WriteAllText(statePath, JsonSerializer.Serialize(exactInstalledState));
+                RuntimeUpdateResolution forgedExactState = RuntimeUpdateResolver.Resolve(
+                    cacheRoot, statePath, family, catalogPath, coordinator);
+                Require(!RuntimeUpdateAuthorization.CanRestoreOrRecover(forgedExactState),
+                    "Signed exact history authorized restore of a state with a forged output pin.");
             });
             Pass();
         }

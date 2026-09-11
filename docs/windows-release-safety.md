@@ -66,6 +66,14 @@ The Inno Setup definition is intentionally uneventful:
 The patcher performs game checks and mutations only after the player starts it
 and explicitly clicks the relevant action. Packaging never modifies game files.
 
+Starting with 3.1.7, the patcher checks the localization folder and discoverable
+game installation for known protection components and localization integrity
+sidecars, then repeats the check immediately before replacing game content.
+Detected markers or an incomplete inspection block translation installation;
+verified original restoration remains available. This is a conservative local
+preflight, not a guarantee against bans or unknown/server-side protection.
+See [scope and limitations](game-protection-checks.md).
+
 ## Authenticode and Defender expectations
 
 No technical setting can guarantee zero antivirus or SmartScreen warnings for a

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -672,7 +673,7 @@ internal sealed class MainForm : Form
             this,
             "Перед продолжением убедитесь: в игре выбран украинский язык, а игра и лаунчер полностью закрыты.\n\n"
             + selectionSummary + "\n\n"
-            + "Это предварительный перевод сообщества: часть формулировок ещё будет редактироваться. Оригинал сохраняется в проверенной резервной копии. Продолжить?",
+            + "Оригинал сохраняется в проверенной резервной копии. Проверка известных файлов защиты не гарантирует отсутствие блокировки аккаунта: правила и серверные проверки определяют разработчики игры. Продолжить?",
             metadataOnly
                 ? "Обновить служебные данные перевода"
                 : string.Equals(plan.Status, "PatchSupersededByOfficialUpdate", StringComparison.Ordinal)
@@ -737,7 +738,14 @@ internal sealed class MainForm : Form
         if (plan.Profile.EnglishFallbacks > 0)
             coverage += $" Пока на английском: {plan.Profile.EnglishFallbacks:N0}.";
 
-        if (plan.Status == "MissingFiles")
+        if (plan.ProtectionCheck.BlocksApply && plan.Status != "MissingFiles")
+            Show("Установка приостановлена", plan.ProtectionCheck.Status == "blocked"
+                    ? "Обнаружены файлы защиты или контроля целостности игры."
+                    : "Не удалось завершить проверку файлов защиты игры.",
+                "Не удаляйте и не отключайте защиту. Отправьте подробности автору и дождитесь проверки совместимости. "
+                + (plan.CanRestore ? "Можно вернуть проверенный оригинал кнопкой ниже. " : "")
+                + "Причина: " + string.Join("; ", plan.ProtectionCheck.Evidence.Take(2)), Theme.Danger);
+        else if (plan.Status == "MissingFiles")
             Show("Файлы языка не найдены", "Игра ещё не скачала украинский язык или её папка находится в другом месте.",
                 "Выберите украинский язык в игре и дождитесь загрузки. Затем закройте игру и нажмите «Проверить». "
                 + "Если папка не найдена, нажмите «Найти / выбрать папку».", Theme.Warning);

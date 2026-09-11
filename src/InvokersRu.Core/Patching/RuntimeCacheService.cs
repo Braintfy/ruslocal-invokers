@@ -315,6 +315,7 @@ namespace InvokersRu.Core.Patching
             MutationPolicy.RequireRuntimeRoot(cacheRoot);
             RequireInspectionPaths(inspection, englishPath, targetPath, stampPath);
             EnsureNoProcessConflicts();
+            GameProtectionGuard.RequireAllowed(cacheRoot);
             if (PatchJournalStore.FindActive(statePath) != null)
             {
                 throw new InvalidOperationException("An interrupted transaction requires recovery before runtime-cache apply.");
@@ -489,6 +490,7 @@ namespace InvokersRu.Core.Patching
                 PatchService.EnsureSupportedMutationPaths(cacheRoot, targetPath, statePath);
                 PatchService.RejectExistingReparseComponents(backupPath, "immutable runtime-cache backup");
                 PatchService.Advance(statePath, journal, "PreCommitVerified");
+                GameProtectionGuard.RequireAllowed(cacheRoot);
                 PatchService.AtomicReplacePreservingPreimage(tempPath, targetPath, sourcePreimageHash, statePath, journal);
                 committed = true;
                 if (!Hashing.FixedEqualsHex(HashRuntimeLoc1(targetPath, "replaced runtime-cache LOC1"), patchedHash)) throw new IOException("Replaced raw cache hash changed.");

@@ -34,6 +34,7 @@ internal sealed class CliPlanResult
         "REFUSE_MISSING_OR_MISMATCHED_CATALOG",
         "REFUSE_PATCHER_OR_SIGNED_DATA_NOT_CURRENT",
         "READY_TO_UPDATE_TRANSLATION",
+        "REFUSE_GAME_PROTECTION",
         "REFUSE_UNKNOWN_OR_INCONSISTENT"
     };
 
@@ -172,6 +173,10 @@ internal sealed class CliPlanResult
     [JsonRequired]
     public string[] ProcessConflicts { get; set; } = Array.Empty<string>();
 
+    [JsonPropertyName("protection_check")]
+    [JsonRequired]
+    public ProtectionCheckInfo ProtectionCheck { get; set; } = new();
+
     [JsonPropertyName("plan")]
     [JsonRequired]
     public string? PlanAction { get; set; }
@@ -275,7 +280,16 @@ internal sealed class CliPlanResult
 
     private void ValidateContract()
     {
-        Require(Schema == 3, "неподдерживаемая версия JSON-контракта");
+        Require(Schema == 4, "неподдерживаемая версия JSON-контракта");
+        Require(ProtectionCheck != null && ProtectionCheck.Status is "no-known-markers" or "blocked" or "incomplete",
+            "отсутствует проверка защиты игры");
+        Require(ProtectionCheck!.CheckedPaths != null && ProtectionCheck.CheckedPaths.Length is > 0 and <= 12
+            && ProtectionCheck.CheckedPaths.All(path => !string.IsNullOrWhiteSpace(path) && path.Length <= 32768 && Path.IsPathFullyQualified(path)),
+            "неверные пути проверки защиты");
+        Require(ProtectionCheck.Evidence != null && ProtectionCheck.Evidence.Length <= 8
+            && ProtectionCheck.Evidence.All(item => !string.IsNullOrWhiteSpace(item) && item.Length <= 65536)
+            && ProtectionCheck.BlocksApply == (ProtectionCheck.Evidence.Length > 0),
+            "причина остановки противоречит проверке защиты");
         Require(!string.IsNullOrWhiteSpace(PatcherVersion) && PatcherVersion.Length <= 64
             && Version.TryParse(PatcherVersion, out _), "некорректная версия патчера");
         Require(KnownStatuses.Contains(Status), "неизвестное состояние установки");
@@ -354,7 +368,7 @@ internal sealed class CliPlanResult
         bool expectedCanApply = (TranslationUpdateAvailable
                 || Status is "CompatibleOriginal" or "PatchSupersededByOfficialUpdate" or "PatchSupersededByCatalogUpdate")
             && !hasProcessConflicts && InstallationWritesEnabled && profile.Certified && catalog.ExactMatch
-            && remoteApplyAuthorized;
+            && remoteApplyAuthorized && !ProtectionCheck.BlocksApply;
         bool expectedCanRestore = Status is "PatchedByThisTool" or "PatchSupersededByCatalogUpdate"
             && !hasProcessConflicts && InstallationWritesEnabled && RestoreRecoveryAuthorized;
         bool expectedCanRecover = Status == "RecoveryRequired"
@@ -840,6 +854,7 @@ internal sealed class CliPlanResult
 
     private string ExpectedPlanAction(bool hasProcessConflicts)
     {
+        if (ProtectionCheck.BlocksApply) return "REFUSE_GAME_PROTECTION";
         if (Status is "UnknownBuild" or "InconsistentState" or "MissingFiles")
             return "REFUSE_UNKNOWN_OR_INCONSISTENT";
         bool installable = TranslationUpdateAvailable
@@ -897,6 +912,21 @@ internal sealed class CliPlanResult
     {
         return new InvalidDataException($"Проверяющий модуль вернул противоречивый ответ: {problem}.");
     }
+}
+
+internal sealed class ProtectionCheckInfo
+{
+    [JsonPropertyName("status")]
+    [JsonRequired]
+    public string Status { get; set; } = string.Empty;
+    [JsonPropertyName("checked_paths")]
+    [JsonRequired]
+    public string[] CheckedPaths { get; set; } = Array.Empty<string>();
+    [JsonPropertyName("evidence")]
+    [JsonRequired]
+    public string[] Evidence { get; set; } = Array.Empty<string>();
+    [JsonIgnore]
+    public bool BlocksApply => Status != "no-known-markers";
 }
 
 internal sealed class ObservedCacheIdentity

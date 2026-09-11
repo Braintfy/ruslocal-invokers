@@ -65,6 +65,7 @@ namespace InvokersRu.Core.Patching
             using ExecutionGuard executionGuard = ExecutionGuard.Acquire(inspection.GameRoot, statePath);
             EnsureSupportedMutationPaths(inspection.GameRoot, basePath, statePath);
             EnsureGameStopped(inspection.GameRoot);
+            GameProtectionGuard.RequireAllowed(Path.GetDirectoryName(basePath)!, inspection.GameRoot);
             if (PatchJournalStore.FindActive(statePath) != null)
             {
                 throw new InvalidOperationException("An interrupted transaction requires recovery before apply.");
@@ -195,6 +196,7 @@ namespace InvokersRu.Core.Patching
 
                 Advance(statePath, journal, "PreCommitVerified");
                 EnsureSupportedMutationPaths(inspection.GameRoot, basePath, statePath);
+                GameProtectionGuard.RequireAllowed(Path.GetDirectoryName(basePath)!, inspection.GameRoot);
                 AtomicReplacePreservingPreimage(tempPath, basePath, build.BaseSha256, statePath, journal);
                 committed = true;
                 if (!Hashing.FixedEqualsHex(Hashing.Sha256File(basePath), patchedHash))
