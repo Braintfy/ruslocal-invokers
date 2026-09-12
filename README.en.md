@@ -19,13 +19,13 @@ Only Windows and macOS builds are currently distributed. Legacy Android tools re
 
 ### Windows
 
-**Windows 3.1.8:** fixed a false running-game warning caused by UnityCrashHandler from other games. The window adapts to the screen, primary actions remain visible, and operations show an activity indicator, current stage and elapsed time. Game protection checks and support for newer language revisions remain in place. Do not delete patch state or backups.
+**Windows 3.1.9:** fixed the verification error after a successful translation installation: identical content is no longer treated as an update solely because exact and compatible profiles have different IDs. The installed translation and backup are preserved. The adaptive window, progress indicator and unrelated UnityCrashHandler fix from 3.1.8 remain in place. Do not delete patch state or backups.
 
 1. Download the Windows installer from [Releases](https://github.com/Braintfy/ruslocal-invokers/releases/latest).
 2. Select **Ukrainian** in the game, wait for the download, then close the game and launcher completely.
 3. Run the localizer, select **Check**, then install or update the translation.
 
-**Upgrading an old patcher:** versions 3.1.5–3.1.7 offer **3.1.8** through their updater. Install the current EXE over versions 3.1.2–3.1.4 once. It then checks GitHub for application updates on startup and when you click Check. The [previous direct link](https://github.com/Braintfy/ruslocal-invokers/releases/download/v3.1.2-preview/InvokersRu-3.1-Preview-3.1.2-preview-win-x64.exe) is preserved.
+**Upgrading an old patcher:** versions 3.1.5–3.1.8 offer **3.1.9** through their updater. Install the current EXE over versions 3.1.2–3.1.4 once. It then checks GitHub for application updates on startup and when you click Check. The [previous direct link](https://github.com/Braintfy/ruslocal-invokers/releases/download/v3.1.2-preview/InvokersRu-3.1-Preview-3.1.2-preview-win-x64.exe) is preserved.
 
 Translation data updates remain separate: click Update translation when offered to apply new text. Technical output is hidden under Support details, with show and copy buttons. Windows may warn about an unknown publisher: Authenticode signing is still pending; the signed update description and SHA-256 are verified independently.
 

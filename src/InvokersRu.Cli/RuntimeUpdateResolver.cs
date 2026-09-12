@@ -336,6 +336,18 @@ namespace InvokersRu.Cli
                 // it instead of re-inspecting the old state against unrelated new exact pins.
                 if (compatibleInstalled?.Inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate)
                     return compatibleInstalled;
+                // A successful adaptive installation may also have an exact signed description.
+                // Different profile names alone do not change its bytes. Keep the fully authenticated
+                // installed identity (and its backup binding), but only when the current signed bundle
+                // agrees on the complete source tuple, catalog, output and composition.
+                if (compatibleInstalled?.Inspection.Status == InstallationStatus.PatchedByThisTool
+                    && compatibleInstalled.InstalledInspection?.Status == InstallationStatus.PatchedByThisTool
+                    && !compatibleInstalled.TranslationUpdateAvailable
+                    && !compatibleInstalled.EquivalentCatalogMetadataUpdate
+                    && compatibleInstalled.Bundle != null
+                    && Hashing.FixedEqualsHex(compatibleInstalled.Bundle.Update.PayloadSha256, selectedUpdate.PayloadSha256)
+                    && IsEquivalentExactAndCompatibleArtifact(compatibleInstalled.Profile, remoteProfile))
+                    return compatibleInstalled;
             }
             RuntimeCacheCompatibility? installedProfile = compatibleInstalled?.InstalledProfile
                 ?? embeddedHistorical?.InstalledProfile
@@ -1728,6 +1740,42 @@ namespace InvokersRu.Cli
                 && right.TranslationCatalogSha256 != null
                 && Hashing.FixedEqualsHex(left.TranslationCatalogSha256, right.TranslationCatalogSha256)
                 && left.ExpectedAppliedTranslations == right.ExpectedAppliedTranslations;
+        }
+
+        internal static bool IsEquivalentExactAndCompatibleArtifact(
+            RuntimeCacheCompatibility compatible,
+            RuntimeCacheCompatibility exact)
+        {
+            return compatible.Mode == CompatibleRevisionProfileBuilder.Mode && exact.Mode == "exact"
+                && compatible.Certified && exact.Certified
+                && compatible.Readiness == "ready" && exact.Readiness == "ready"
+                && compatible.Schema == exact.Schema
+                && string.Equals(compatible.GameVersion, exact.GameVersion, StringComparison.Ordinal)
+                && string.Equals(compatible.ContentGuid, exact.ContentGuid, StringComparison.Ordinal)
+                && string.Equals(compatible.EnglishContentVersion, exact.EnglishContentVersion, StringComparison.Ordinal)
+                && string.Equals(compatible.BaseContentVersion, exact.BaseContentVersion, StringComparison.Ordinal)
+                && string.Equals(compatible.StampValue, exact.StampValue, StringComparison.Ordinal)
+                && Hashing.FixedEqualsHex(compatible.EnglishSha256, exact.EnglishSha256)
+                && Hashing.FixedEqualsHex(compatible.BaseSha256, exact.BaseSha256)
+                && Hashing.FixedEqualsHex(compatible.StampSha256, exact.StampSha256)
+                && compatible.EnglishLocaleId == exact.EnglishLocaleId
+                && compatible.EnglishLocaleRevision == exact.EnglishLocaleRevision
+                && compatible.EnglishReleaseRevision == exact.EnglishReleaseRevision
+                && compatible.BaseLocaleId == exact.BaseLocaleId
+                && compatible.BaseLocaleRevision == exact.BaseLocaleRevision
+                && compatible.BaseReleaseRevision == exact.BaseReleaseRevision
+                && compatible.EntryCount == exact.EntryCount
+                && compatible.OrderedKeysetSha256 != null && exact.OrderedKeysetSha256 != null
+                && Hashing.FixedEqualsHex(compatible.OrderedKeysetSha256, exact.OrderedKeysetSha256)
+                && compatible.ExpectedOutputSha256 != null && exact.ExpectedOutputSha256 != null
+                && Hashing.FixedEqualsHex(compatible.ExpectedOutputSha256, exact.ExpectedOutputSha256)
+                && compatible.TranslationCatalogSha256 != null && exact.TranslationCatalogSha256 != null
+                && Hashing.FixedEqualsHex(compatible.TranslationCatalogSha256, exact.TranslationCatalogSha256)
+                && string.Equals(compatible.TranslationPolicy, exact.TranslationPolicy, StringComparison.Ordinal)
+                && compatible.ExpectedAppliedTranslations == exact.ExpectedAppliedTranslations
+                && compatible.ExpectedEnglishFallbacks == exact.ExpectedEnglishFallbacks
+                && compatible.ExpectedBaseFallbacks == exact.ExpectedBaseFallbacks
+                && compatible.ExpectedNeedsReviewFallbacks == exact.ExpectedNeedsReviewFallbacks;
         }
 
         private static bool SameMaterializedProfileIdentity(

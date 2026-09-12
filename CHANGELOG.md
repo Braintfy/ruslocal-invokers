@@ -1,5 +1,11 @@
 # Changelog
 
+## Windows 3.1.9 Preview — 2026-09-12
+
+- Fixed the post-installation verification failure when an authenticated compatible-revision installation and the signed exact profile describe identical source files, catalog, output and composition. Preserve the validated installed profile instead of proposing a content update solely because the profile IDs differ.
+- Keep strict GUI validation and all signature, source, backup and process checks. Genuine content updates still follow the existing migration path; no state rewrite or game-file replacement is needed to clear this error.
+- Added repeated post-installation/restart regression coverage, proof-boundary negative cases and read-only verification against the already installed Prod97 translation. Translation data 9, Mac assets and the 3.1.8 interface are unchanged.
+
 ## Windows 3.1.8 Preview — 2026-09-12
 
 - Fixed false process conflicts from other Unity games (observed with Dragonheir: Silent Gods). Generic UnityCrashHandler processes now require an executable path inside the Invokers installation; actual game, launcher and updater processes remain blocked. No process is terminated automatically.

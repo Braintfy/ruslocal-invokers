@@ -518,6 +518,100 @@ namespace InvokersRu.SmokeTests
                         $"Exact migration lost observed inspection field {property.Name}; the GUI must receive the full authenticated identity.");
                 }
 
+                // After a game-update apply, the installed profile may be adaptive even though the
+                // same current signed head also contains an exact profile for these identical bytes.
+                CompatibleRevisionProfileBuild currentCompatible = CompatibleRevisionProfileBuilder.Build(
+                    englishPath, backupPath, stampPath, family, exactCatalog, Hash(exactCatalog),
+                    "community-preview-all-drafts");
+                Require(currentCompatible.Profile.ExpectedOutputSha256 == Hash(exactOutput)
+                    && currentCompatible.Profile.ExpectedAppliedTranslations == exactComposition.AppliedTranslations,
+                    "Equivalent adaptive/exact fixture did not materialize the same output and counts.");
+                string currentCompatibleBackup = Path.Combine(Path.GetDirectoryName(statePath)!, "backups",
+                    $"{currentCompatible.Profile.Id}-{Hashing.Sha256Text(currentCompatible.Profile.Id).Substring(0, 12)}",
+                    $"{currentCompatible.Profile.BaseSha256}.dl_uk_UA.bin");
+                Directory.CreateDirectory(Path.GetDirectoryName(currentCompatibleBackup)!);
+                File.WriteAllBytes(currentCompatibleBackup, baseRaw);
+                (string currentEnglishSnapshot, string currentStampSnapshot) =
+                    RuntimeCacheService.ResolveCompatibleSourceSnapshotPaths(currentCompatibleBackup);
+                File.WriteAllBytes(currentEnglishSnapshot, englishRaw);
+                File.WriteAllBytes(currentStampSnapshot, stampRaw);
+                File.WriteAllBytes(targetPath, exactOutput);
+                var currentCompatibleState = new PatchState
+                {
+                    BuildId = currentCompatible.Profile.Id,
+                    GameRoot = Path.GetFullPath(cacheRoot),
+                    TargetPath = Path.GetFullPath(targetPath),
+                    BackupPath = currentCompatibleBackup,
+                    OriginalSha256 = currentCompatible.Profile.BaseSha256,
+                    PatchedSha256 = currentCompatible.Profile.ExpectedOutputSha256!,
+                    TranslationsSha256 = currentCompatible.Profile.TranslationCatalogSha256!,
+                    AppliedTranslations = currentCompatible.Profile.ExpectedAppliedTranslations,
+                    AppliedAt = InitialNow
+                };
+                File.WriteAllText(statePath, JsonSerializer.Serialize(currentCompatibleState));
+                byte[] currentStateBytes = File.ReadAllBytes(statePath);
+                for (int check = 0; check < 2; check++)
+                {
+                    RuntimeUpdateResolution current = RuntimeUpdateResolver.Resolve(
+                        cacheRoot, statePath, family, catalogPath, coordinator);
+                    Require(current.Inspection.Status == InstallationStatus.PatchedByThisTool
+                        && !current.TranslationUpdateAvailable && !current.EquivalentCatalogMetadataUpdate
+                        && current.Profile.Id == currentCompatibleState.BuildId
+                        && current.Profile.ExpectedOutputSha256 == currentCompatibleState.PatchedSha256
+                        && current.Profile.TranslationCatalogSha256 == currentCompatibleState.TranslationsSha256
+                        && current.Profile.ExpectedAppliedTranslations == currentCompatibleState.AppliedTranslations
+                        && current.Bundle?.Update.PayloadSha256 == exactHead.Update.PayloadSha256
+                        && RuntimeUpdateAuthorization.CanRestoreOrRecover(current),
+                        $"A repeated check after an equivalent adaptive install invented a content update: "
+                        + $"check={check}, mode={current.Profile.Mode}, update={current.TranslationUpdateAvailable}, "
+                        + $"status={current.Inspection.Status}, profile={current.Profile.Id}.");
+                    Require(File.ReadAllBytes(statePath).SequenceEqual(currentStateBytes)
+                        && File.ReadAllBytes(targetPath).SequenceEqual(exactOutput)
+                        && File.ReadAllBytes(currentCompatibleBackup).SequenceEqual(baseRaw)
+                        && File.ReadAllBytes(currentEnglishSnapshot).SequenceEqual(englishRaw)
+                        && File.ReadAllBytes(currentStampSnapshot).SequenceEqual(stampRaw),
+                        "A no-op compatibility check changed state, translation or immutable source snapshots.");
+                }
+
+                Require(RuntimeUpdateResolver.IsEquivalentExactAndCompatibleArtifact(
+                        currentCompatible.Profile, exactMigration.Profile),
+                    "An independently materialized adaptive artifact was not equivalent to its signed exact descriptor.");
+                foreach ((string Label, Action<RuntimeCacheCompatibility> Change) mismatch in
+                    new (string Label, Action<RuntimeCacheCompatibility> Change)[]
+                {
+                    ("base hash", profile => profile.BaseSha256 = new string('A', 64)),
+                    ("English hash", profile => profile.EnglishSha256 = new string('A', 64)),
+                    ("stamp hash", profile => profile.StampSha256 = new string('A', 64)),
+                    ("ordered keyset", profile => profile.OrderedKeysetSha256 = new string('A', 64)),
+                    ("catalog hash", profile => profile.TranslationCatalogSha256 = new string('A', 64)),
+                    ("output hash", profile => profile.ExpectedOutputSha256 = new string('A', 64)),
+                    ("applied count", profile => profile.ExpectedAppliedTranslations++),
+                    ("fallback count", profile => profile.ExpectedEnglishFallbacks++),
+                    ("entry count", profile => profile.EntryCount++),
+                    ("policy", profile => profile.TranslationPolicy = "supervised-safe-drafts")
+                })
+                {
+                    RuntimeCacheCompatibility different = JsonSerializer.Deserialize<RuntimeCacheCompatibility>(
+                        JsonSerializer.Serialize(exactMigration.Profile))!;
+                    mismatch.Change(different);
+                    Require(!RuntimeUpdateResolver.IsEquivalentExactAndCompatibleArtifact(currentCompatible.Profile, different),
+                        $"Exact/adaptive no-op equivalence ignored a different {mismatch.Label}.");
+                }
+
+                foreach (string mismatch in new[] { "base", "count" })
+                {
+                    PatchState changed = JsonSerializer.Deserialize<PatchState>(currentStateBytes)!;
+                    if (mismatch == "base") changed.OriginalSha256 = new string('A', 64);
+                    else changed.AppliedTranslations++;
+                    File.WriteAllText(statePath, JsonSerializer.Serialize(changed));
+                    RuntimeUpdateResolution refused = RuntimeUpdateResolver.Resolve(
+                        cacheRoot, statePath, family, catalogPath, coordinator);
+                    Require(refused.InstalledInspection?.Status != InstallationStatus.PatchedByThisTool
+                        && !RuntimeUpdateAuthorization.CanRestoreOrRecover(refused),
+                        $"A same-output exact head authenticated altered installed {mismatch} metadata.");
+                }
+                File.WriteAllBytes(statePath, currentStateBytes);
+
                 // The channel may later omit that exact profile. Its verified history and immutable
                 // backup must still authorize restoring the exact artifact that is actually installed.
                 string exactBackupPath = Path.Combine(
