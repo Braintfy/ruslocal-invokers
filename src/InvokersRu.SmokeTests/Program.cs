@@ -40,6 +40,7 @@ namespace InvokersRu.SmokeTests
                 RuntimeCacheProfileParsingCheck();
                 RuntimeCacheProfileOnboardingCheck();
                 GameProtectionGuardSmokeTests.Run(Passed.Add);
+                ProcessConflictSmokeTests.Run(Passed.Add);
                 FixtureFreeRuntimeCacheSmokeTests.Run(Passed.Add);
                 GuiContractSmokeTests.Run(Passed.Add);
                 PatcherSelfUpdateSmokeTests.Run();

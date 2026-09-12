@@ -1,5 +1,12 @@
 # Changelog
 
+## Windows 3.1.8 Preview — 2026-09-12
+
+- Fixed false process conflicts from other Unity games (observed with Dragonheir: Silent Gods). Generic UnityCrashHandler processes now require an executable path inside the Invokers installation; actual game, launcher and updater processes remain blocked. No process is terminated automatically.
+- Adapted startup sizing to the current work area and DPI, kept primary actions visible outside the scrolling content, and compacted optional help/support details.
+- Added an animated activity bar with operation stage and elapsed time. Download progress uses reported percentages; patching uses an indeterminate bar instead of invented completion percentages. Real blocking process names and IDs are shown in the main window.
+- Translation data 9 (Prod97), protection preflight, backup rules and Mac assets are unchanged. Existing Windows 3.1.5+ installations receive this hotfix through the signed app-update channel; old download links remain valid.
+
 ## Windows 3.1.7 Preview / Mac script 2.9.0 / translation data 9 — 2026-09-11
 
 - Updated the Russian catalog for EN/UK `Prod_0.60.0_97`: 2 changed English sources, 15 changed Ukrainian hints, and 2 removed ClanBoss IDs. Composition applies 41,040 Russian rows, with one legacy service entry in English and 254 empty base entries; zero validation errors.

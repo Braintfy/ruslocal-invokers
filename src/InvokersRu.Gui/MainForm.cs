@@ -31,6 +31,14 @@ internal sealed class MainForm : Form
     private readonly ActionButton _restoreButton;
     private readonly Button _browseButton;
     private readonly Label _busyLabel;
+    private readonly ProgressBar _operationProgress;
+    private readonly Label _operationHint;
+    private readonly System.Windows.Forms.Timer _busyTimer;
+    private readonly Stopwatch _operationClock = new();
+    private string _busyStage = string.Empty;
+    private string _idleStatus = "Проверка ещё не завершена";
+    private int? _downloadPercent;
+    private bool _mutationBusy;
     private readonly Button _updatePatcherButton;
     private VerifiedPatcherInstaller? _pendingInstaller;
     private CliPlanResult? _lastPlan;
@@ -41,18 +49,26 @@ internal sealed class MainForm : Form
         _gameRoot = LoadSavedCacheRoot();
         Text = "InvokersRu — русский язык для Titan Legacy";
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(920, 720);
-        MinimumSize = new Size(680, 580);
+        ClientSize = new Size(920, 780);
         BackColor = Theme.Background;
         ForeColor = Theme.Text;
         Font = new Font("Segoe UI", 10f, FontStyle.Regular, GraphicsUnit.Point);
         AutoScaleMode = AutoScaleMode.Dpi;
+        AutoScaleDimensions = new SizeF(96f, 96f);
 
+        var shell = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = new Padding(0)
+        };
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        shell.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        shell.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Theme.Background };
         var root = VerticalLayout();
-        root.Padding = new Padding(24);
+        root.Padding = new Padding(18, 14, 18, 0);
         scroll.Controls.Add(root);
-        Controls.Add(scroll);
+        shell.Controls.Add(scroll, 0, 0);
+        Controls.Add(shell);
         root.Controls.Add(CreateHeader(out _updatePatcherButton));
 
         var gameCard = CreateGameCard(out _pathLabel, out _versionLabel, out _stateLabel, out _statusBadge, out _browseButton);
@@ -60,40 +76,65 @@ internal sealed class MainForm : Form
 
         var helpCard = NewCard();
         var help = VerticalLayout();
-        help.Controls.Add(FlowText("ПЕРЕД УСТАНОВКОЙ", Theme.Gold, bold: true));
-        help.Controls.Add(FlowText(
-            "1. Выберите украинский язык в игре и дождитесь загрузки.\n"
-            + "2. Полностью закройте игру и лаунчер.\n"
-            + "3. Нажмите «Установить перевод» ниже.", Theme.Text));
         help.Controls.Add(FlowText("ЧТО СДЕЛАТЬ СЕЙЧАС", Theme.Muted, bold: true));
         _noticeLabel = FlowText("Проверяем игру и доступные обновления…", Theme.Text);
         help.Controls.Add(_noticeLabel);
+        var preparationToggle = NewAction("Как подготовить игру?", Theme.Card, Theme.CardHover, Theme.Text);
+        preparationToggle.MinimumSize = new Size(0, 34);
+        preparationToggle.Padding = new Padding(8, 4, 8, 4);
+        var preparation = FlowText(
+            "1. Выберите украинский язык в игре и дождитесь загрузки.\n"
+            + "2. Полностью закройте игру и лаунчер.\n"
+            + "3. Нажмите «Установить перевод» или «Обновить перевод» внизу.", Theme.Text);
+        preparation.Visible = false;
+        preparationToggle.Click += (_, _) =>
+        {
+            preparation.Visible = !preparation.Visible;
+            preparationToggle.Text = preparation.Visible ? "Скрыть инструкцию" : "Как подготовить игру?";
+        };
+        help.Controls.Add(preparationToggle);
+        help.Controls.Add(preparation);
         helpCard.Controls.Add(help);
         root.Controls.Add(helpCard);
 
+        // The action/progress area never scrolls away, even on a small or high-DPI screen.
+        var footer = VerticalLayout();
+        footer.Name = "PinnedActions";
+        footer.BackColor = Theme.Card;
+        footer.Padding = new Padding(18, 10, 18, 10);
+        shell.Controls.Add(footer, 0, 1);
         var actions = new FlowLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            WrapContents = true, Margin = new Padding(0, 0, 0, 10)
+            WrapContents = true, Margin = new Padding(0)
         };
         _checkButton = NewAction("Проверить", Theme.Blue, Theme.Blue, Color.White);
         _applyButton = NewAction("Установить перевод", Theme.Gold, Theme.GoldHover, Theme.Background);
         _restoreButton = NewAction("Вернуть оригинал", Color.FromArgb(36, 52, 78), Theme.CardHover, Theme.Text);
         _applyButton.Enabled = _restoreButton.Enabled = false;
         actions.Controls.AddRange(new Control[] { _checkButton, _applyButton, _restoreButton });
-        root.Controls.Add(actions);
-        _busyLabel = FlowText(string.Empty, Theme.Muted);
-        root.Controls.Add(_busyLabel);
+        footer.Controls.Add(actions);
+        _busyLabel = FlowText(_idleStatus, Theme.Text, bold: true);
+        _busyLabel.Name = "OperationStatus";
+        footer.Controls.Add(_busyLabel);
+        _operationProgress = new ProgressBar
+        {
+            Name = "OperationProgress", Dock = DockStyle.Top, Height = 12,
+            Style = ProgressBarStyle.Marquee, MarqueeAnimationSpeed = 30,
+            Minimum = 0, Maximum = 100, Visible = false, Margin = new Padding(0, 0, 0, 6)
+        };
+        footer.Controls.Add(_operationProgress);
+        _operationHint = FlowText("", Theme.Muted);
+        _operationHint.Visible = false;
+        footer.Controls.Add(_operationHint);
+        _busyTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+        _busyTimer.Tick += (_, _) => UpdateBusyDisplay();
 
-        var detailsCard = NewCard();
         var detailsLayout = VerticalLayout();
         var detailsActions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true };
-        var toggle = NewAction("Показать подробности", Theme.Card, Theme.CardHover, Theme.Text);
+        var toggle = NewAction("Подробности проверки", Theme.Background, Theme.CardHover, Theme.Text);
         var copy = NewAction("Скопировать для поддержки", Theme.Card, Theme.CardHover, Theme.Text);
         detailsActions.Controls.AddRange(new Control[] { toggle, copy });
-        detailsLayout.Controls.Add(FlowText("ПОДРОБНОСТИ ДЛЯ ПОДДЕРЖКИ", Theme.Muted, bold: true));
-        detailsLayout.Controls.Add(FlowText(
-            "Если что-то не работает, скопируйте эти сведения и отправьте автору. Для обычной установки они не нужны.", Theme.Muted));
         detailsLayout.Controls.Add(detailsActions);
         _log = new RichTextBox
         {
@@ -106,7 +147,7 @@ internal sealed class MainForm : Form
         toggle.Click += (_, _) =>
         {
             _log.Visible = !_log.Visible;
-            toggle.Text = _log.Visible ? "Скрыть подробности" : "Показать подробности";
+            toggle.Text = _log.Visible ? "Скрыть подробности" : "Подробности проверки";
         };
         copy.Click += (_, _) =>
         {
@@ -122,8 +163,7 @@ internal sealed class MainForm : Form
             }
         };
         detailsLayout.Controls.Add(_log);
-        detailsCard.Controls.Add(detailsLayout);
-        root.Controls.Add(detailsCard);
+        root.Controls.Add(detailsLayout);
 
         _pathLabel.Text = _gameRoot;
         _browseButton.Click += async (_, _) => await FindOrChooseCacheRootAsync();
@@ -139,6 +179,47 @@ internal sealed class MainForm : Form
         FormClosing += OnFormClosing;
     }
 
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        FitWorkingArea(preferredSize: true);
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        FitWorkingArea(preferredSize: false);
+    }
+
+    private void FitWorkingArea(bool preferredSize)
+    {
+        Rectangle area = Screen.FromControl(this).WorkingArea;
+        int inset = Math.Min(12, Math.Min(area.Width, area.Height) / 40);
+        area.Inflate(-inset, -inset);
+        int Scale(int value) => (int)Math.Round(value * DeviceDpi / 96d);
+        Size chrome = Size - ClientSize;
+        MinimumSize = new Size(Math.Min(Scale(560) + chrome.Width, area.Width),
+            Math.Min(Scale(460) + chrome.Height, area.Height));
+        Size requested = preferredSize ? new Size(Scale(920) + chrome.Width, Scale(780) + chrome.Height) : Size;
+        Size = new Size(Math.Min(requested.Width, area.Width), Math.Min(requested.Height, area.Height));
+        if (preferredSize)
+        {
+            StartPosition = FormStartPosition.Manual;
+            Location = new Point(area.Left + (area.Width - Width) / 2, area.Top + (area.Height - Height) / 2);
+        }
+        else
+        {
+            Location = new Point(Math.Clamp(Left, area.Left, area.Right - Width),
+                Math.Clamp(Top, area.Top, area.Bottom - Height));
+        }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _busyTimer?.Dispose();
+        base.Dispose(disposing);
+    }
+
     private static TableLayoutPanel VerticalLayout() => new()
     {
         Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
@@ -149,7 +230,7 @@ internal sealed class MainForm : Form
     private static CardPanel NewCard() => new()
     {
         Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-        Padding = new Padding(18), Margin = new Padding(0, 0, 0, 14)
+        Padding = new Padding(14), Margin = new Padding(0, 0, 0, 10)
     };
 
     private static Label FlowText(string text, Color color, bool bold = false)
@@ -165,7 +246,7 @@ internal sealed class MainForm : Form
         {
             if (label.Parent is not Control parent) return;
             void ResizeLabel() => label.MaximumSize = new Size(
-                Math.Max(160, parent.ClientSize.Width - parent.Padding.Horizontal - label.Margin.Horizontal), 0);
+                Math.Max(1, parent.ClientSize.Width - parent.Padding.Horizontal - label.Margin.Horizontal), 0);
             parent.SizeChanged += (_, _) => ResizeLabel();
             ResizeLabel();
         };
@@ -184,7 +265,7 @@ internal sealed class MainForm : Form
         var header = new TableLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 1,
-            Margin = new Padding(0, 0, 0, 16)
+            Margin = new Padding(0, 0, 0, 10)
         };
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76f));
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
@@ -194,7 +275,7 @@ internal sealed class MainForm : Form
         var title = FlowText("INVOKERS RU", Theme.Text, bold: true);
         title.Font = new Font("Segoe UI", 20f, FontStyle.Bold);
         titles.Controls.Add(title);
-        titles.Controls.Add(FlowText("Русский язык для Invokers: Titan Legacy", Theme.Muted));
+        titles.Controls.Add(FlowText("Русский язык · Titan Legacy", Theme.Muted));
         header.Controls.Add(titles, 1, 0);
         updateButton = NewAction("Обновить патчер", Theme.Card, Theme.CardHover, Theme.Text);
         header.Controls.Add(updateButton, 2, 0);
@@ -543,7 +624,7 @@ internal sealed class MainForm : Form
     private async Task<bool> CheckAsync(bool showFailureDialog)
     {
         if (_busy) return false;
-        SetBusy(true, "Проверка…");
+        SetBusy(true, "Проверяем обновления перевода");
         AppendLog("Проверяем стандартный путь, контрольные суммы, версию и запущенные процессы.");
         try
         {
@@ -552,6 +633,7 @@ internal sealed class MainForm : Form
             AppendLog(update.CombinedOutput.Length == 0
                 ? $"Проверка обновлений завершилась с кодом {update.ExitCode} без вывода."
                 : update.CombinedOutput);
+            SetBusyStage("Проверяем файлы игры и запущенные процессы");
             CliCommandResult command = await _cli.RunAsync(
                 "cache-plan",
                 new[] { "--json", "--cache-root", _gameRoot });
@@ -695,7 +777,13 @@ internal sealed class MainForm : Form
 
     private async Task RunMutationAsync(string command, string[] arguments, string successMessage)
     {
-        SetBusy(true, "Выполнение…");
+        _mutationBusy = true;
+        SetBusy(true, command switch
+        {
+            "cache-restore" => "Возвращаем оригинальные файлы языка",
+            "cache-recover" => "Восстанавливаем прерванную установку",
+            _ => "Устанавливаем перевод и проверяем результат"
+        });
         AppendLog($"Запускаем транзакцию: {command}.");
         try
         {
@@ -717,6 +805,7 @@ internal sealed class MainForm : Form
         }
         finally
         {
+            _mutationBusy = false;
             SetBusy(false, string.Empty);
             await CheckAsync(showFailureDialog: false);
         }
@@ -768,7 +857,8 @@ internal sealed class MainForm : Form
                         + "Кнопка «Вернуть оригинал» убирает русификацию.", Theme.Green);
         else if (plan.ProcessConflicts.Length > 0 || plan.PlanAction == "REFUSE_CLOSE_GAME_AND_LAUNCHER")
             Show("Закройте игру и лаунчер", "Перед изменением перевода они должны быть полностью закрыты.",
-                "Закройте игру и лаунчер, в том числе значок лаунчера рядом с часами Windows. Затем нажмите «Проверить». "
+                RunningProcessNotice(plan.ProcessConflicts)
+                + "Закройте их обычным способом, включая значок лаунчера рядом с часами Windows, затем нажмите «Проверить». "
                 + "Патчер сам их не закрывает.", Theme.Warning);
         else if (plan.CanRecover || plan.Status == "RecoveryRequired")
             Show("Установка была прервана", "Предыдущую операцию нужно завершить или отменить.",
@@ -795,6 +885,22 @@ internal sealed class MainForm : Form
             _noticeLabel.Text += " GitHub сейчас недоступен; используется сохранённый перевод.";
         _noticeLabel.Text += PatcherVersionNotice(plan);
         UpdateButtons();
+    }
+
+    private static string RunningProcessNotice(string[] conflicts)
+    {
+        if (conflicts.Length == 0) return string.Empty;
+        // CLI entries are "name (pid; image path)". Keep full paths in the support log only.
+        string Compact(string item)
+        {
+            int separator = item.IndexOf(';');
+            string text = separator >= 0 ? item[..separator] + ")" : item;
+            text = text.Replace('\r', ' ').Replace('\n', ' ');
+            return text.Length <= 100 ? text : text[..97] + "…";
+        }
+        string list = string.Join(", ", conflicts.Take(4).Select(Compact));
+        if (conflicts.Length > 4) list += $" и ещё {conflicts.Length - 4}";
+        return "Ещё работают: " + list + ". Число в скобках — PID процесса. ";
     }
 
     private static string FriendlyRevisionDifference(CliPlanResult plan)
@@ -825,6 +931,8 @@ internal sealed class MainForm : Form
 
     private void SetBadge(string text, Color color)
     {
+        _idleStatus = text;
+        if (!_busy) UpdateBusyDisplay();
         _statusBadge.Text = text;
         _statusBadge.BackColor = Color.FromArgb(
             Math.Max(0, color.R - 80),
@@ -835,10 +943,63 @@ internal sealed class MainForm : Form
 
     private void SetBusy(bool busy, string label)
     {
+        if (busy && !_busy) _operationClock.Restart();
         _busy = busy;
-        _busyLabel.Text = label;
+        _busyStage = label;
+        _downloadPercent = null;
+        _operationProgress.Visible = busy;
+        _operationHint.Visible = busy;
+        _operationProgress.Style = ProgressBarStyle.Marquee;
+        _operationProgress.MarqueeAnimationSpeed = busy ? 30 : 0;
+        if (busy) _busyTimer.Start();
+        else
+        {
+            _busyTimer.Stop();
+            _operationClock.Stop();
+        }
+        UpdateBusyDisplay();
         UseWaitCursor = busy;
         UpdateButtons();
+    }
+
+    private void SetBusyStage(string stage)
+    {
+        _busyStage = stage;
+        _downloadPercent = null;
+        _operationProgress.Style = ProgressBarStyle.Marquee;
+        _operationProgress.MarqueeAnimationSpeed = 30;
+        UpdateBusyDisplay();
+    }
+
+    private void ShowDownloadProgress(int percent)
+    {
+        if (!_busy) return;
+        if (percent >= 100)
+        {
+            SetBusyStage("Загрузка завершена. Проверяем установщик");
+            return;
+        }
+        _busyStage = "Загружаем новую версию патчера";
+        _downloadPercent = Math.Clamp(percent, 0, 100);
+        _operationProgress.Style = ProgressBarStyle.Continuous;
+        _operationProgress.Value = _downloadPercent.Value;
+        UpdateBusyDisplay();
+    }
+
+    private void UpdateBusyDisplay()
+    {
+        if (!_busy)
+        {
+            _busyLabel.Text = _idleStatus;
+            return;
+        }
+        TimeSpan elapsed = _operationClock.Elapsed;
+        string time = $"{(int)elapsed.TotalMinutes:00}:{elapsed.Seconds:00}";
+        string progress = _downloadPercent.HasValue ? $" · {_downloadPercent}%" : string.Empty;
+        _busyLabel.Text = $"{_busyStage}{progress} · {time}";
+        _operationHint.Text = _mutationBusy
+            ? "Не закрывайте патчер и не запускайте игру до завершения."
+            : "Пожалуйста, подождите. Окно остаётся доступным, результат появится автоматически.";
     }
 
     private void UpdateButtons()
@@ -1001,7 +1162,7 @@ internal sealed class MainForm : Form
     private async Task<bool> CheckPatcherUpdateAsync(bool showCurrent)
     {
         if (_busy) return false;
-        SetBusy(true, "Патчер…");
+        SetBusy(true, "Проверяем обновление самого патчера");
         bool started = false;
         try
         {
@@ -1023,8 +1184,10 @@ internal sealed class MainForm : Form
                 "Обновление патчера", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
                 return false;
             AppendLog("Скачиваем установщик по подписанному описанию обновления. Проверяем размер, SHA-256 и версию EXE.");
+            SetBusyStage("Подготавливаем загрузку установщика");
             _pendingInstaller = await client.DownloadAsync(update, installed,
-                new Progress<int>(percent => _busyLabel.Text = $"Загрузка новой версии: {percent}%"));
+                new Progress<int>(ShowDownloadProgress));
+            SetBusyStage("Запускаем установщик новой версии");
             Process? setup = Process.Start(PatcherUpdateClient.CreateInstallerStartInfo(_pendingInstaller));
             if (setup == null) throw new InvalidOperationException("Windows не запустила установщик.");
             setup.Dispose();

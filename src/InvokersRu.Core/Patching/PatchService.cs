@@ -690,10 +690,6 @@ namespace InvokersRu.Core.Patching
 
         private static IReadOnlyList<string> FindProcessConflicts(string gameRoot, bool blockKnownNamesAnywhere)
         {
-            string[] knownBlockedNames = { "Invokers", "Invokers Titan Legacy", "UnityCrashHandler64" };
-            bool officialRoot = PathEquals(gameRoot, PatchPlanner.DefaultGameRoot());
-            string launcherRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Invokers Titan Legacy");
-            string updaterRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "invokers-updater");
             var conflicts = new List<string>();
             Process[] processes = Process.GetProcesses();
             try
@@ -718,20 +714,11 @@ namespace InvokersRu.Core.Patching
                     }
                     catch (Exception exception) when (exception is System.ComponentModel.Win32Exception || exception is InvalidOperationException)
                     {
-                        if (officialRoot && knownBlockedNames.Contains(processName, StringComparer.OrdinalIgnoreCase))
-                        {
-                            conflicts.Add($"{processName} ({process.Id}; image path unavailable)");
-                        }
-
-                        continue;
+                        // Keep the game-specific name fallback when the process cannot be inspected.
+                        // Generic Unity helpers are shared by unrelated games and are not identity evidence.
                     }
 
-                    if (imagePath != null && (PathIsInside(gameRoot, imagePath)
-                        || (officialRoot && (PathIsInside(launcherRoot, imagePath) || PathIsInside(updaterRoot, imagePath)))))
-                    {
-                        conflicts.Add($"{processName} ({process.Id}; {imagePath})");
-                    }
-                    else if (blockKnownNamesAnywhere && knownBlockedNames.Contains(processName, StringComparer.OrdinalIgnoreCase))
+                    if (IsProcessConflict(gameRoot, processName, imagePath, blockKnownNamesAnywhere))
                     {
                         conflicts.Add($"{processName} ({process.Id}; {imagePath ?? "image path unavailable"})");
                     }
@@ -743,6 +730,24 @@ namespace InvokersRu.Core.Patching
             }
 
             return conflicts;
+        }
+
+        internal static bool IsProcessConflict(string gameRoot, string processName, string? imagePath,
+            bool blockKnownNamesAnywhere)
+        {
+            bool officialRoot = PathEquals(gameRoot, PatchPlanner.DefaultGameRoot());
+            bool gameSpecificName = string.Equals(processName, "Invokers", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(processName, "Invokers Titan Legacy", StringComparison.OrdinalIgnoreCase);
+            if (imagePath == null) return officialRoot && gameSpecificName;
+
+            string launcherRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Programs", "Invokers Titan Legacy");
+            string updaterRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "invokers-updater");
+            // Any executable inside the actual Invokers installation remains a conflict, including
+            // UnityCrashHandler. Its generic name alone must not block another game's localization.
+            return PathIsInside(gameRoot, imagePath)
+                || (officialRoot && (PathIsInside(launcherRoot, imagePath) || PathIsInside(updaterRoot, imagePath)))
+                || (blockKnownNamesAnywhere && gameSpecificName);
         }
 
         private static void EnsureGameStopped(string gameRoot)
