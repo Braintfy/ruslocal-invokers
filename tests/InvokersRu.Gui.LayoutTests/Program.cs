@@ -70,6 +70,9 @@ internal static class Program
             AssertPinned(form, "support-expanded");
             Invoke(form, "SetBusy", false, "");
             Require(!Field<System.Windows.Forms.Timer>(form, "_busyTimer").Enabled, "Busy timer must stop when idle.");
+            AssertInstalledStateRendering(form);
+            Layout(form);
+            AssertPinned(form, "installed-with-update-warning");
             Console.WriteLine($"PASS layout {size.Width}x{size.Height}, simulated UI scale {scale:P0}: pinned actions, progress, details.");
         }
         string compact = (string)MainFormType.GetMethod("RunningProcessNotice", BindingFlags.NonPublic | BindingFlags.Static)!
@@ -105,6 +108,66 @@ internal static class Program
         }
         Console.WriteLine("PASS working-area sizing and concise process explanation.");
         Console.WriteLine("PASS precise input-failure rendering and separate client/language identities.");
+        Console.WriteLine("PASS installed status survives update warnings; stale state and protection remain refusals.");
+    }
+
+    private static void AssertInstalledStateRendering(Form form)
+    {
+        Type planType = MainFormType.Assembly.GetType("InvokersRu.Gui.CliPlanResult", true)!;
+        object plan = Activator.CreateInstance(planType)!;
+        Set(plan, "Status", "PatchedByThisTool");
+        Set(plan, "PatcherVersion", "3.1.11");
+        Set(plan, "CanRestore", true);
+        Set(plan, "PlanAction", "NOOP_OR_RESTORE");
+        object protection = planType.GetProperty("ProtectionCheck")!.GetValue(plan)!;
+        Set(protection, "Status", "no-known-markers");
+        object state = Activator.CreateInstance(planType.GetProperty("State")!.PropertyType)!;
+        Set(state, "AppliedTranslations", 42447);
+        Set(plan, "State", state);
+        MainFormType.GetField("_lastPlan", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(form, plan);
+        Invoke(form, "RenderPlan", plan);
+        Require(Field<Label>(form, "_statusBadge").Text == "Русский язык установлен"
+            && Field<Label>(form, "_noticeLabel").Text.Contains("Повторная установка не нужна"),
+            "An authenticated installed translation must have an unambiguous success state.");
+        Require(Field<Button>(form, "_applyButton").Text == "Перевод установлен"
+            && !Field<Button>(form, "_applyButton").Enabled && Field<Button>(form, "_restoreButton").Enabled,
+            "An installed translation must not suggest reinstalling it or lose an authorized restore action.");
+
+        Set(plan, "UpdateProblem", "Current authenticated translation data cannot materialize a supported profile.");
+        Set(plan, "UpdateProblemBlocksApply", true);
+        Invoke(form, "RenderPlan", plan);
+        Require(Field<Label>(form, "_statusBadge").Text == "Русский язык установлен"
+            && Field<Label>(form, "_noticeLabel").Text.Contains("Обновление перевода пока недоступно")
+            && Field<Label>(form, "_noticeLabel").Text.Contains("установленный перевод сохранён")
+            && !Field<Button>(form, "_applyButton").Enabled,
+            "A blocked update must not hide a verified installation or enable Apply.");
+
+        Set(plan, "ProcessConflicts", new[] { "Invokers (1234)" });
+        Set(plan, "CanRestore", false);
+        Invoke(form, "RenderPlan", plan);
+        Require(Field<Label>(form, "_statusBadge").Text == "Русский язык установлен"
+            && Field<Label>(form, "_noticeLabel").Text.Contains("закройте игру и лаунчер")
+            && !Field<Button>(form, "_restoreButton").Enabled,
+            "Running processes must prevent mutations without implying the installed translation disappeared.");
+
+        Set(protection, "Status", "blocked");
+        Invoke(form, "RenderPlan", plan);
+        Require(Field<Label>(form, "_statusBadge").Text == "Установка приостановлена",
+            "Installed status must not conceal a protection refusal.");
+        Set(protection, "Status", "no-known-markers");
+        Set(plan, "Status", "InconsistentState");
+        object diagnostic = planType.GetProperty("Diagnostic")!.GetValue(plan)!;
+        Set(diagnostic, "Kind", "local-state");
+        Set(diagnostic, "Component", "patch-state");
+        Invoke(form, "RenderPlan", plan);
+        Require(Field<Label>(form, "_statusBadge").Text == "Нужно проверить предыдущую установку"
+            && !Field<Label>(form, "_stateLabel").Text.Contains("Файлы игры изменились")
+            && Field<Button>(form, "_applyButton").Text == "Установить перевод",
+            "Unverified historical state must not be presented as an installed translation or corrupt game files.");
+        Set(plan, "Status", "PatchedByThisTool");
+        Set(plan, "ProcessConflicts", Array.Empty<string>());
+        Set(plan, "CanRestore", true);
+        Invoke(form, "RenderPlan", plan);
     }
 
     private static void Set(object instance, string property, object value) =>

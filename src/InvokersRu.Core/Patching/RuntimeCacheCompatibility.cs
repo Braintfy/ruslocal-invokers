@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using InvokersRu.Core.Updates;
 
 namespace InvokersRu.Core.Patching
 {
@@ -340,6 +341,8 @@ namespace InvokersRu.Core.Patching
         public RuntimeCacheCompatibility Profile { get; set; } = new RuntimeCacheCompatibility();
         internal RuntimeCacheCompatibility? OfficialUpdatePredecessor { get; set; }
         internal string? SnapshotlessStateSha256 { get; set; }
+        internal string? OfficialOriginalStaleStateSha256 { get; set; }
+        internal VerifiedSignedUpdate? OfficialOriginalStaleSignedUpdate { get; set; }
         public PatchState? State { get; set; }
         public PatchJournal? Journal { get; set; }
     }

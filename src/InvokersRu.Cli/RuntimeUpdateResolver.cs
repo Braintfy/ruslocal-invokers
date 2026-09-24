@@ -489,6 +489,7 @@ namespace InvokersRu.Cli
                     "Current authenticated translation data cannot materialize a supported exact or compatible-revision profile for the observed tuple.",
                     installedProfile,
                     installedInspection);
+            RuntimeCacheCompatibility signedCurrentExact = CloneCompatibleProfile(remoteProfile);
             remoteProfile = AttachEmbeddedMigrationAllowlist(embeddedProfile, remoteProfile);
             RuntimeCacheInspection remoteInspection = RuntimeCacheService.Inspect(cacheRoot, remoteProfile, statePath);
             if (remoteInspection.Status == InstallationStatus.InconsistentState
@@ -507,6 +508,25 @@ namespace InvokersRu.Cli
                 installedProfile = crossFamilyPredecessor;
                 installedInspection = null;
                 remoteInspection = crossFamilyInspection!;
+            }
+            if (remoteInspection.Status == InstallationStatus.InconsistentState
+                && state != null && journal == null
+                && bundle != null && bundle.Source != SignedUpdateBundleSource.LastKnownGood
+                && channelAuthority != null
+                && Hashing.FixedEqualsHex(bundle.Update.PayloadSha256, channelAuthority.PayloadSha256)
+                && !bundle.Update.IsExpiredAt(DateTimeOffset.UtcNow)
+                && channelAuthority.PatcherDisposition != SignedUpdatePatcherDisposition.TooOld
+                && !remoteProblemBlocksApply
+                && RuntimeCacheService.TryInspectSignedExactOfficialWithObsoleteState(
+                    cacheRoot, statePath, selectedUpdate, signedCurrentExact,
+                    out RuntimeCacheInspection signedOfficialWithObsoleteState))
+            {
+                // The game already has the exact current official target. The old state is not
+                // trusted for restoration, so only the signed current tuple may archive it.
+                remoteProfile = signedCurrentExact;
+                remoteInspection = signedOfficialWithObsoleteState;
+                installedProfile = null;
+                installedInspection = null;
             }
             bool historicalUpdateAvailable = installedProfile != null
                 && installedInspection?.Status == InstallationStatus.PatchedByThisTool
@@ -888,9 +908,10 @@ namespace InvokersRu.Cli
                         return null;
                 }
 
-                string observedContentGuid = Loc1Codec.Parse(BoundedArtifactReader.ReadRuntimeLoc1(
+                Loc1Document officialBase = Loc1Codec.Parse(BoundedArtifactReader.ReadRuntimeLoc1(
                     basePath,
-                    "compatible-revision observed Ukrainian LOC1")).ContentGuid;
+                    "compatible-revision observed Ukrainian LOC1"));
+                string observedContentGuid = officialBase.ContentGuid;
                 List<CompatibleCatalogCandidate> catalogs = LoadCompatibleCatalogCandidates(
                     embeddedProfile,
                     embeddedCatalogPath,
@@ -978,6 +999,8 @@ namespace InvokersRu.Cli
 
                 (CompatibleCatalogCandidate Catalog, CompatibleRevisionProfileBuild Build)? installed = null;
                 RuntimeCacheInspection? installedInspection = null;
+                (RuntimeCacheCompatibility Profile, RuntimeCacheInspection Inspection,
+                    string CatalogPath, string Source)? installedExact = null;
                 if (state != null && Hashing.FixedEqualsHex(targetSha256, state.PatchedSha256))
                 {
                     var stateMatches = new List<((CompatibleCatalogCandidate Catalog, CompatibleRevisionProfileBuild Build) Item, RuntimeCacheInspection Inspection)>();
@@ -992,15 +1015,29 @@ namespace InvokersRu.Cli
                     var artifactGroups = stateMatches
                         .GroupBy(match => StateArtifactAuthorityKey(match.Item.Build.Profile), StringComparer.Ordinal)
                         .ToArray();
-                    if (artifactGroups.Length != 1) return null;
-                    var selectedInstalled = artifactGroups[0]
-                        .OrderByDescending(match => CatalogAuthorityStrength(match.Item.Catalog))
-                        .ThenBy(match => match.Item.Catalog.Source, StringComparer.Ordinal)
-                        .ThenBy(match => match.Item.Build.Profile.TranslationPolicy, StringComparer.Ordinal)
-                        .ThenBy(match => match.Item.Catalog.Path, StringComparer.OrdinalIgnoreCase)
-                        .First();
-                    installed = selectedInstalled.Item;
-                    installedInspection = selectedInstalled.Inspection;
+                    if (artifactGroups.Length > 1) return null;
+                    if (artifactGroups.Length == 1)
+                    {
+                        var selectedInstalled = artifactGroups[0]
+                            .OrderByDescending(match => CatalogAuthorityStrength(match.Item.Catalog))
+                            .ThenBy(match => match.Item.Catalog.Source, StringComparer.Ordinal)
+                            .ThenBy(match => match.Item.Build.Profile.TranslationPolicy, StringComparer.Ordinal)
+                            .ThenBy(match => match.Item.Catalog.Path, StringComparer.OrdinalIgnoreCase)
+                            .First();
+                        installed = selectedInstalled.Item;
+                        installedInspection = selectedInstalled.Inspection;
+                    }
+                    else
+                    {
+                        // Exact installations have a signed or embedded build id, not the ephemeral
+                        // compatible id generated from the same source tuple. Authenticate the old
+                        // installed artifact and its immutable backup before allowing a new catalog
+                        // to replace it through Restore(old) -> Inspect(new) -> Apply(new).
+                        installedExact = TryResolveExactInstalledForCompatible(
+                            root, statePath, state, embeddedProfile, embeddedCatalogPath,
+                            coordinator, officialBase);
+                        if (installedExact == null) return null;
+                    }
                 }
 
                 RuntimeCacheCompatibility? officialUpdatePredecessor = null;
@@ -1096,6 +1133,9 @@ namespace InvokersRu.Cli
 
                 if (selected == null)
                 {
+                    if (installedExact != null)
+                        return ExactInstalledWithoutMaterialUpdate(installedExact.Value,
+                            channelAuthority, remoteProblem, remoteProblemBlocksApply);
                     if (installed == null || installedInspection == null) return null;
                     return new RuntimeUpdateResolution
                     {
@@ -1112,6 +1152,37 @@ namespace InvokersRu.Cli
                 }
 
                 RuntimeCacheCompatibility selectedProfile = selected.Value.Build.Profile;
+                if (installedExact != null)
+                {
+                    if (!selectedProfile.Certified || selectedProfile.Readiness != "ready"
+                        || !SameExactCompatibleSourceTuple(installedExact.Value.Profile, selectedProfile))
+                        return null;
+                    if (Hashing.FixedEqualsHex(installedExact.Value.Profile.ExpectedOutputSha256!,
+                        selectedProfile.ExpectedOutputSha256!))
+                    {
+                        // The GUI and Core metadata-only rebind contract is deliberately limited to
+                        // compatible -> compatible. An exact -> compatible no-op remains restorable;
+                        // it must not claim a content update that would write identical target bytes.
+                        return ExactInstalledWithoutMaterialUpdate(installedExact.Value,
+                            channelAuthority, remoteProblem, remoteProblemBlocksApply);
+                    }
+
+                    return new RuntimeUpdateResolution
+                    {
+                        Profile = selectedProfile,
+                        Inspection = CloneInspectionWithProfile(installedExact.Value.Inspection, selectedProfile,
+                            "A newer signed translation catalog is available for this authenticated exact installation."),
+                        CatalogPath = selected.Value.Catalog.Path,
+                        Bundle = selected.Value.Catalog.Bundle,
+                        ChannelAuthority = channelAuthority,
+                        InstalledProfile = installedExact.Value.Profile,
+                        InstalledInspection = installedExact.Value.Inspection,
+                        TranslationUpdateAvailable = true,
+                        Source = selected.Value.Catalog.Source,
+                        RemoteProblem = remoteProblem,
+                        RemoteProblemBlocksApply = remoteProblemBlocksApply
+                    };
+                }
                 bool translationUpdate = false;
                 if (installed != null && installedInspection != null)
                 {
@@ -1290,6 +1361,115 @@ namespace InvokersRu.Cli
             {
                 return null;
             }
+        }
+
+        private static (RuntimeCacheCompatibility Profile, RuntimeCacheInspection Inspection,
+            string CatalogPath, string Source)? TryResolveExactInstalledForCompatible(
+            string root,
+            string statePath,
+            PatchState state,
+            RuntimeCacheCompatibility embeddedProfile,
+            string embeddedCatalogPath,
+            SignedUpdateCoordinator? coordinator,
+            Loc1Document officialBase)
+        {
+            var matches = new List<(RuntimeCacheCompatibility Profile, RuntimeCacheInspection Inspection,
+                string CatalogPath, string Source)>();
+
+            void Consider(RuntimeCacheCompatibility candidate, string catalogPath, string source)
+            {
+                if (candidate.Mode != "exact" || !IsExactInstalledState(candidate, state)) return;
+                RuntimeCacheInspection inspection = RuntimeCacheService.Inspect(root, candidate, statePath);
+                if (inspection.Status == InstallationStatus.PatchedByThisTool)
+                    matches.Add((candidate, inspection, catalogPath, source));
+            }
+
+            Consider(embeddedProfile, embeddedCatalogPath, "embedded");
+            foreach (RuntimeCacheCompatibility historical in EmbeddedRuntimeCacheHistory.CreateProfiles())
+                Consider(historical, embeddedCatalogPath, "embedded");
+
+            if (coordinator != null)
+            {
+                foreach (VerifiedSignedUpdate history in coordinator.LoadVerifiedHistory().Reverse())
+                {
+                    foreach (VerifiedSignedUpdateCompatibilityProfile signed in history.Manifest.Compatibility)
+                    {
+                        if (!string.Equals(signed.ProfileId, state.BuildId, StringComparison.Ordinal)) continue;
+                        try
+                        {
+                            RuntimeCacheCompatibility candidate = SignedUpdateRuntimeProfileAdapter.AdaptExact(
+                                history.Manifest, signed, officialBase);
+                            candidate = AttachEmbeddedMigrationAllowlist(embeddedProfile, candidate);
+                            string catalogPath = coordinator.TryGetVerifiedCatalogPath(history, out string path)
+                                ? path : string.Empty;
+                            Consider(candidate, catalogPath, "CachedCurrent");
+                        }
+                        catch (InvalidDataException)
+                        {
+                            // A signed descriptor that does not authenticate the immutable original
+                            // and recorded artifact cannot authorize a cross-mode replacement.
+                        }
+                    }
+                }
+            }
+
+            IGrouping<string, (RuntimeCacheCompatibility Profile, RuntimeCacheInspection Inspection,
+                string CatalogPath, string Source)>[] identities = matches
+                .GroupBy(match => StateArtifactAuthorityKey(match.Profile), StringComparer.Ordinal)
+                .ToArray();
+            if (identities.Length != 1) return null;
+            return identities[0]
+                .OrderByDescending(match => match.CatalogPath.Length > 0)
+                .ThenByDescending(match => match.Source == "CachedCurrent")
+                .First();
+        }
+
+        private static RuntimeUpdateResolution ExactInstalledWithoutMaterialUpdate(
+            (RuntimeCacheCompatibility Profile, RuntimeCacheInspection Inspection,
+                string CatalogPath, string Source) installed,
+            VerifiedSignedUpdate? channelAuthority,
+            string? remoteProblem,
+            bool remoteProblemBlocksApply)
+        {
+            return new RuntimeUpdateResolution
+            {
+                Profile = installed.Profile,
+                Inspection = installed.Inspection,
+                CatalogPath = installed.CatalogPath,
+                Bundle = null,
+                ChannelAuthority = channelAuthority,
+                InstalledProfile = installed.Profile,
+                InstalledInspection = installed.Inspection,
+                TranslationUpdateAvailable = false,
+                Source = installed.Source,
+                RemoteProblem = remoteProblem,
+                RemoteProblemBlocksApply = remoteProblemBlocksApply
+            };
+        }
+
+        private static bool SameExactCompatibleSourceTuple(
+            RuntimeCacheCompatibility exact,
+            RuntimeCacheCompatibility compatible)
+        {
+            return exact.Mode == "exact" && compatible.Mode == CompatibleRevisionProfileBuilder.Mode
+                && string.Equals(exact.GameVersion, compatible.GameVersion, StringComparison.Ordinal)
+                && string.Equals(exact.StampValue, compatible.StampValue, StringComparison.Ordinal)
+                && string.Equals(exact.ContentGuid, compatible.ContentGuid, StringComparison.Ordinal)
+                && string.Equals(exact.EnglishContentVersion, compatible.EnglishContentVersion, StringComparison.Ordinal)
+                && string.Equals(exact.BaseContentVersion, compatible.BaseContentVersion, StringComparison.Ordinal)
+                && Hashing.FixedEqualsHex(exact.EnglishSha256, compatible.EnglishSha256)
+                && Hashing.FixedEqualsHex(exact.BaseSha256, compatible.BaseSha256)
+                && Hashing.FixedEqualsHex(exact.StampSha256, compatible.StampSha256)
+                && exact.EnglishLocaleId == compatible.EnglishLocaleId
+                && exact.EnglishLocaleRevision == compatible.EnglishLocaleRevision
+                && exact.EnglishReleaseRevision == compatible.EnglishReleaseRevision
+                && exact.BaseLocaleId == compatible.BaseLocaleId
+                && exact.BaseLocaleRevision == compatible.BaseLocaleRevision
+                && exact.BaseReleaseRevision == compatible.BaseReleaseRevision
+                && exact.EntryCount == compatible.EntryCount
+                && (exact.OrderedKeysetSha256 == null
+                    || compatible.OrderedKeysetSha256 != null
+                        && Hashing.FixedEqualsHex(exact.OrderedKeysetSha256, compatible.OrderedKeysetSha256));
         }
 
         private static List<CompatibleCatalogCandidate> LoadCompatibleCatalogCandidates(

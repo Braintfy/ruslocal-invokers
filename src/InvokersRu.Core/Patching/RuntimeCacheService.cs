@@ -6,6 +6,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace InvokersRu.Core.Patching
 {
@@ -151,6 +153,85 @@ namespace InvokersRu.Core.Patching
         public static RuntimeCacheInspection Inspect(string cacheRoot, RuntimeCacheCompatibility profile, string statePath)
         {
             return Inspect(cacheRoot, profile, statePath, authenticatedOfficialUpdatePredecessor: null);
+        }
+
+        // This route is deliberately independent of the recorded backup. An official game update may
+        // replace a patch while leaving an old or damaged state/backup behind. Only a *current* exact
+        // tuple selected from an authenticated manifest may make that obsolete state archivable.
+        internal static bool TryInspectSignedExactOfficialWithObsoleteState(
+            string cacheRoot,
+            string statePath,
+            VerifiedSignedUpdate signedUpdate,
+            RuntimeCacheCompatibility currentExact,
+            out RuntimeCacheInspection inspection)
+        {
+            ArgumentNullException.ThrowIfNull(signedUpdate);
+            ArgumentNullException.ThrowIfNull(currentExact);
+            currentExact.Validate();
+            string root = Path.GetFullPath(cacheRoot);
+            (string english, string target, string stamp) = ResolveFixedPaths(root, currentExact);
+            inspection = new RuntimeCacheInspection
+            {
+                CacheRoot = root,
+                EnglishPath = english,
+                TargetPath = target,
+                StampPath = stamp,
+                Profile = currentExact,
+                Status = InstallationStatus.InconsistentState,
+                Message = "The obsolete runtime-cache state is not authorized for automatic preservation."
+            };
+
+            try
+            {
+                if (!MutationPolicy.IsTestWriteBuild && !PathEquals(root, DefaultCacheRoot()))
+                    throw new InvalidDataException("Runtime-cache root differs from the fixed game cache.");
+                MutationPolicy.RequireRuntimeStatePath(statePath);
+                PatchService.RejectExistingReparseComponents(statePath, "obsolete runtime-cache state");
+                PatchService.RejectExistingReparseComponents(english, "official runtime-cache English LOC1");
+                PatchService.RejectExistingReparseComponents(target, "official runtime-cache Ukrainian LOC1");
+                PatchService.RejectExistingReparseComponents(stamp, "official runtime-cache stamp");
+                if (PatchJournalStore.FindActive(statePath) != null)
+                    throw new InvalidDataException("An active runtime-cache journal requires recovery.");
+
+                (RuntimeCacheCompatibility observed, Loc1Document englishDocument, Loc1Document baseDocument) =
+                    RequireSignedExactCurrentTuple(root, signedUpdate, currentExact);
+                byte[] stateBytes = BoundedArtifactReader.ReadFile(statePath, 64 * 1024,
+                    "obsolete runtime-cache state");
+                PatchState state = ParseObsoleteState(stateBytes);
+                RequireObsoleteStateIdentity(root, target, currentExact, state);
+                string stateSha256 = Hashing.Sha256Bytes(stateBytes);
+                inspection.State = state;
+                inspection.EnglishSha256 = observed.EnglishSha256;
+                inspection.BaseSha256 = observed.BaseSha256;
+                inspection.StampSha256 = observed.StampSha256;
+                inspection.StampValue = observed.StampValue;
+                inspection.EnglishContentVersion = englishDocument.ContentVersion;
+                inspection.BaseContentVersion = baseDocument.ContentVersion;
+                inspection.EnglishFormatVersion = englishDocument.FormatVersion;
+                inspection.BaseFormatVersion = baseDocument.FormatVersion;
+                inspection.EnglishContentGuid = englishDocument.ContentGuid;
+                inspection.BaseContentGuid = baseDocument.ContentGuid;
+                inspection.EnglishLocaleId = englishDocument.LocaleId;
+                inspection.EnglishLocaleRevision = englishDocument.LocaleRevision;
+                inspection.EnglishReleaseRevision = englishDocument.ReleaseRevision;
+                inspection.BaseLocaleId = baseDocument.LocaleId;
+                inspection.BaseLocaleRevision = baseDocument.LocaleRevision;
+                inspection.BaseReleaseRevision = baseDocument.ReleaseRevision;
+                inspection.EntryCount = baseDocument.Entries.Count;
+                inspection.OrderedKeysetSha256 = Loc1Compatibility.ComputeOrderedKeysetSha256(baseDocument);
+                inspection.Status = InstallationStatus.PatchSupersededByOfficialUpdate;
+                inspection.Message = "The current official runtime cache is signed and exact; obsolete patch state will be preserved before a fresh apply. Its old backup will not be used.";
+                inspection.OfficialOriginalStaleStateSha256 = stateSha256;
+                inspection.OfficialOriginalStaleSignedUpdate = signedUpdate;
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                or InvalidDataException or InvalidOperationException or Loc1FormatException or JsonException
+                or DecoderFallbackException)
+            {
+                inspection.Message = $"The obsolete runtime-cache state cannot be safely preserved: {exception.Message}";
+                return false;
+            }
         }
 
         internal static RuntimeCacheInspection Inspect(
@@ -334,7 +415,15 @@ namespace InvokersRu.Core.Patching
             if (supersededByOfficialUpdate)
             {
                 MutationTestHooks.InvokeBeforeSupersededStateArchive(statePath);
-                if (inspection.SnapshotlessStateSha256 != null)
+                if (inspection.OfficialOriginalStaleStateSha256 != null)
+                {
+                    ArchiveOfficialOriginalStaleStateUnderLock(
+                        cacheRoot, targetPath, statePath, profile,
+                        inspection.OfficialOriginalStaleStateSha256,
+                        inspection.OfficialOriginalStaleSignedUpdate
+                            ?? throw new InvalidDataException("Signed exact authority was lost before archival."));
+                }
+                else if (inspection.SnapshotlessStateSha256 != null)
                 {
                     ArchiveSnapshotlessLegacyStateUnderLock(
                         cacheRoot, targetPath, statePath, profile, inspection.SnapshotlessStateSha256);
@@ -1049,6 +1138,96 @@ namespace InvokersRu.Core.Patching
                     out _, out string problem))
                 throw new InvalidDataException($"Legacy runtime-cache state is not safe to archive: {problem}");
             PreserveSupersededState(statePath, state);
+        }
+
+        private static (RuntimeCacheCompatibility Observed, Loc1Document English, Loc1Document Base)
+            RequireSignedExactCurrentTuple(
+            string cacheRoot,
+            VerifiedSignedUpdate signedUpdate,
+            RuntimeCacheCompatibility currentExact)
+        {
+            if (currentExact.Mode != "exact" || !currentExact.Certified || currentExact.Readiness != "ready")
+                throw new InvalidDataException("Current official runtime-cache profile is not a certified exact profile.");
+            (string english, string target, string stamp) = ResolveFixedPaths(cacheRoot, currentExact);
+            RuntimeCacheCompatibility observed = DescribeTuple(english, target, stamp,
+                "observed-official-runtime-cache", out Loc1Document targetDocument);
+            if (!SignedUpdateRuntimeProfileAdapter.TrySelectExact(
+                    signedUpdate.Manifest, observed, targetDocument, out RuntimeCacheCompatibility? signedExact)
+                || signedExact == null
+                || !string.Equals(JsonSerializer.Serialize(currentExact), JsonSerializer.Serialize(signedExact), StringComparison.Ordinal))
+                throw new InvalidDataException("Current runtime-cache profile does not exactly match the signed official tuple and output pins.");
+            (Loc1Document englishDocument, Loc1Document baseDocument) = VerifyExactTuple(cacheRoot, signedExact);
+            return (observed, englishDocument, baseDocument);
+        }
+
+        private static PatchState ParseObsoleteState(byte[] stateBytes)
+        {
+            var options = new JsonSerializerOptions
+            {
+                UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+                AllowDuplicateProperties = false
+            };
+            PatchState? state = JsonSerializer.Deserialize<PatchState>(stateBytes, options);
+            return state ?? throw new InvalidDataException("Obsolete runtime-cache state is empty.");
+        }
+
+        private static void RequireObsoleteStateIdentity(
+            string cacheRoot,
+            string targetPath,
+            RuntimeCacheCompatibility currentExact,
+            PatchState state)
+        {
+            if (state.Schema != 1
+                || !IsSafeProfileId(state.BuildId)
+                || string.Equals(state.BuildId, currentExact.Id, StringComparison.Ordinal)
+                || !IsRecordedHash(state.OriginalSha256)
+                || !IsRecordedHash(state.PatchedSha256)
+                || !IsRecordedHash(state.TranslationsSha256)
+                || Hashing.FixedEqualsHex(state.OriginalSha256, state.PatchedSha256)
+                || Hashing.FixedEqualsHex(state.OriginalSha256, currentExact.BaseSha256)
+                || Hashing.FixedEqualsHex(state.PatchedSha256, currentExact.BaseSha256)
+                || state.AppliedTranslations is < 1 or > 100_000
+                || state.AppliedAt == default
+                || string.IsNullOrWhiteSpace(state.BackupPath)
+                || !PathEquals(state.GameRoot, cacheRoot)
+                || !PathEquals(state.TargetPath, targetPath))
+                throw new InvalidDataException("Obsolete state identity does not match a prior patch of this fixed runtime cache.");
+            // BackupPath is deliberately treated as opaque data. It may name a missing, stale, or
+            // attacker-controlled path and must never be resolved or opened on this recovery route.
+        }
+
+        private static void ArchiveOfficialOriginalStaleStateUnderLock(
+            string cacheRoot,
+            string targetPath,
+            string statePath,
+            RuntimeCacheCompatibility currentExact,
+            string expectedStateSha256,
+            VerifiedSignedUpdate signedUpdate)
+        {
+            PatchService.RejectExistingReparseComponents(statePath, "obsolete runtime-cache state");
+            RequireSignedExactCurrentTuple(cacheRoot, signedUpdate, currentExact);
+            byte[] stateBytes = BoundedArtifactReader.ReadFile(statePath, 64 * 1024,
+                "obsolete runtime-cache state");
+            string actualStateSha256 = Hashing.Sha256Bytes(stateBytes);
+            if (!Hashing.FixedEqualsHex(actualStateSha256, expectedStateSha256))
+                throw new InvalidDataException("Obsolete runtime-cache state changed after inspection.");
+            PatchState state = ParseObsoleteState(stateBytes);
+            RequireObsoleteStateIdentity(cacheRoot, targetPath, currentExact, state);
+
+            string stateRoot = Path.GetDirectoryName(Path.GetFullPath(statePath))
+                ?? throw new InvalidDataException("Runtime-cache state has no parent directory.");
+            string historyRoot = Path.Combine(stateRoot, "history", "obsolete-official");
+            PatchService.RejectExistingReparseComponents(historyRoot, "obsolete runtime-cache state history");
+            Directory.CreateDirectory(historyRoot);
+            PatchService.RejectExistingReparseComponents(historyRoot, "obsolete runtime-cache state history");
+            string historyPath = Path.Combine(historyRoot,
+                $"{actualStateSha256}-{Guid.NewGuid():N}.json");
+            File.Move(statePath, historyPath);
+            PatchService.RejectExistingReparseComponents(historyPath, "archived obsolete runtime-cache state");
+            if (!Hashing.FixedEqualsHex(
+                    BoundedArtifactReader.Sha256File(historyPath, 64 * 1024,
+                        "archived obsolete runtime-cache state"), expectedStateSha256))
+                throw new IOException("Archived obsolete runtime-cache state does not match the inspected bytes.");
         }
 
         private static bool TryValidateSnapshotlessLegacyState(

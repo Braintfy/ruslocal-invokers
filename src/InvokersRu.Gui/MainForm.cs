@@ -852,10 +852,29 @@ internal sealed class MainForm : Form
             Show("Набор файлов языка не найден", "Не удалось найти полный набор английских, украинских и служебных файлов.",
                 "Проверьте выбранную папку i18n кнопкой «Найти / выбрать папку». "
                 + "Для новой установки загрузите в игре английский и украинский языки, затем полностью закройте игру и лаунчер.", Theme.Warning);
+        else if (plan.Status == "InconsistentState"
+            && plan.Diagnostic.Kind == "local-state" && plan.Diagnostic.Component == "patch-state")
+            Show("Нужно проверить предыдущую установку", "Не удалось подтвердить сохранённые сведения о прошлой установке перевода.",
+                "Скопируйте подробности для поддержки и отправьте автору. Повторная загрузка языков не исправит запись о резервной копии. "
+                + "Не удаляйте и не перемещайте состояние патчера и резервные копии вручную.", Theme.Warning);
         else if (plan.Status == "InconsistentState")
             Show("Нужна повторная проверка", "Файлы игры изменились после установки перевода. " + FriendlyRevisionDifference(plan),
                 "Нажмите «Проверить». Если сообщение осталось, скопируйте подробности для поддержки ниже. "
                 + "Не удаляйте файлы и резервные копии вручную.", Theme.Danger);
+        else if (plan.IsPatched && !plan.TranslationUpdateAvailable)
+        {
+            string next = plan.ProcessConflicts.Length > 0
+                ? "Перевод уже установлен. Чтобы изменить или убрать его, сначала закройте игру и лаунчер."
+                : "Повторная установка не нужна. Оставьте украинский язык в настройках игры — он содержит русский перевод.";
+            if (plan.UpdateProblemBlocksApply)
+                next += "\n\nОбновление перевода пока недоступно, но установленный перевод сохранён. "
+                    + "Проверьте обновления позже. Если сообщение остаётся, скопируйте подробности для поддержки и отправьте автору.";
+            else if (plan.UpdateProblem == null)
+                next += "\n\nДоступных обновлений перевода для этих файлов сейчас нет.";
+            Show("Русский язык установлен",
+                $"Проверка подтвердила установленный перевод. Русских строк: {plan.State?.AppliedTranslations ?? plan.Profile.AppliedTranslations:N0}.",
+                next, Theme.Green);
+        }
         else if (plan.IsVersionRisk)
             Show("Нужно обновление перевода", FriendlyRevisionDifference(plan),
                 "Нажмите «Проверить», чтобы получить свежие данные. Если обновления ещё нет, дождитесь его. "
@@ -863,12 +882,6 @@ internal sealed class MainForm : Form
         else if (plan.UpdateProblemBlocksApply)
             Show("Обновление пока недоступно", "Не удалось подтвердить подходящие данные перевода.",
                 "Проверьте подключение к интернету и нажмите «Проверить». При необходимости используйте «Обновить патчер».", Theme.Warning);
-        else if (plan.IsPatched && !plan.TranslationUpdateAvailable)
-            Show("Русский язык установлен", $"Установлено русских строк: {plan.State?.AppliedTranslations ?? plan.Profile.AppliedTranslations:N0}.",
-                plan.ProcessConflicts.Length > 0
-                    ? "Можно продолжать играть. Чтобы обновить или убрать перевод, сначала закройте игру и лаунчер."
-                    : "Можно запускать игру. Оставьте украинский язык в настройках — он теперь содержит русский перевод. "
-                        + "Кнопка «Вернуть оригинал» убирает русификацию.", Theme.Green);
         else if (plan.ProcessConflicts.Length > 0 || plan.PlanAction == "REFUSE_CLOSE_GAME_AND_LAUNCHER")
             Show("Закройте игру и лаунчер", "Перед изменением перевода они должны быть полностью закрыты.",
                 RunningProcessNotice(plan.ProcessConflicts)
@@ -896,7 +909,8 @@ internal sealed class MainForm : Form
                 "Нажмите «Проверить». Если это не помогло, скопируйте подробности для поддержки ниже.", Theme.Warning);
 
         if (plan.UpdateProblem != null && !plan.UpdateProblemBlocksApply)
-            _noticeLabel.Text += " GitHub сейчас недоступен; используется сохранённый перевод.";
+            _noticeLabel.Text += "\n\nПроверка обновлений завершилась с предупреждением; используется ранее проверенный перевод. "
+                + "Подробности доступны для поддержки.";
         _noticeLabel.Text += PatcherVersionNotice(plan);
         UpdateButtons();
     }
@@ -1029,6 +1043,8 @@ internal sealed class MainForm : Form
                 || string.Equals(_lastPlan?.Status, "PatchSupersededByOfficialUpdate", StringComparison.Ordinal)
                 || string.Equals(_lastPlan?.Status, "PatchSupersededByCatalogUpdate", StringComparison.Ordinal)
                 ? "Обновить перевод"
+                : _lastPlan?.IsPatched == true
+                    ? "Перевод установлен"
                 : "Установить перевод";
         _applyButton.Enabled = !_busy && (_lastPlan?.CanApply == true || _lastPlan?.CanRecover == true);
         _restoreButton.Enabled = !_busy && _lastPlan?.CanRestore == true;

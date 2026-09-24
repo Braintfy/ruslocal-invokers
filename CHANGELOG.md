@@ -1,5 +1,13 @@
 # Changelog
 
+## Windows 3.1.12 Preview — 2026-09-24
+
+- Fixed updates from an authenticated exact-profile installation to a translation composed for the player's current compatible language files. Historical state and backups are authenticated before restore/reapply; profile names are not treated as interchangeable.
+- If the current language files independently match a signed exact official tuple, obsolete installation state can be preserved in history before a fresh installation. Old backup paths are not trusted or restored by this fallback. State bytes and current files are checked again under the installation lock; foreign installations, active journals and unknown target bytes remain blocked.
+- An already installed translation remains visibly installed even when an update cannot be applied. Update warnings are separate, and local-state failures no longer imply that the game files are damaged.
+- Added regression coverage for exact-to-compatible updates, unchanged output, obsolete-state preservation and refusal cases. The translation catalog/data11 is unchanged; coverage follows the local EN/UK source matches, not just a version number.
+- Delivered through the existing Windows app-update channel with previous download links preserved. This is a Windows patcher release; the macOS DMG is unchanged.
+
 ## Windows 3.1.11 Preview / translation data 11 — 2026-09-24
 
 - Fixed a false missing-files refusal when `.src` stores a client version such as `0.61.1506` while LOC1 identifies language family `0.61.0`. These are independent identities. Canonical metadata, signed family authorization, exact file pins and per-row source/hint checks remain required.
