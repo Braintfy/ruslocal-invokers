@@ -71,7 +71,7 @@ internal sealed class CliPlanResult
 
     private static readonly HashSet<string> KnownLocalProblems = new(StringComparer.Ordinal)
     {
-        "journal-authentication"
+        "journal-authentication", "runtime-cache-input"
     };
 
     private static readonly HashSet<string> KnownJournalPhases = new(StringComparer.Ordinal)
@@ -323,6 +323,10 @@ internal sealed class CliPlanResult
         Require(LocalProblem != "journal-authentication"
                 || Status == "InconsistentState" && Journal == null && !RestoreRecoveryAuthorized,
             "причина аутентификации журнала противоречит состоянию установки");
+        Require(LocalProblem != "runtime-cache-input"
+                || !CanApply && Update == null && UpdateProblemBlocksApply
+                    && !TranslationUpdateAvailable,
+            "ошибка чтения языковых файлов не может разрешать установку перевода");
         ValidateUpdate();
         ValidateStateAndJournal();
         ValidateDiagnostic(diagnostic, observed, catalog, profile);

@@ -1,5 +1,13 @@
 # Changelog
 
+## Windows 3.1.11 Preview / translation data 11 — 2026-09-24
+
+- Fixed a false missing-files refusal when `.src` stores a client version such as `0.61.1506` while LOC1 identifies language family `0.61.0`. These are independent identities. Canonical metadata, signed family authorization, exact file pins and per-row source/hint checks remain required.
+- Input failures now name the missing or unreadable EN/UK/metadata file, or explain incompatible language tables, instead of always suggesting another Ukrainian download. The main window preserves that reason and shows any running game processes alongside it.
+- Added regression coverage for old/new/future client stamps, malformed or changed metadata, exact/compatible installation and restoration, safe generated profile IDs, and strict GUI refusal contracts. The language version shown in the window comes from LOC1, not the client stamp.
+- Refreshed only 33 catalog records for EN/UK `Prod_0.61.0_82`: three changed English sources and 31 Ukrainian hint bindings with one overlap; two Russian texts changed. Composition applies 42,447 rows with two purchase-service English fallbacks and 220 empty entries; zero validation errors.
+- Windows 3.1.5+ receives 3.1.11 through the existing app updater, with previous download links preserved. Mac script 2.10.0 already handles these files and fetches the updated catalog; no replacement DMG is required.
+
 ## Windows 3.1.10 Preview / Mac script 2.10.0 / translation data 10 — 2026-09-24
 
 - Updated the Russian catalog for EN/UK `Prod_0.61.0_78`: new strings and changed skill descriptions, with unchanged translations retained and source/hint bindings refreshed. Composition applies 42,447 Russian rows, leaves two purchase-service strings in English and preserves 220 empty entries; zero validation errors.

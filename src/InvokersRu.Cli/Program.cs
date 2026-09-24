@@ -560,7 +560,7 @@ namespace InvokersRu.Cli
             string stampPath = options.Optional("stamp", defaultStamp);
             foreach ((string label, string path) in new[]
             {
-                ("dl_en_US.bin", englishPath), ("dl_uk_UA.bin", basePath), ("dl_uk_UA.bin.ver", stampPath)
+                ("dl_en_US.bin", englishPath), ("dl_uk_UA.bin", basePath), (Path.GetFileName(stampPath), stampPath)
             })
             {
                 if (!File.Exists(path))

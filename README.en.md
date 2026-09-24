@@ -19,7 +19,7 @@ Only Windows and macOS builds are currently distributed. Legacy Android tools re
 
 ### Windows
 
-**Windows 3.1.10:** supports game 0.61 language files, including the versioned content identifier and removal of the old `.ver` files. The translation is updated for EN/UK `Prod_0.61.0_78`. Previous backups are preserved; do not delete patch state or backups.
+**Windows 3.1.11:** fixes the false missing-language-files error when the client version in `.src` differs from the language-data version. The patcher now identifies missing, unreadable or incompatible inputs. The translation is updated for EN/UK `Prod_0.61.0_82`. If both languages are already downloaded, reinstalling the game is unnecessary. Previous backups are preserved; do not delete patch state or backups.
 
 1. Download the Windows installer from [Releases](https://github.com/Braintfy/ruslocal-invokers/releases/latest).
 2. Select **Ukrainian** in the game, wait for the download, then close the game and launcher completely.
@@ -27,7 +27,7 @@ Only Windows and macOS builds are currently distributed. Legacy Android tools re
 
 **After upgrading the game to 0.61:** select English, fully restart the game and wait for the main menu. Repeat with Ukrainian, then close the game and launcher. This downloads both current tables instead of retaining the previous game's English file.
 
-**Upgrading an old patcher:** versions 3.1.5–3.1.9 offer **3.1.10** through their updater. Install the current EXE over versions 3.1.2–3.1.4 once. It then checks GitHub for application updates on startup and when you click Check. The [previous direct link](https://github.com/Braintfy/ruslocal-invokers/releases/download/v3.1.2-preview/InvokersRu-3.1-Preview-3.1.2-preview-win-x64.exe) is preserved.
+**Upgrading an old patcher:** versions 3.1.5–3.1.10 offer **3.1.11** through their updater. Install the current EXE over versions 3.1.2–3.1.4 once. It then checks GitHub for application updates on startup and when you click Check. The [previous direct link](https://github.com/Braintfy/ruslocal-invokers/releases/download/v3.1.2-preview/InvokersRu-3.1-Preview-3.1.2-preview-win-x64.exe) is preserved.
 
 Translation data updates remain separate: click Update translation when offered to apply new text. Technical output is hidden under Support details, with show and copy buttons. Windows may warn about an unknown publisher: Authenticode signing is still pending; the signed update description and SHA-256 are verified independently.
 

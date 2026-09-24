@@ -2,6 +2,7 @@ using InvokersRu.Gui;
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -33,6 +34,33 @@ namespace InvokersRu.SmokeTests
             Require(parsed.CanApply && parsed.Catalog.ExactMatch
                 && parsed.Observed.GameVersion == "0.60.1247",
                 "A valid exact ready-to-apply response was rejected or lost its observed/catalog identity.");
+
+            JsonObject inputProblem = Clone(ready);
+            inputProblem["status"] = "MissingFiles";
+            inputProblem["local_problem"] = "runtime-cache-input";
+            inputProblem["message"] = "Не найден файл dl_en_US.bin (английский язык).";
+            inputProblem["update_problem"] = inputProblem["message"]!.GetValue<string>();
+            inputProblem["update_problem_blocks_apply"] = true;
+            inputProblem["can_apply"] = false;
+            inputProblem["plan"] = "REFUSE_UNKNOWN_OR_INCONSISTENT";
+            foreach (string key in inputProblem["observed"]!.AsObject().Select(item => item.Key).ToArray())
+                inputProblem["observed"]![key] = null;
+            inputProblem["diagnostic"] = new JsonObject
+            {
+                ["kind"] = "structural-boundary", ["component"] = "missing-files",
+                ["current"] = "missing", ["expected"] = "fixed EN/UK/stamp tuple"
+            };
+            CliPlanResult missingInput = Parse(inputProblem, 5);
+            Require(missingInput.LocalProblem == "runtime-cache-input"
+                && missingInput.Message.Contains("dl_en_US.bin", StringComparison.Ordinal)
+                && !missingInput.CanApply,
+                "The exact local input failure was lost behind a generic missing-language message.");
+            JsonObject forgedInputApply = Clone(inputProblem);
+            forgedInputApply["can_apply"] = true;
+            ExpectInvalid(forgedInputApply, 5, "input error enabling installation");
+            JsonObject unblockedInput = Clone(inputProblem);
+            unblockedInput["update_problem_blocks_apply"] = false;
+            ExpectInvalid(unblockedInput, 5, "input error without its explicit write block");
 
             JsonObject protectedGame = Clone(ready);
             protectedGame["protection_check"]!["status"] = "blocked";

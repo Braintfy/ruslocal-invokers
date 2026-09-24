@@ -2,6 +2,7 @@ using InvokersRu.Core;
 using InvokersRu.Core.Loc1;
 using InvokersRu.Core.Patching;
 using InvokersRu.Core.Translations;
+using InvokersRu.Cli;
 using System;
 using System.Buffers.Binary;
 using System.Globalization;
@@ -51,23 +52,73 @@ namespace InvokersRu.SmokeTests
                 Require(newPaths.English == oldEnglishPath && newPaths.Target == targetPath
                     && newPaths.Stamp == sourceStampPath,
                     "Numeric-family runtime cache did not select the new source metadata while retaining dl target.");
+                RuntimeCacheCompatibility earlierClientProfile = ReadyProfile(RuntimeCacheService.DescribeTuple(
+                    newPaths.English, newPaths.Target, newPaths.Stamp, "earlier-client-exact"), "earlier-client-exact");
+                Require(RuntimeCacheService.Inspect(cache, earlierClientProfile, statePath).Status
+                    == InstallationStatus.CompatibleOriginal,
+                    "A canonical source stamp matching the LOC1 family stopped working.");
+                File.WriteAllText(sourceStampPath, "0.61.1506:1123186", new UTF8Encoding(false));
+                RuntimeCacheCompatibility generatedIdProfile = RuntimeCacheService.DescribeTuple(
+                    newPaths.English, newPaths.Target, newPaths.Stamp, id: null);
+                Require(generatedIdProfile.Id.StartsWith("runtime-cache-source-", StringComparison.Ordinal)
+                    && !generatedIdProfile.Id.Contains(':')
+                    && generatedIdProfile.StampValue == "0.61.1506:1123186",
+                    "A canonical source stamp did not receive a deterministic safe default profile ID.");
                 RuntimeCacheCompatibility newProfile = ReadyProfile(RuntimeCacheService.DescribeTuple(
                     newPaths.English, newPaths.Target, newPaths.Stamp, "new-exact"), "new-exact");
                 RuntimeCacheInspection original = RuntimeCacheService.Inspect(cache, newProfile, statePath);
                 Require(original.Status == InstallationStatus.CompatibleOriginal
                     && original.StampPath == sourceStampPath
-                    && original.StampValue == "0.61.0:1123186"
+                    && original.StampValue == "0.61.1506:1123186"
+                    && newProfile.ContentGuid == NewFamily
+                    && RuntimeCacheService.Inspect(cache, earlierClientProfile, statePath).Status
+                        == InstallationStatus.UnknownBuild
                     && BoundedArtifactReader.DecodeObservedStamp(Encoding.UTF8.GetBytes("0.61.0:bad")) == null
                     && BoundedArtifactReader.DecodeObservedStamp(Encoding.UTF8.GetBytes("0.61.0:1123186:1")) == null,
-                    "New exact runtime-cache tuple did not inspect through uk_UA.bin.src.");
+                    "Canonical client-build source stamp was not independently pinned from LOC1 family.");
+                Require(RuntimeUpdateResolver.TryReadObserved(cache, out RuntimeCacheCompatibility? observed,
+                        out _, out string readyProblem)
+                    && observed?.StampValue == "0.61.1506:1123186"
+                    && readyProblem.Length == 0,
+                    "Observed numeric-family tuple did not pass the resolver's read-only input check.");
+                File.Delete(oldEnglishPath);
+                Require(!RuntimeUpdateResolver.TryReadObserved(cache, out _, out _, out string missingEnglish)
+                    && missingEnglish.Contains("dl_en_US.bin", StringComparison.Ordinal),
+                    "Missing English download was not diagnosed by file name.");
+                File.WriteAllBytes(oldEnglishPath, newEnglish);
+                File.Delete(targetPath);
+                Require(!RuntimeUpdateResolver.TryReadObserved(cache, out _, out _, out string missingBase)
+                    && missingBase.Contains("dl_uk_UA.bin", StringComparison.Ordinal),
+                    "Missing Ukrainian download was not diagnosed by file name.");
+                File.WriteAllBytes(targetPath, newBase);
+                File.Delete(sourceStampPath);
+                Require(!RuntimeUpdateResolver.TryReadObserved(cache, out _, out _, out string missingSourceStamp)
+                    && missingSourceStamp.Contains("uk_UA.bin.src", StringComparison.Ordinal),
+                    "Missing numeric-family source stamp was mislabeled as the legacy version file.");
+                File.WriteAllText(sourceStampPath, "0.61.1506:1123186", new UTF8Encoding(false));
+                File.WriteAllBytes(oldEnglishPath, oldEnglish);
+                Require(!RuntimeUpdateResolver.TryReadObserved(cache, out _, out _, out string mixedCorpus)
+                    && mixedCorpus.Contains("разным наборам", StringComparison.Ordinal),
+                    "Mixed EN/UK corpora were not diagnosed as incompatible.");
+                File.WriteAllBytes(oldEnglishPath, newEnglish);
 
-                File.WriteAllText(sourceStampPath, "0.60.0:1123186", new UTF8Encoding(false));
-                bool wrongFamilyRejected = false;
+                File.WriteAllText(sourceStampPath, "0.61.1507:1123186", new UTF8Encoding(false));
+                RuntimeCacheCompatibility futureClientProfile = RuntimeCacheService.DescribeTuple(
+                    newPaths.English, newPaths.Target, sourceStampPath, "future-client");
+                Require(futureClientProfile.ContentGuid == NewFamily
+                    && futureClientProfile.StampValue == "0.61.1507:1123186"
+                    && RuntimeCacheService.Inspect(cache, newProfile, statePath).Status == InstallationStatus.UnknownBuild,
+                    "A future canonical client build was either rejected or accepted against an old exact stamp pin.");
+                File.WriteAllText(sourceStampPath, "0.61.1506:bad", new UTF8Encoding(false));
+                bool malformedStampRejected = false;
                 try { RuntimeCacheService.DescribeTuple(newPaths.English, newPaths.Target, sourceStampPath, "bad"); }
-                catch (InvalidDataException) { wrongFamilyRejected = true; }
-                Require(wrongFamilyRejected && RuntimeCacheService.Inspect(cache, newProfile, statePath).Status
-                    == InstallationStatus.UnknownBuild, "Mismatched source metadata was accepted.");
-                File.WriteAllText(sourceStampPath, "0.61.0:1123186", new UTF8Encoding(false));
+                catch (InvalidDataException) { malformedStampRejected = true; }
+                Require(malformedStampRejected && RuntimeCacheService.Inspect(cache, newProfile, statePath).Status
+                    == InstallationStatus.UnknownBuild, "Malformed source metadata was accepted.");
+                Require(!RuntimeUpdateResolver.TryReadObserved(cache, out _, out _, out string malformedStampProblem)
+                    && malformedStampProblem.Contains("uk_UA.bin.src", StringComparison.Ordinal),
+                    "Malformed source stamp was not diagnosed by file name.");
+                File.WriteAllText(sourceStampPath, "0.61.1506:1123186", new UTF8Encoding(false));
 
                 string safeOldId = oldProfile.Id + "-" + Hashing.Sha256Text(oldProfile.Id).Substring(0, 12);
                 string backup = Path.Combine(stateRoot, "backups", safeOldId,
@@ -100,7 +151,7 @@ namespace InvokersRu.SmokeTests
                 if (MutationCapability.IsTestWriteBuild)
                     ApplyCrossFamilyFixture(cache, statePath, oldEnglishPath, targetPath,
                         sourceStampPath, backup, newEnglish, newBase, oldBase, newProfile, oldProfile);
-                passed("source-stamp runtime tuple keeps dl target, rejects mismatched metadata, and authenticates cross-family exact predecessor");
+                passed("source-stamp client version is independent of LOC1 family while exact pins, tamper checks, and cross-family predecessor remain enforced");
             }
             finally
             {
@@ -135,6 +186,27 @@ namespace InvokersRu.SmokeTests
                     UpdatedAt = DateTimeOffset.Parse("2026-09-24T00:00:00Z", CultureInfo.InvariantCulture)
                 }
             });
+            byte[] catalogBytes = File.ReadAllBytes(catalogPath);
+            string catalogSha256 = Hashing.Sha256Bytes(catalogBytes);
+            CompatibleRevisionProfileBuild compatible = CompatibleRevisionProfileBuilder.Build(
+                englishPath, targetPath, sourceStampPath, NewFamily,
+                catalogBytes, catalogSha256, "community-preview-all-drafts");
+            Require(compatible.Profile.StampValue == "0.61.1506:1123186"
+                && compatible.Profile.ContentGuid == NewFamily
+                && compatible.Composition.AppliedTranslations == 1,
+                "Authenticated compatible revision rejected a canonical client-build source stamp.");
+            File.WriteAllText(sourceStampPath, "0.61.1506:bad", new UTF8Encoding(false));
+            bool malformedCompatibleStampRejected = false;
+            try
+            {
+                CompatibleRevisionProfileBuilder.Build(
+                    englishPath, targetPath, sourceStampPath, NewFamily,
+                    catalogBytes, catalogSha256, "community-preview-all-drafts");
+            }
+            catch (InvalidDataException) { malformedCompatibleStampRejected = true; }
+            File.WriteAllText(sourceStampPath, "0.61.1506:1123186", new UTF8Encoding(false));
+            Require(malformedCompatibleStampRejected,
+                "Compatible revision materialized malformed source metadata.");
             TranslationCatalog catalog = TranslationCatalog.LoadJsonLines(catalogPath);
             CompositionSummary composition = TranslationComposer.Apply(
                 english, baseLocale, catalog, includeDraft: true, approvedOnly: false,

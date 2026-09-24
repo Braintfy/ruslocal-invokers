@@ -819,8 +819,8 @@ internal sealed class MainForm : Form
     {
         _pathLabel.Text = string.IsNullOrWhiteSpace(plan.CacheRoot) ? _gameRoot : plan.CacheRoot;
         string gameVersion = InvokersRu.Core.Loc1.Loc1ContentFamily.TryParseSourceStamp(
-            plan.Observed.GameVersion, out string family, out _)
-            ? $"Языковые данные: {family}"
+            plan.Observed.GameVersion, out _, out _)
+            ? $"Языковые данные: {plan.Observed.EnglishContentGuid ?? "версия пока неизвестна"}"
             : $"Игра: {plan.Observed.GameVersion ?? "версия пока неизвестна"}";
         _versionLabel.Text = $"{gameVersion}   •   Патчер: {plan.PatcherVersion}";
         void Show(string title, string summary, string next, Color color)
@@ -842,10 +842,16 @@ internal sealed class MainForm : Form
                 "Не удаляйте и не отключайте защиту. Отправьте подробности автору и дождитесь проверки совместимости. "
                 + (plan.CanRestore ? "Можно вернуть проверенный оригинал кнопкой ниже. " : "")
                 + "Причина: " + string.Join("; ", plan.ProtectionCheck.Evidence.Take(2)), Theme.Danger);
+        else if (plan.LocalProblem == "runtime-cache-input")
+            Show("Проверьте файлы языка", plan.Message,
+                RunningProcessNotice(plan.ProcessConflicts)
+                + "Полностью закройте игру и лаунчер, затем нажмите «Проверить». "
+                + "Если ошибка повторяется, отправьте автору подробности и файлы из папки i18n. "
+                + "Не переименовывайте файлы и не удаляйте резервные копии.", Theme.Warning);
         else if (plan.Status == "MissingFiles")
-            Show("Файлы языка не найдены", "Игра ещё не скачала украинский язык или её папка находится в другом месте.",
-                "Выберите украинский язык в игре и дождитесь загрузки. Затем закройте игру и нажмите «Проверить». "
-                + "Если папка не найдена, нажмите «Найти / выбрать папку».", Theme.Warning);
+            Show("Набор файлов языка не найден", "Не удалось найти полный набор английских, украинских и служебных файлов.",
+                "Проверьте выбранную папку i18n кнопкой «Найти / выбрать папку». "
+                + "Для новой установки загрузите в игре английский и украинский языки, затем полностью закройте игру и лаунчер.", Theme.Warning);
         else if (plan.Status == "InconsistentState")
             Show("Нужна повторная проверка", "Файлы игры изменились после установки перевода. " + FriendlyRevisionDifference(plan),
                 "Нажмите «Проверить». Если сообщение осталось, скопируйте подробности для поддержки ниже. "

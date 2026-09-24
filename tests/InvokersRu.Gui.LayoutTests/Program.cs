@@ -81,8 +81,34 @@ internal static class Program
             Invoke(form, "FitWorkingArea", true);
             Require(Screen.FromControl(form).WorkingArea.Contains(form.Bounds), "Startup window exceeds the current working area.");
         }
+        using (Form form = (Form)Activator.CreateInstance(MainFormType)!)
+        {
+            Type planType = MainFormType.Assembly.GetType("InvokersRu.Gui.CliPlanResult", true)!;
+            object plan = Activator.CreateInstance(planType)!;
+            Set(plan, "Status", "MissingFiles");
+            Set(plan, "PatcherVersion", "3.1.11");
+            Set(plan, "LocalProblem", "runtime-cache-input");
+            Set(plan, "Message", "Файл dl_en_US.bin не читается как исходный LOC1.");
+            Set(plan, "UpdateProblemBlocksApply", true);
+            Set(plan, "ProcessConflicts", new[] { "Invokers (1234; C:\\Games\\Invokers\\Invokers.exe)" });
+            object observed = planType.GetProperty("Observed")!.GetValue(plan)!;
+            Set(observed, "GameVersion", "0.61.1506:1123186");
+            Set(observed, "EnglishContentGuid", "0.61.0");
+            Invoke(form, "RenderPlan", plan);
+            Require(Field<Label>(form, "_stateLabel").Text.Contains("dl_en_US.bin"),
+                "Specific English-file failure was replaced with generic Ukrainian download advice.");
+            Require(Field<Label>(form, "_noticeLabel").Text.Contains("Invokers (1234)"),
+                "Local input diagnostics hid a simultaneously running game.");
+            Require(Field<Label>(form, "_versionLabel").Text.Contains("Языковые данные: 0.61.0")
+                && !Field<Label>(form, "_versionLabel").Text.Contains("1506"),
+                "Client version was mislabeled as the LOC1 language family.");
+        }
         Console.WriteLine("PASS working-area sizing and concise process explanation.");
+        Console.WriteLine("PASS precise input-failure rendering and separate client/language identities.");
     }
+
+    private static void Set(object instance, string property, object value) =>
+        instance.GetType().GetProperty(property)!.SetValue(instance, value);
 
     private static void AssertPinned(Form form, string phase)
     {

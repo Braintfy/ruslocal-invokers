@@ -107,14 +107,17 @@ namespace InvokersRu.Core.Patching
                 throw new InvalidDataException($"Runtime-cache version stamp is not a bare version string: {stampPath}");
             }
             if (!Guid.TryParseExact(english.ContentGuid, "D", out _)
-                && (!Loc1ContentFamily.TryParseSourceStamp(stampValue, out string sourceFamily, out _)
-                    || !string.Equals(sourceFamily, english.ContentGuid, StringComparison.Ordinal)))
+                && !Loc1ContentFamily.TryParseSourceStamp(stampValue, out _, out _))
             {
-                throw new InvalidDataException("Runtime-cache source stamp does not identify the observed LOC1 content family.");
+                throw new InvalidDataException("Runtime-cache source stamp is not a canonical client version and source-size marker.");
             }
             var profile = new RuntimeCacheCompatibility
             {
-                Id = string.IsNullOrWhiteSpace(id) ? $"runtime-cache-{stampValue}" : id!,
+                Id = string.IsNullOrWhiteSpace(id)
+                    ? Loc1ContentFamily.TryParseSourceStamp(stampValue, out _, out _)
+                        ? $"runtime-cache-source-{Hashing.Sha256Text(stampValue).Substring(0, 32)}"
+                        : $"runtime-cache-{stampValue}"
+                    : id!,
                 GameVersion = stampValue,
                 ContentGuid = english.ContentGuid,
                 EnglishContentVersion = english.ContentVersion,
@@ -1262,9 +1265,8 @@ namespace InvokersRu.Core.Patching
             string fullRoot = Path.GetFullPath(root);
             if (profile != null && !Guid.TryParseExact(profile.ContentGuid, "D", out _))
             {
-                if (!Loc1ContentFamily.TryParseSourceStamp(profile.StampValue, out string family, out _)
-                    || !string.Equals(family, profile.ContentGuid, StringComparison.Ordinal))
-                    throw new InvalidDataException("Numeric-family runtime-cache profile has no matching source stamp.");
+                if (!Loc1ContentFamily.TryParseSourceStamp(profile.StampValue, out _, out _))
+                    throw new InvalidDataException("Numeric-family runtime-cache profile has no canonical source stamp.");
                 sourceStamp = true;
             }
             return (

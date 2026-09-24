@@ -19,9 +19,9 @@ namespace InvokersRu.Core.Loc1
                 && string.Equals(version.ToString(3), value, StringComparison.Ordinal);
         }
 
-        public static bool TryParseSourceStamp(string? value, out string family, out long compressedBytes)
+        public static bool TryParseSourceStamp(string? value, out string clientVersion, out long compressedBytes)
         {
-            family = string.Empty;
+            clientVersion = string.Empty;
             compressedBytes = 0;
             if (string.IsNullOrEmpty(value) || value.Length > 64) return false;
             int separator = value.IndexOf(':');
@@ -35,7 +35,7 @@ namespace InvokersRu.Core.Loc1
                 || length is < 1 or > 268435456
                 || !string.Equals(length.ToString(CultureInfo.InvariantCulture), size, StringComparison.Ordinal))
                 return false;
-            family = prefix;
+            clientVersion = prefix;
             compressedBytes = length;
             return true;
         }

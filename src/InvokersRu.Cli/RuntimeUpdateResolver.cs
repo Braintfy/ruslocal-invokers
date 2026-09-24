@@ -251,12 +251,14 @@ namespace InvokersRu.Cli
                     "The active transaction journal has no unique authenticated recovery profile or preserved phase artifact.");
             }
 
-            if (!TryReadObserved(cacheRoot, out RuntimeCacheCompatibility? directObserved, out Loc1Document? target))
+            if (!TryReadObserved(cacheRoot, out RuntimeCacheCompatibility? directObserved,
+                out Loc1Document? target, out string observedProblem))
                 return WithUnavailableSignedData(
                     embedded,
                     bundle,
                     channelAuthority!,
-                    "The fixed runtime-cache tuple is missing or unreadable.");
+                    observedProblem,
+                    runtimeCacheInput: true);
 
             PatchState? state = PatchPlanner.TryLoadState(statePath);
 
@@ -643,10 +645,12 @@ namespace InvokersRu.Cli
             VerifiedSignedUpdate channelAuthority,
             string problem,
             RuntimeCacheCompatibility? installedProfile = null,
-            RuntimeCacheInspection? installedInspection = null)
+            RuntimeCacheInspection? installedInspection = null,
+            bool runtimeCacheInput = false)
         {
             RuntimeCacheCompatibility selectedProfile = installedProfile ?? embedded.Profile;
             RuntimeCacheInspection selectedInspection = installedInspection ?? embedded.Inspection;
+            if (runtimeCacheInput) selectedInspection.Message = problem;
             return new RuntimeUpdateResolution
             {
                 // A historical signed profile remains the only authenticated authority for restore.
@@ -664,6 +668,7 @@ namespace InvokersRu.Cli
                 InstalledInspection = installedInspection ?? embedded.InstalledInspection,
                 TranslationUpdateAvailable = false,
                 Source = embedded.Source,
+                LocalProblem = runtimeCacheInput ? "runtime-cache-input" : null,
                 RemoteProblem = problem,
                 // An authenticated current head exists but did not authorize the selected embedded
                 // profile/catalog.  Never attach an unrelated bundle receipt to an embedded write.
@@ -671,15 +676,31 @@ namespace InvokersRu.Cli
             };
         }
 
-        private static bool TryReadObserved(
+        internal static bool TryReadObserved(
             string cacheRoot,
             out RuntimeCacheCompatibility? observed,
-            out Loc1Document? target)
+            out Loc1Document? target,
+            out string problem)
         {
             observed = null;
             target = null;
+            problem = string.Empty;
             (string english, string basePath, string stamp) = RuntimeCacheService.ResolveTuplePaths(cacheRoot);
-            if (!File.Exists(english) || !File.Exists(basePath) || !File.Exists(stamp)) return false;
+            if (!File.Exists(english))
+            {
+                problem = "Файл dl_en_US.bin отсутствует или недоступен. Дождитесь загрузки английского языка в игре.";
+                return false;
+            }
+            if (!File.Exists(basePath))
+            {
+                problem = "Файл dl_uk_UA.bin отсутствует или недоступен. Дождитесь загрузки украинского языка в игре.";
+                return false;
+            }
+            if (!File.Exists(stamp))
+            {
+                problem = DiagnoseMissingStamp(basePath, stamp);
+                return false;
+            }
             try
             {
                 observed = RuntimeCacheService.DescribeTuple(
@@ -692,12 +713,89 @@ namespace InvokersRu.Cli
                 return true;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
-                or InvalidDataException or InvalidOperationException or Loc1FormatException)
+                or InvalidDataException or InvalidOperationException or Loc1FormatException
+                or System.Text.DecoderFallbackException)
             {
                 // An incomplete per-locale download is not a compatible tuple.  The write path
                 // remains unavailable until both official downloaded LOC1 files agree.
+                problem = DiagnoseUnreadableTuple(english, basePath, stamp);
                 return false;
             }
+        }
+
+        private static string DiagnoseMissingStamp(string basePath, string selectedStamp)
+        {
+            try
+            {
+                Loc1Document baseLocale = Loc1Codec.Parse(BoundedArtifactReader.ReadRuntimeLoc1(
+                    basePath, "runtime-cache diagnostic Ukrainian LOC1"));
+                if (!Guid.TryParseExact(baseLocale.ContentGuid, "D", out _)
+                    && Loc1ContentFamily.IsCanonical(baseLocale.ContentGuid))
+                    return "Файл uk_UA.bin.src отсутствует или недоступен. Дождитесь загрузки языковых данных в игре.";
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                or InvalidDataException or InvalidOperationException or Loc1FormatException)
+            {
+                return "Файл dl_uk_UA.bin не читается как исходный LOC1. Дождитесь завершения загрузки украинского языка.";
+            }
+            return Path.GetFileName(selectedStamp) == "dl_uk_UA.bin.ver"
+                ? "Файл dl_uk_UA.bin.ver отсутствует или недоступен. Дождитесь загрузки языковых данных в игре."
+                : "Файл uk_UA.bin.src отсутствует или недоступен. Дождитесь загрузки языковых данных в игре.";
+        }
+
+        private static string DiagnoseUnreadableTuple(string englishPath, string basePath, string stampPath)
+        {
+            Loc1Document english;
+            Loc1Document baseLocale;
+            try
+            {
+                english = Loc1Codec.Parse(BoundedArtifactReader.ReadRuntimeLoc1(
+                    englishPath, "runtime-cache diagnostic English LOC1"));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                or InvalidDataException or InvalidOperationException or Loc1FormatException)
+            {
+                return "Файл dl_en_US.bin не читается как исходный LOC1. Дождитесь завершения загрузки английского языка.";
+            }
+            try
+            {
+                baseLocale = Loc1Codec.Parse(BoundedArtifactReader.ReadRuntimeLoc1(
+                    basePath, "runtime-cache diagnostic Ukrainian LOC1"));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                or InvalidDataException or InvalidOperationException or Loc1FormatException)
+            {
+                return "Файл dl_uk_UA.bin не читается как исходный LOC1. Дождитесь завершения загрузки украинского языка.";
+            }
+            try
+            {
+                Loc1Compatibility.RequireComposableCorpus(english, baseLocale, allowPerLocaleContentVersion: true);
+            }
+            catch (InvalidOperationException)
+            {
+                return "Файлы dl_en_US.bin и dl_uk_UA.bin относятся к разным наборам локализации. Обновите оба языка в игре.";
+            }
+            if (!Guid.TryParseExact(baseLocale.ContentGuid, "D", out _)
+                && Loc1ContentFamily.IsCanonical(baseLocale.ContentGuid)
+                && Path.GetFileName(stampPath) == "dl_uk_UA.bin.ver")
+                return "Файл uk_UA.bin.src отсутствует или недоступен. Дождитесь загрузки языковых данных в игре.";
+            try
+            {
+                byte[] stampBytes = BoundedArtifactReader.ReadRuntimeStamp(
+                    stampPath, "runtime-cache diagnostic version stamp");
+                string? stampValue = BoundedArtifactReader.DecodeObservedStamp(stampBytes);
+                bool valid = stampValue != null
+                    && (Guid.TryParseExact(english.ContentGuid, "D", out _)
+                        || Loc1ContentFamily.TryParseSourceStamp(stampValue, out _, out _));
+                if (!valid)
+                    return $"Файл {Path.GetFileName(stampPath)} содержит некорректную версию языковых данных.";
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                or InvalidDataException or InvalidOperationException)
+            {
+                return $"Файл {Path.GetFileName(stampPath)} не читается как метаданные языка.";
+            }
+            return "Не удалось подтвердить полный набор dl_en_US.bin, dl_uk_UA.bin и метаданных языка.";
         }
 
         private static RuntimeUpdateResolution WithUnauthenticatedJournal(

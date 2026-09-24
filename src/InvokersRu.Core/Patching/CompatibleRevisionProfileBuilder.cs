@@ -131,9 +131,11 @@ namespace InvokersRu.Core.Patching
                 throw new InvalidDataException("Compatible-revision version stamp is not strict UTF-8.", exception);
             }
 
-            if (!IsBareToken(stampValue, 64))
+            if (!IsBareToken(stampValue, 64)
+                || (!Guid.TryParseExact(english.ContentGuid, "D", out _)
+                    && !Loc1ContentFamily.TryParseSourceStamp(stampValue, out _, out _)))
             {
-                throw new InvalidDataException("Compatible-revision version stamp is not a bounded bare token.");
+                throw new InvalidDataException("Compatible-revision version stamp is not a canonical bounded source marker.");
             }
 
             string catalogSha256 = Hashing.Sha256Bytes(catalogBytes);
