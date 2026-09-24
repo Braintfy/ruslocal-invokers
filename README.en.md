@@ -19,13 +19,15 @@ Only Windows and macOS builds are currently distributed. Legacy Android tools re
 
 ### Windows
 
-**Windows 3.1.9:** fixed the verification error after a successful translation installation: identical content is no longer treated as an update solely because exact and compatible profiles have different IDs. The installed translation and backup are preserved. The adaptive window, progress indicator and unrelated UnityCrashHandler fix from 3.1.8 remain in place. Do not delete patch state or backups.
+**Windows 3.1.10:** supports game 0.61 language files, including the versioned content identifier and removal of the old `.ver` files. The translation is updated for EN/UK `Prod_0.61.0_78`. Previous backups are preserved; do not delete patch state or backups.
 
 1. Download the Windows installer from [Releases](https://github.com/Braintfy/ruslocal-invokers/releases/latest).
 2. Select **Ukrainian** in the game, wait for the download, then close the game and launcher completely.
 3. Run the localizer, select **Check**, then install or update the translation.
 
-**Upgrading an old patcher:** versions 3.1.5–3.1.8 offer **3.1.9** through their updater. Install the current EXE over versions 3.1.2–3.1.4 once. It then checks GitHub for application updates on startup and when you click Check. The [previous direct link](https://github.com/Braintfy/ruslocal-invokers/releases/download/v3.1.2-preview/InvokersRu-3.1-Preview-3.1.2-preview-win-x64.exe) is preserved.
+**After upgrading the game to 0.61:** select English, fully restart the game and wait for the main menu. Repeat with Ukrainian, then close the game and launcher. This downloads both current tables instead of retaining the previous game's English file.
+
+**Upgrading an old patcher:** versions 3.1.5–3.1.9 offer **3.1.10** through their updater. Install the current EXE over versions 3.1.2–3.1.4 once. It then checks GitHub for application updates on startup and when you click Check. The [previous direct link](https://github.com/Braintfy/ruslocal-invokers/releases/download/v3.1.2-preview/InvokersRu-3.1-Preview-3.1.2-preview-win-x64.exe) is preserved.
 
 Translation data updates remain separate: click Update translation when offered to apply new text. Technical output is hidden under Support details, with show and copy buttons. Windows may warn about an unknown publisher: Authenticode signing is still pending; the signed update description and SHA-256 are verified independently.
 
@@ -34,6 +36,8 @@ Maintainers: [publishing patcher self-updates](docs/patcher-self-update.md).
 If EN/UK changed after installation, do not manually delete state or backups. Upgrade the patcher, redownload the official Ukrainian language through the game, close the game and launcher, then check again. If it still refuses, include the check log in your report. Changed English rows without a matching translation remain English: the client version alone does not block installation.
 
 ### macOS
+
+Script 2.10.0 and the current catalog download automatically; no new DMG is needed. After a major game update, start the game in English and then Ukrainian, waiting for the main menu each time.
 
 1. Install and launch the native **Invokers Titan Legacy** client once.
 2. Select **Ukrainian** in both the official launcher and the game, wait for it to download, then quit the game completely (`Cmd+Q`). Russian replaces the Ukrainian language slot.

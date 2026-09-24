@@ -43,6 +43,18 @@ old_state="$STATE_FILE"
 
 printf 'PASS: mac cache selection and state isolation\n'
 
+(
+    # The new downloaded LOC1 identity takes precedence over a stale legacy stamp.
+    inspect_field() { printf '%s' "$test_family"; }
+    test_family=0.61.0
+    [ "$(cache_version "$NATIVE")" = '0.61.0' ] || fail 'versioned downloaded identity was ignored'
+    test_family=00.61.0
+    [ "$(cache_version "$NATIVE")" = '0.60.1289' ] || fail 'noncanonical identity was accepted'
+    test_family=ad875e27-1bf6-4f4a-8ed5-3957d0ed05fa
+    [ "$(cache_version "$NATIVE")" = '0.60.1289' ] || fail 'legacy version stamp was ignored'
+)
+printf 'PASS: mac versioned downloaded identity and legacy stamps\n'
+
 # The protection check must stop real game markers while permitting newer content and normal
 # macOS code signing. Fixtures stay outside the real user's game/cache and never launch a client.
 TEST_BUNDLE="${TEST_ROOT}/Invokers.app"

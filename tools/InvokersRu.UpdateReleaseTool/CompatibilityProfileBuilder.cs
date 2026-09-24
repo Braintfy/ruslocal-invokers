@@ -474,10 +474,9 @@ namespace InvokersRu.UpdateReleaseTool
 
         private static string CanonicalGuid(string value)
         {
-            if (!Guid.TryParseExact(value, "D", out Guid parsed)
-                || !string.Equals(parsed.ToString("D"), value, StringComparison.Ordinal))
+            if (!Loc1ContentFamily.IsCanonical(value))
             {
-                throw new InvalidDataException("Runtime-cache content_guid is not canonical lowercase GUID text.");
+                throw new InvalidDataException("Runtime-cache content_guid is not a canonical LOC1 family identifier.");
             }
 
             return value;

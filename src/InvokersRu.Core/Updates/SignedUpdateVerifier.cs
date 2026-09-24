@@ -1,3 +1,4 @@
+using InvokersRu.Core.Loc1;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -287,8 +288,7 @@ namespace InvokersRu.Core.Updates
                 || profile.Mode != "exact"
                 || !IsSafeVersionToken(profile.GameVersion)
                 || !string.Equals(profile.GameVersion, profile.StampValue, StringComparison.Ordinal)
-                || !Guid.TryParseExact(profile.ContentGuid, "D", out Guid contentGuid)
-                || !string.Equals(contentGuid.ToString("D"), profile.ContentGuid, StringComparison.Ordinal)
+                || !Loc1ContentFamily.IsCanonical(profile.ContentGuid)
                 || profile.Loc1Schema is < 1 or > 64)
             {
                 throw new InvalidDataException("Compatibility profile identity is incomplete, non-canonical, or not exact.");
@@ -483,9 +483,10 @@ namespace InvokersRu.Core.Updates
 
         private static bool IsSafeVersionToken(string? value)
         {
-            return value != null && value.Length is > 0 and <= 64
-                && value.All(character => char.IsAsciiLetterOrDigit(character)
-                    || character == '-' || character == '_' || character == '.');
+            return Loc1ContentFamily.TryParseSourceStamp(value, out _, out _)
+                || (value != null && value.Length is > 0 and <= 64
+                    && value.All(character => char.IsAsciiLetterOrDigit(character)
+                        || character == '-' || character == '_' || character == '.'));
         }
 
         private static bool IsSafeContentVersion(string? value)

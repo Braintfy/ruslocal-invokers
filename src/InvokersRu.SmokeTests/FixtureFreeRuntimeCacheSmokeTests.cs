@@ -25,6 +25,7 @@ namespace InvokersRu.SmokeTests
 
         internal static void Run(Action<string> passed)
         {
+            RuntimeCacheSourceStampSmokeTests.Run(passed);
             string profilePath = Path.Combine(AppContext.BaseDirectory, CurrentProfileFileName);
             CurrentProfileStrictParsingCheck(profilePath);
             passed("0.60.1247 profile strict parsing, community policy, and fallback pins");

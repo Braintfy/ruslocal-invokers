@@ -39,6 +39,7 @@ namespace InvokersRu.SmokeTests
                 CompatibilityManifestSafetyChecks();
                 RuntimeCacheProfileParsingCheck();
                 RuntimeCacheProfileOnboardingCheck();
+                Loc1ContentFamilyChecks();
                 GameProtectionGuardSmokeTests.Run(Passed.Add);
                 ProcessConflictSmokeTests.Run(Passed.Add);
                 FixtureFreeRuntimeCacheSmokeTests.Run(Passed.Add);
@@ -78,6 +79,23 @@ namespace InvokersRu.SmokeTests
                 Console.Error.WriteLine($"FAIL: {exception}");
                 return 1;
             }
+        }
+
+        private static void Loc1ContentFamilyChecks()
+        {
+            foreach (string value in new[] { "0.61.0", "1.0.0", "ad875e27-1bf6-4f4a-8ed5-3957d0ed05fa" })
+                Require(Loc1ContentFamily.IsCanonical(value), "Canonical LOC1 family was rejected: " + value);
+            foreach (string value in new[] { "", "0.61", "0.61.0.0", "00.61.0", "0.061.0", "0.61.-1",
+                "0.61.0 ", " 0.61.0", "0.61.0\n", "v0.61.0", "0.61.0:1123186", "0.61.*",
+                "0.61.0/../x", "0.61.2147483648", "AD875E27-1BF6-4F4A-8ED5-3957D0ED05FA" })
+                Require(!Loc1ContentFamily.IsCanonical(value), "Noncanonical LOC1 family was accepted: " + value);
+            Require(!Loc1ContentFamily.IsCanonical(null), "Missing LOC1 family was accepted.");
+            Require(Loc1ContentFamily.TryParseSourceStamp("0.61.0:1123186", out string sourceFamily, out long size)
+                && sourceFamily == "0.61.0" && size == 1123186, "Valid source stamp was rejected.");
+            foreach (string value in new[] { "0.61.0", "0.61.0:0", "0.61.0:01", "0.61.0:-1", "0.61.0:268435457",
+                "0.61.0:1:2", "00.61.0:1", "0.61.0.0:1", "0.61.0:1\n", "0.61.0: 1", "0.61.0:+1" })
+                Require(!Loc1ContentFamily.TryParseSourceStamp(value, out _, out _), "Invalid source stamp was accepted: " + value);
+            Passed.Add("canonical legacy and versioned LOC1 families preserve exact identity");
         }
 
         private static int ReportSuccess()

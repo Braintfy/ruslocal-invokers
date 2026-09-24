@@ -9,11 +9,14 @@
     <LangVersion>14.0</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AssemblyName>InvokersRu.Gui</AssemblyName>
-    <Version>3.1.9-preview</Version>
+    <Version>3.1.10-preview</Version>
     <Company>Invokers Russian Community</Company>
     <Product>InvokersRu localization patcher</Product>
     <Description>Graphical wrapper for the Invokers: Titan Legacy Russian localization patcher.</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\InvokersRu.ico</ApplicationIcon>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../InvokersRu.Core/Loc1/Loc1ContentFamily.cs" Link="Loc1ContentFamily.cs" />
+  </ItemGroup>
 </Project>

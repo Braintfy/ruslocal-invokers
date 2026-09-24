@@ -5,7 +5,7 @@
 set -uo pipefail
 
 # Version of this script. It updates itself from the repository; the bundle around it stays frozen.
-APP_VERSION="2.9.0"
+APP_VERSION="2.10.0"
 # Version of the application bundle, which only changes when the launcher or the CLI has to change.
 BUNDLE_VERSION="3.0.0"
 # Oldest bundle that still works. Kept apart from BUNDLE_VERSION so rebuilding the image does not tell
@@ -123,7 +123,14 @@ cache_candidates() {
 }
 
 cache_version() {
-    local stamp="$1/${ENGLISH_NAME}.ver"
+    local stamp="$1/${ENGLISH_NAME}.ver" family
+    # 0.61 removed the downloaded .ver sidecars and uses a versioned LOC1 family.
+    # Read the downloaded source, not a bundled fallback that may no longer be active.
+    family="$(inspect_field "$1/${ENGLISH_NAME}" content_guid || true)"
+    if [[ "$family" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+        printf '%s' "$family"
+        return 0
+    fi
     [ -f "$stamp" ] && tr -d '\r\n' < "$stamp" || printf '0'
 }
 
@@ -764,7 +771,9 @@ explain_build_failure() {
 
 ${reason}
 
-Если игра обновила свои тексты, перевод под новую версию ещё не адаптирован — попробуйте позже. Полный журнал: ${LOG_FILE}"
+После крупного обновления сначала выберите английский язык и полностью перезапустите игру. Дождитесь главного меню, затем повторите это с украинским языком и закройте игру. Так клиент загрузит обе свежие таблицы.
+
+Если ошибка остается, отправьте автору эти версии и журнал: ${LOG_FILE}"
 }
 
 # A build can succeed and still leave English on screen: that happens when the game rewrites strings it
@@ -785,11 +794,10 @@ composition_note() {
 }
 
 do_install() {
-    local cache_root="$1" english target stamp built current original backup applied
+    local cache_root="$1" english target built current original backup applied
 
     english="${cache_root}/${ENGLISH_NAME}"
     target="${cache_root}/${TARGET_NAME}"
-    stamp="${cache_root}/${TARGET_NAME}.ver"
 
     if [ ! -f "$target" ]; then
         say_error "Украинский языковой файл ещё не загружен.

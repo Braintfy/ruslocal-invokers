@@ -169,8 +169,7 @@ namespace InvokersRu.Core.Updates
             string observedContentGuid)
         {
             ArgumentNullException.ThrowIfNull(manifest);
-            if (!Guid.TryParseExact(observedContentGuid, "D", out Guid contentGuid)
-                || !string.Equals(contentGuid.ToString("D"), observedContentGuid, StringComparison.Ordinal))
+            if (!Loc1ContentFamily.IsCanonical(observedContentGuid))
             {
                 return false;
             }
@@ -230,8 +229,7 @@ namespace InvokersRu.Core.Updates
                 || !string.Equals(profile.Mode, "exact", StringComparison.Ordinal)
                 || profile.Loc1Schema != SupportedLoc1Schema
                 || !string.Equals(profile.GameVersion, profile.StampValue, StringComparison.Ordinal)
-                || !Guid.TryParseExact(profile.ContentGuid, "D", out Guid contentGuid)
-                || !string.Equals(contentGuid.ToString("D"), profile.ContentGuid, StringComparison.Ordinal))
+                || !Loc1ContentFamily.IsCanonical(profile.ContentGuid))
             {
                 throw new InvalidDataException("Signed runtime profile is not a canonical exact LOC1 schema-4 profile.");
             }

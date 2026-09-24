@@ -103,10 +103,9 @@ namespace InvokersRu.Core.Patching
             ArgumentNullException.ThrowIfNull(catalogBytes);
             if (catalogBytes.LongLength is < 1 or > SignedUpdateLimits.MaxUncompressedCatalogBytes)
                 throw new InvalidDataException("Compatible-revision catalog size is outside the signed-update bounds.");
-            if (!Guid.TryParseExact(trustedContentGuid, "D", out Guid canonicalGuid)
-                || !string.Equals(canonicalGuid.ToString("D"), trustedContentGuid, StringComparison.Ordinal))
+            if (!Loc1ContentFamily.IsCanonical(trustedContentGuid))
             {
-                throw new InvalidDataException("Compatible-revision family GUID is not canonical.");
+                throw new InvalidDataException("Compatible-revision content family is not canonical.");
             }
             ValidateTranslationPolicy(translationPolicy);
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## Windows 3.1.10 Preview / Mac script 2.10.0 / translation data 10 — 2026-09-24
+
+- Updated the Russian catalog for EN/UK `Prod_0.61.0_78`: new strings and changed skill descriptions, with unchanged translations retained and source/hint bindings refreshed. Composition applies 42,447 Russian rows, leaves two purchase-service strings in English and preserves 220 empty entries; zero validation errors.
+- Support the 0.61 numeric LOC1 content family and downloaded language files without legacy `.ver` sidecars. Windows validates the matching `.src` metadata; it still patches the downloaded Ukrainian table, not the bundled bootstrap table.
+- Preserve authenticated old installation state and immutable backups when an exact signed language package moves to a new content family. Added isolated apply/archive/restore and changed-input regression coverage.
+- Existing Windows 3.1.5+ installations receive 3.1.10 through the app updater; previous download links remain valid. Mac script 2.10.0 and the catalog update without a replacement DMG. After a major game update, fully restart once in English and once in Ukrainian to download both current tables, then close the game and launcher before patching.
+
 ## Windows 3.1.9 Preview — 2026-09-12
 
 - Fixed the post-installation verification failure when an authenticated compatible-revision installation and the signed exact profile describe identical source files, catalog, output and composition. Preserve the validated installed profile instead of proposing a content update solely because the profile IDs differ.

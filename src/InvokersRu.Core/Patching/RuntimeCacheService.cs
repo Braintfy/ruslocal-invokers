@@ -14,6 +14,7 @@ namespace InvokersRu.Core.Patching
         private const string EnglishFileName = "dl_en_US.bin";
         private const string TargetFileName = "dl_uk_UA.bin";
         private const string StampFileName = "dl_uk_UA.bin.ver";
+        private const string SourceStampFileName = "uk_UA.bin.src";
         private const string CompatibleEnglishSnapshotFileName = "source.dl_en_US.bin";
         private const string CompatibleStampSnapshotFileName = "source.dl_uk_UA.bin.ver";
         private static readonly HashSet<string> LegalJournalPhases = new HashSet<string>(StringComparer.Ordinal)
@@ -105,6 +106,12 @@ namespace InvokersRu.Core.Patching
             {
                 throw new InvalidDataException($"Runtime-cache version stamp is not a bare version string: {stampPath}");
             }
+            if (!Guid.TryParseExact(english.ContentGuid, "D", out _)
+                && (!Loc1ContentFamily.TryParseSourceStamp(stampValue, out string sourceFamily, out _)
+                    || !string.Equals(sourceFamily, english.ContentGuid, StringComparison.Ordinal)))
+            {
+                throw new InvalidDataException("Runtime-cache source stamp does not identify the observed LOC1 content family.");
+            }
             var profile = new RuntimeCacheCompatibility
             {
                 Id = string.IsNullOrWhiteSpace(id) ? $"runtime-cache-{stampValue}" : id!,
@@ -152,7 +159,7 @@ namespace InvokersRu.Core.Patching
             profile.Validate();
             authenticatedOfficialUpdatePredecessor?.Validate();
             string root = Path.GetFullPath(cacheRoot);
-            (string english, string target, string stamp) = ResolveFixedPaths(root);
+            (string english, string target, string stamp) = ResolveFixedPaths(root, profile);
             bool stateFileExists = File.Exists(statePath);
             PatchState? state = PatchPlanner.TryLoadState(statePath);
             PatchJournal? journal = PatchJournalStore.FindActive(statePath);
@@ -184,7 +191,7 @@ namespace InvokersRu.Core.Patching
             if (!File.Exists(english) || !File.Exists(target) || !File.Exists(stamp))
             {
                 result.Status = InstallationStatus.MissingFiles;
-                result.Message = "The exact dl_en_US.bin, dl_uk_UA.bin, and dl_uk_UA.bin.ver cache tuple is missing.";
+                result.Message = $"The exact dl_en_US.bin, dl_uk_UA.bin, and {Path.GetFileName(stamp)} cache tuple is missing.";
                 return result;
             }
 
@@ -307,7 +314,7 @@ namespace InvokersRu.Core.Patching
                 throw new InvalidOperationException($"Runtime-cache compatibility is blocked: {profile.BlockedReason ?? "not certified"}");
             }
 
-            (string englishPath, string targetPath, string stampPath) = ResolveFixedPaths(cacheRoot);
+            (string englishPath, string targetPath, string stampPath) = ResolveFixedPaths(cacheRoot, profile);
             RequireInspectionPaths(inspection, englishPath, targetPath, stampPath);
             PatchService.EnsureSupportedMutationPaths(cacheRoot, targetPath, statePath);
             using ExecutionGuard guard = ExecutionGuard.Acquire(cacheRoot, statePath);
@@ -678,7 +685,7 @@ namespace InvokersRu.Core.Patching
                 "equivalent catalog metadata rebind catalog");
 
             string root = Path.GetFullPath(installedInspection.CacheRoot);
-            (_, string targetPath, _) = ResolveFixedPaths(root);
+            (_, string targetPath, _) = ResolveFixedPaths(root, installedProfile);
             using ExecutionGuard guard = ExecutionGuard.Acquire(root, statePath);
             EnsureNoProcessConflicts();
             if (PatchJournalStore.FindActive(statePath) != null)
@@ -843,7 +850,7 @@ namespace InvokersRu.Core.Patching
             string root,
             RuntimeCacheCompatibility profile)
         {
-            (_, string targetPath, _) = ResolveFixedPaths(root);
+            (_, string targetPath, _) = ResolveFixedPaths(root, profile);
             Loc1Document english = VerifyStaticTuple(root, profile);
             byte[] targetBytes = BoundedArtifactReader.ReadRuntimeLoc1(targetPath, "pinned runtime-cache Ukrainian LOC1");
             if (!Hashing.FixedEqualsHex(Hashing.Sha256Bytes(targetBytes), profile.BaseSha256))
@@ -915,9 +922,15 @@ namespace InvokersRu.Core.Patching
             problem = string.Empty;
             try
             {
+                bool sameFamily = string.Equals(currentProfile.ContentGuid, predecessor.ContentGuid, StringComparison.Ordinal);
+                // A signed/embedded exact descriptor pins the entire new official tuple.  A fully
+                // authenticated predecessor state and immutable backup may survive a game update
+                // that changes content families; adaptive family materialization still cannot cross it.
+                bool exactCrossFamily = !sameFamily && currentProfile.Mode == "exact"
+                    && currentProfile.Certified && currentProfile.Readiness == "ready";
                 if (currentProfile.Mode is not ("exact" or CompatibleRevisionProfileBuilder.Mode)
                     || predecessor.Mode is not ("exact" or CompatibleRevisionProfileBuilder.Mode)
-                    || !string.Equals(currentProfile.ContentGuid, predecessor.ContentGuid, StringComparison.Ordinal)
+                    || (!sameFamily && !exactCrossFamily)
                     || predecessor.ExpectedOutputSha256 == null
                     || Hashing.FixedEqualsHex(currentProfile.BaseSha256, predecessor.ExpectedOutputSha256))
                 {
@@ -1127,7 +1140,7 @@ namespace InvokersRu.Core.Patching
 
         private static Loc1Document VerifyStaticTuple(string root, RuntimeCacheCompatibility profile)
         {
-            (string englishPath, _, string stampPath) = ResolveFixedPaths(root);
+            (string englishPath, _, string stampPath) = ResolveFixedPaths(root, profile);
             byte[] englishBytes = BoundedArtifactReader.ReadRuntimeLoc1(
                 englishPath,
                 "pinned runtime-cache English LOC1");
@@ -1214,16 +1227,50 @@ namespace InvokersRu.Core.Patching
 
         public static (string English, string Target, string Stamp) ResolveTuplePaths(string root)
         {
-            return ResolveFixedPaths(root);
+            string fullRoot = Path.GetFullPath(root);
+            string target = PatchPlanner.ResolveInside(fullRoot, TargetFileName);
+            string sourceStamp = PatchPlanner.ResolveInside(fullRoot, SourceStampFileName);
+            if (File.Exists(sourceStamp) && File.Exists(target))
+            {
+                // New-client bootstrap metadata is not a downloaded-version stamp.  It can select
+                // this allowlisted path only when the downloaded target actually uses a numeric
+                // content family; DescribeTuple then verifies the exact family and signed pins.
+                try
+                {
+                    Loc1Document document = Loc1Codec.Parse(BoundedArtifactReader.ReadRuntimeLoc1(
+                        target, "runtime-cache layout selection target"));
+                    if (!Guid.TryParseExact(document.ContentGuid, "D", out _)
+                        && Loc1ContentFamily.IsCanonical(document.ContentGuid))
+                    {
+                        return ResolveFixedPaths(fullRoot, sourceStamp: true);
+                    }
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                    or InvalidDataException or Loc1FormatException)
+                {
+                    // Invalid target data cannot authorize a layout switch.
+                }
+            }
+            return ResolveFixedPaths(fullRoot);
         }
 
-        private static (string English, string Target, string Stamp) ResolveFixedPaths(string root)
+        private static (string English, string Target, string Stamp) ResolveFixedPaths(
+            string root,
+            RuntimeCacheCompatibility? profile = null,
+            bool sourceStamp = false)
         {
             string fullRoot = Path.GetFullPath(root);
+            if (profile != null && !Guid.TryParseExact(profile.ContentGuid, "D", out _))
+            {
+                if (!Loc1ContentFamily.TryParseSourceStamp(profile.StampValue, out string family, out _)
+                    || !string.Equals(family, profile.ContentGuid, StringComparison.Ordinal))
+                    throw new InvalidDataException("Numeric-family runtime-cache profile has no matching source stamp.");
+                sourceStamp = true;
+            }
             return (
                 PatchPlanner.ResolveInside(fullRoot, EnglishFileName),
                 PatchPlanner.ResolveInside(fullRoot, TargetFileName),
-                PatchPlanner.ResolveInside(fullRoot, StampFileName));
+                PatchPlanner.ResolveInside(fullRoot, sourceStamp ? SourceStampFileName : StampFileName));
         }
 
         private static void RequireInspectionPaths(RuntimeCacheInspection inspection, string english, string target, string stamp)

@@ -383,7 +383,7 @@ internal sealed class MainForm : Form
     {
         using var dialog = new FolderBrowserDialog
         {
-            Description = "Выберите папку i18n, в которой находятся dl_en_US.bin, dl_uk_UA.bin и dl_uk_UA.bin.ver.",
+            Description = "Выберите папку i18n с загруженными английскими и украинскими файлами языка.",
             UseDescriptionForTitle = true,
             ShowNewFolderButton = false,
             InitialDirectory = Directory.Exists(_gameRoot)
@@ -397,7 +397,7 @@ internal sealed class MainForm : Form
         {
             MessageBox.Show(
                 this,
-                "В выбранной папке не найден полный набор файлов локализации. Выберите папку i18n, содержащую dl_en_US.bin, dl_uk_UA.bin и dl_uk_UA.bin.ver.\n\nПеред выбором включите украинский язык в игре и дождитесь загрузки.",
+                "В выбранной папке не найден полный набор файлов локализации. Выберите папку i18n с загруженными английскими и украинскими файлами языка.\n\nПосле крупного обновления игры сначала запустите игру на английском, затем на украинском языке. Дождитесь загрузки и закройте игру и лаунчер.",
                 "Папка локализации не найдена",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
@@ -447,9 +447,12 @@ internal sealed class MainForm : Form
             if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) continue;
             try
             {
-                foreach (string stampPath in Directory.EnumerateFiles(root, "dl_uk_UA.bin.ver", options))
+                foreach (string stampPath in Directory.EnumerateFiles(root, "*uk_UA.bin.*", options))
                 {
                     if (cancellationToken.IsCancellationRequested || found.Count >= 32) break;
+                    string stampName = Path.GetFileName(stampPath);
+                    if (!string.Equals(stampName, "dl_uk_UA.bin.ver", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(stampName, "uk_UA.bin.src", StringComparison.OrdinalIgnoreCase)) continue;
                     string? candidate = Path.GetDirectoryName(stampPath);
                     if (candidate != null && HasCacheTuple(candidate))
                     {
@@ -581,7 +584,8 @@ internal sealed class MainForm : Form
     {
         return File.Exists(Path.Combine(candidate, "dl_en_US.bin"))
             && File.Exists(Path.Combine(candidate, "dl_uk_UA.bin"))
-            && File.Exists(Path.Combine(candidate, "dl_uk_UA.bin.ver"));
+            && (File.Exists(Path.Combine(candidate, "dl_uk_UA.bin.ver"))
+                || File.Exists(Path.Combine(candidate, "uk_UA.bin.src")));
     }
 
     private sealed record CacheSearchResult(IReadOnlyList<string> Paths, bool TimedOut);
@@ -814,7 +818,11 @@ internal sealed class MainForm : Form
     private void RenderPlan(CliPlanResult plan)
     {
         _pathLabel.Text = string.IsNullOrWhiteSpace(plan.CacheRoot) ? _gameRoot : plan.CacheRoot;
-        _versionLabel.Text = $"Игра: {plan.Observed.GameVersion ?? "версия пока неизвестна"}   •   Патчер: {plan.PatcherVersion}";
+        string gameVersion = InvokersRu.Core.Loc1.Loc1ContentFamily.TryParseSourceStamp(
+            plan.Observed.GameVersion, out string family, out _)
+            ? $"Языковые данные: {family}"
+            : $"Игра: {plan.Observed.GameVersion ?? "версия пока неизвестна"}";
+        _versionLabel.Text = $"{gameVersion}   •   Патчер: {plan.PatcherVersion}";
         void Show(string title, string summary, string next, Color color)
         {
             SetBadge(title, color);

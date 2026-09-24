@@ -61,6 +61,21 @@ namespace InvokersRu.SmokeTests
                 && verified.PatcherDisposition == SignedUpdatePatcherDisposition.UpdateAvailable
                 && verified.CanDownloadRemoteArtifactAt(now),
                 "Valid signed update did not preserve its identity and patcher warning.");
+            SignedUpdateManifest versionedFamily = CreateManifest(contentFamily: "0.61.0", gameStamp: "0.61.0:1123186");
+            VerifiedSignedUpdate verifiedVersioned = SignedUpdateVerifier.Verify(
+                Sign(signingKey, versionedFamily).EnvelopeUtf8, publicKey, "release-p256-test",
+                new SignedUpdateVerificationContext(now, "3.0.0"));
+            Require(SignedUpdateRuntimeProfileAdapter.AuthorizesContentFamily(verifiedVersioned.Manifest, "0.61.0")
+                && !SignedUpdateRuntimeProfileAdapter.AuthorizesContentFamily(verifiedVersioned.Manifest, "0.62.0")
+                && !SignedUpdateRuntimeProfileAdapter.AuthorizesContentFamily(verifiedVersioned.Manifest, "00.61.0"),
+                "Signed versioned content family lost its exact authorization boundary.");
+            foreach (string invalidFamily in new[] { "00.61.0", "0.61.0:123", "0.61.0/../x", "0.61.*" })
+            {
+                SignedUpdateManifest invalidVersionedFamily = CreateManifest(contentFamily: invalidFamily);
+                Expect<InvalidDataException>(() => SignedUpdateVerifier.Verify(
+                    Sign(signingKey, invalidVersionedFamily).EnvelopeUtf8, publicKey, "release-p256-test",
+                    new SignedUpdateVerificationContext(now, "3.0.0")));
+            }
             Expect<InvalidDataException>(() => SignedUpdateVerifier.Verify(
                 signed.EnvelopeUtf8,
                 publicKey,
@@ -522,7 +537,9 @@ namespace InvokersRu.SmokeTests
             string expiresUtc = "2026-09-20T18:00:00Z",
             string? compressedSha256 = null,
             ulong sequence = 12,
-            string notesRu = "Тестовая подписанная метаинформация.")
+            string notesRu = "Тестовая подписанная метаинформация.",
+            string contentFamily = "ad875e27-1bf6-4f4a-8ed5-3957d0ed05fa",
+            string gameStamp = "0.60.1247")
         {
             const int entryCount = 41_292;
             return new SignedUpdateManifest
@@ -559,10 +576,10 @@ namespace InvokersRu.SmokeTests
                     {
                         ProfileId = "runtime-cache-win64-0.60.1247-prod68",
                         Mode = "exact",
-                        GameVersion = "0.60.1247",
+                        GameVersion = gameStamp,
                         StampSha256 = new string('B', 64),
-                        StampValue = "0.60.1247",
-                        ContentGuid = "ad875e27-1bf6-4f4a-8ed5-3957d0ed05fa",
+                        StampValue = gameStamp,
+                        ContentGuid = contentFamily,
                         Loc1Schema = 4,
                         OrderedKeysetSha256 = new string('C', 64),
                         English = new SignedUpdateCorpusIdentity

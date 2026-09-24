@@ -1,3 +1,4 @@
+using InvokersRu.Core.Loc1;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -577,8 +578,7 @@ internal sealed class CliPlanResult
             "некорректная версия игры в профиле");
         Require(profile.Readiness is "ready" or "blocked", "неизвестная готовность профиля");
         Require(KnownTranslationPolicies.Contains(profile.TranslationPolicy), "неизвестная политика перевода");
-        Require(Guid.TryParseExact(profile.ContentGuid, "D", out Guid contentGuid)
-            && string.Equals(contentGuid.ToString("D"), profile.ContentGuid, StringComparison.Ordinal)
+        Require(Loc1ContentFamily.IsCanonical(profile.ContentGuid)
             && profile.Loc1Schema == 4,
             "профиль не закрепляет поддерживаемое семейство LOC1");
         Require(!string.IsNullOrWhiteSpace(profile.EnglishContent)

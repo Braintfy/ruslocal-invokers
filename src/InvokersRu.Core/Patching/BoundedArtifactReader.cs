@@ -48,8 +48,9 @@ namespace InvokersRu.Core.Patching
             try
             {
                 string value = StrictUtf8.GetString(snapshot);
-                return value.All(character => char.IsAsciiLetterOrDigit(character)
+                return (value.All(character => char.IsAsciiLetterOrDigit(character)
                     || character is '.' or '-' or '_')
+                    || Loc1ContentFamily.TryParseSourceStamp(value, out _, out _))
                     ? value
                     : null;
             }

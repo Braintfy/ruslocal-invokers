@@ -489,6 +489,23 @@ namespace InvokersRu.Cli
                     installedInspection);
             remoteProfile = AttachEmbeddedMigrationAllowlist(embeddedProfile, remoteProfile);
             RuntimeCacheInspection remoteInspection = RuntimeCacheService.Inspect(cacheRoot, remoteProfile, statePath);
+            if (remoteInspection.Status == InstallationStatus.InconsistentState
+                && state != null && journal == null
+                && TryInspectExactCrossFamilyOfficialUpdate(
+                    cacheRoot,
+                    statePath,
+                    state,
+                    remoteProfile,
+                    embeddedProfile,
+                    embeddedCatalogPath,
+                    coordinator,
+                    out RuntimeCacheCompatibility? crossFamilyPredecessor,
+                    out RuntimeCacheInspection? crossFamilyInspection))
+            {
+                installedProfile = crossFamilyPredecessor;
+                installedInspection = null;
+                remoteInspection = crossFamilyInspection!;
+            }
             bool historicalUpdateAvailable = installedProfile != null
                 && installedInspection?.Status == InstallationStatus.PatchedByThisTool
                 && !SameInstalledArtifact(installedProfile, remoteProfile);
@@ -663,14 +680,24 @@ namespace InvokersRu.Cli
             target = null;
             (string english, string basePath, string stamp) = RuntimeCacheService.ResolveTuplePaths(cacheRoot);
             if (!File.Exists(english) || !File.Exists(basePath) || !File.Exists(stamp)) return false;
-            observed = RuntimeCacheService.DescribeTuple(
-                english,
-                basePath,
-                stamp,
-                "observed-runtime-cache",
-                out Loc1Document observedTarget);
-            target = observedTarget;
-            return true;
+            try
+            {
+                observed = RuntimeCacheService.DescribeTuple(
+                    english,
+                    basePath,
+                    stamp,
+                    "observed-runtime-cache",
+                    out Loc1Document observedTarget);
+                target = observedTarget;
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                or InvalidDataException or InvalidOperationException or Loc1FormatException)
+            {
+                // An incomplete per-locale download is not a compatible tuple.  The write path
+                // remains unavailable until both official downloaded LOC1 files agree.
+                return false;
+            }
         }
 
         private static RuntimeUpdateResolution WithUnauthenticatedJournal(
@@ -1776,6 +1803,108 @@ namespace InvokersRu.Cli
                 && compatible.ExpectedEnglishFallbacks == exact.ExpectedEnglishFallbacks
                 && compatible.ExpectedBaseFallbacks == exact.ExpectedBaseFallbacks
                 && compatible.ExpectedNeedsReviewFallbacks == exact.ExpectedNeedsReviewFallbacks;
+        }
+
+        private static bool TryInspectExactCrossFamilyOfficialUpdate(
+            string cacheRoot,
+            string statePath,
+            PatchState state,
+            RuntimeCacheCompatibility currentExact,
+            RuntimeCacheCompatibility embeddedProfile,
+            string embeddedCatalogPath,
+            SignedUpdateCoordinator coordinator,
+            out RuntimeCacheCompatibility? predecessor,
+            out RuntimeCacheInspection? inspection)
+        {
+            predecessor = null;
+            inspection = null;
+            if (currentExact.Mode != "exact" || !currentExact.Certified || currentExact.Readiness != "ready")
+                return false;
+            try
+            {
+                string root = Path.GetFullPath(cacheRoot);
+                string targetPath = RuntimeCacheService.ResolveTuplePaths(root).Target;
+                if (!TryResolveStateBackupPath(root, targetPath, statePath, state, out string backupPath))
+                    return false;
+                Loc1Document backedUpBase = Loc1Codec.Parse(BoundedArtifactReader.ReadRuntimeLoc1(
+                    backupPath, "cross-family predecessor immutable base"));
+                string previousFamily = backedUpBase.ContentGuid;
+                if (string.Equals(previousFamily, currentExact.ContentGuid, StringComparison.Ordinal))
+                    return false;
+
+                var candidates = new List<RuntimeCacheCompatibility>();
+                if (IsExactInstalledState(embeddedProfile, state)
+                    && string.Equals(embeddedProfile.ContentGuid, previousFamily, StringComparison.Ordinal))
+                    candidates.Add(embeddedProfile);
+
+                foreach (VerifiedSignedUpdate history in coordinator.LoadVerifiedHistory())
+                {
+                    foreach (VerifiedSignedUpdateCompatibilityProfile signed in history.Manifest.Compatibility)
+                    {
+                        if (!string.Equals(signed.ProfileId, state.BuildId, StringComparison.Ordinal)) continue;
+                        try
+                        {
+                            RuntimeCacheCompatibility historical = SignedUpdateRuntimeProfileAdapter.AdaptExact(
+                                history.Manifest, signed, backedUpBase);
+                            if (IsExactInstalledState(historical, state)
+                                && string.Equals(historical.ContentGuid, previousFamily, StringComparison.Ordinal))
+                                candidates.Add(historical);
+                        }
+                        catch (InvalidDataException)
+                        {
+                            // A signed description must also match the immutable previous base.
+                        }
+                    }
+                }
+
+                (string previousEnglish, string previousStamp) =
+                    RuntimeCacheService.ResolveCompatibleSourceSnapshotPaths(backupPath);
+                if (File.Exists(previousEnglish) && File.Exists(previousStamp))
+                {
+                    foreach (CompatibleCatalogCandidate catalog in LoadCompatibleCatalogCandidates(
+                        embeddedProfile, embeddedCatalogPath, coordinator, bundle: null, previousFamily))
+                    {
+                        try
+                        {
+                            byte[] bytes = BoundedArtifactReader.ReadCatalog(
+                                catalog.Path, catalog.Sha256, "cross-family predecessor catalog");
+                            CompatibleRevisionProfileBuild built = CompatibleRevisionProfileBuilder.Build(
+                                previousEnglish,
+                                backupPath,
+                                previousStamp,
+                                catalog.TrustedContentGuid,
+                                bytes,
+                                catalog.Sha256,
+                                catalog.TranslationPolicy);
+                            if (IsExactInstalledState(built.Profile, state))
+                                candidates.Add(built.Profile);
+                        }
+                        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                            or InvalidDataException or InvalidOperationException or Loc1FormatException)
+                        {
+                            // Incomplete or non-matching historical materialization has no authority.
+                        }
+                    }
+                }
+
+                var authenticated = candidates
+                    .GroupBy(StateArtifactAuthorityKey, StringComparer.Ordinal)
+                    .Select(group => group.First())
+                    .Select(profile => (Profile: profile, Inspection: RuntimeCacheService.Inspect(
+                        root, currentExact, statePath, profile)))
+                    .Where(item => item.Inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate)
+                    .Take(2)
+                    .ToArray();
+                if (authenticated.Length != 1) return false;
+                predecessor = authenticated[0].Profile;
+                inspection = authenticated[0].Inspection;
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                or InvalidDataException or InvalidOperationException or Loc1FormatException)
+            {
+                return false;
+            }
         }
 
         private static bool SameMaterializedProfileIdentity(
