@@ -1,5 +1,11 @@
 # Changelog
 
+## Translation data 12 — 2026-09-30
+
+- Added a signed profile for the game's downloaded EN/UK `Prod_0.61.1_3` tables. The Windows patcher 3.1.12 can fetch this data through its existing update channel; its EXE is unchanged.
+- Updated only affected catalog bindings: 14 changed English sources, 164 changed Ukrainian hints, and four new translated records. Existing unaffected translations remain intact. Two purchase service strings retain the official English fallback.
+- On the observed 42,673-entry tables, the new catalog applies 42,451 records, retains two English fallbacks and 220 empty source entries. Unknown or inconsistent local files remain blocked by the patcher's existing checks.
+
 ## Windows 3.1.12 Preview — 2026-09-24
 
 - Fixed updates from an authenticated exact-profile installation to a translation composed for the player's current compatible language files. Historical state and backups are authenticated before restore/reapply; profile names are not treated as interchangeable.

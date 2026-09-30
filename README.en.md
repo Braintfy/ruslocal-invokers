@@ -19,7 +19,7 @@ Only Windows and macOS builds are currently distributed. Legacy Android tools re
 
 ### Windows
 
-**Windows 3.1.12:** fixes migration from a previous installation to a translation composed for the player's local files. For compatible formats, the patcher applies rows matching the current English source and Ukrainian context; a separate release for each player is unnecessary. When the game has restored independently verified official files, obsolete installation state is preserved in history without restoring old game files over the new version. Unknown or damaged data is still not overwritten. The translation catalog remains `Prod_0.61.0_82`; coverage on other revisions may differ. Do not delete files manually.
+**Windows 3.1.12:** fixes migration from a previous installation to a translation composed for the player's local files. For compatible formats, the patcher applies rows matching the current English source and Ukrainian context; a separate release for each player is unnecessary. When the game has restored independently verified official files, obsolete installation state is preserved in history without restoring old game files over the new version. Unknown or damaged data is still not overwritten. Signed translation data has been updated for EN/UK `Prod_0.61.1_3` and is fetched when the patcher checks for updates; coverage on other revisions may differ. Do not delete files manually.
 
 An installed translation is now clearly shown as installed. An unavailable update does not mean the existing translation has disappeared.
 
