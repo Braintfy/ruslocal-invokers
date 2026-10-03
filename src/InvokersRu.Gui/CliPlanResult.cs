@@ -36,6 +36,7 @@ internal sealed class CliPlanResult
         "REFUSE_PATCHER_OR_SIGNED_DATA_NOT_CURRENT",
         "READY_TO_UPDATE_TRANSLATION",
         "REFUSE_GAME_PROTECTION",
+        "REFUSE_NONSTANDARD_CACHE_ROOT",
         "REFUSE_UNKNOWN_OR_INCONSISTENT"
     };
 
@@ -66,12 +67,12 @@ internal sealed class CliPlanResult
     {
         "none", "source-hint-coverage", "catalog-sha256", "english-source", "ukrainian-base",
         "version-stamp", "official-base-refresh", "loc1-schema", "content-guid", "locale-slot",
-        "ordered-keyset", "missing-files", "patch-state", "journal", "journal-authentication"
+        "ordered-keyset", "missing-files", "signed-profile-unavailable", "patch-state", "journal", "journal-authentication"
     };
 
     private static readonly HashSet<string> KnownLocalProblems = new(StringComparer.Ordinal)
     {
-        "journal-authentication", "runtime-cache-input"
+        "journal-authentication", "runtime-cache-input", "signed-profile-unavailable"
     };
 
     private static readonly HashSet<string> KnownJournalPhases = new(StringComparer.Ordinal)
@@ -101,6 +102,14 @@ internal sealed class CliPlanResult
     [JsonPropertyName("installation_writes_enabled")]
     [JsonRequired]
     public bool InstallationWritesEnabled { get; set; }
+
+    [JsonPropertyName("mutation_root_authorized")]
+    [JsonRequired]
+    public bool MutationRootAuthorized { get; set; } = true;
+
+    [JsonPropertyName("nonstandard_root_verified")]
+    [JsonRequired]
+    public bool NonstandardRootVerified { get; set; }
 
     [JsonPropertyName("status")]
     [JsonRequired]
@@ -312,6 +321,17 @@ internal sealed class CliPlanResult
         Require(!string.IsNullOrWhiteSpace(planAction) && KnownPlanActions.Contains(planAction), "неизвестное решение плана");
 
         ValidateObserved(observed, profile);
+        Require(!NonstandardRootVerified || !MutationRootAuthorized
+                && observed.EnglishSha256 != null && observed.BaseSha256 != null
+                && observed.StampSha256 != null && observed.GameVersion != null
+                && observed.EnglishContent != null && observed.BaseContent != null
+                && observed.EnglishSchema != null && observed.BaseSchema != null
+                && observed.EnglishContentGuid != null && observed.BaseContentGuid != null
+                && observed.EnglishLocaleId != null && observed.BaseLocaleId != null
+                && observed.EnglishLocaleRevision != null && observed.BaseLocaleRevision != null
+                && observed.EnglishReleaseRevision != null && observed.BaseReleaseRevision != null
+                && observed.EntryCount != null && observed.OrderedKeysetSha256 != null,
+            "проверка нестандартной папки противоречит наблюдаемым языковым файлам");
         Require(KnownTranslationUpdateKinds.Contains(TranslationUpdateKind),
             "неизвестный вид обновления перевода");
         Require(TranslationUpdateAvailable == (TranslationUpdateKind != "none"),
@@ -327,6 +347,11 @@ internal sealed class CliPlanResult
                 || !CanApply && Update == null && UpdateProblemBlocksApply
                     && !TranslationUpdateAvailable,
             "ошибка чтения языковых файлов не может разрешать установку перевода");
+        Require(LocalProblem != "signed-profile-unavailable"
+                || Status == "UnknownBuild" && !CanApply && !TranslationUpdateAvailable
+                    && Observed.EnglishSha256 != null && Observed.BaseSha256 != null
+                    && Observed.StampSha256 != null,
+            "отсутствие подписанного профиля противоречит наблюдаемым языковым файлам");
         ValidateUpdate();
         ValidateStateAndJournal();
         ValidateDiagnostic(diagnostic, observed, catalog, profile);
@@ -372,12 +397,13 @@ internal sealed class CliPlanResult
         bool remoteApplyAuthorized = IsRemoteApplyAuthorized();
         bool expectedCanApply = (TranslationUpdateAvailable
                 || Status is "CompatibleOriginal" or "PatchSupersededByOfficialUpdate" or "PatchSupersededByCatalogUpdate")
-            && !hasProcessConflicts && InstallationWritesEnabled && profile.Certified && catalog.ExactMatch
+            && !hasProcessConflicts && InstallationWritesEnabled && MutationRootAuthorized
+            && profile.Certified && catalog.ExactMatch
             && remoteApplyAuthorized && !ProtectionCheck.BlocksApply;
         bool expectedCanRestore = Status is "PatchedByThisTool" or "PatchSupersededByCatalogUpdate"
-            && !hasProcessConflicts && InstallationWritesEnabled && RestoreRecoveryAuthorized;
+            && !hasProcessConflicts && InstallationWritesEnabled && MutationRootAuthorized && RestoreRecoveryAuthorized;
         bool expectedCanRecover = Status == "RecoveryRequired"
-            && !hasProcessConflicts && InstallationWritesEnabled && RestoreRecoveryAuthorized;
+            && !hasProcessConflicts && InstallationWritesEnabled && MutationRootAuthorized && RestoreRecoveryAuthorized;
         Require(CanApply == expectedCanApply && CanRestore == expectedCanRestore && CanRecover == expectedCanRecover,
             "разрешения кнопок противоречат проверенному плану");
         if (CanApply && !string.Equals(Catalog.Source, "embedded", StringComparison.Ordinal))
@@ -474,6 +500,10 @@ internal sealed class CliPlanResult
         static RuntimePlanDiagnostic Value(string kind, string component, string? current, string? expected) =>
             new() { Kind = kind, Component = component, Current = current, Expected = expected };
 
+        if (LocalProblem == "signed-profile-unavailable")
+            return Value("translation-data", "signed-profile-unavailable",
+                $"EN={observed.EnglishContent ?? "unknown"};UK={observed.BaseContent ?? "unknown"};game={observed.GameVersion ?? "unknown"}",
+                "matching signed exact or compatible profile");
         if (Status == "MissingFiles")
             return Value("structural-boundary", "missing-files", "missing", "fixed EN/UK/stamp tuple");
         if (Status == "InconsistentState"
@@ -859,6 +889,10 @@ internal sealed class CliPlanResult
     private string ExpectedPlanAction(bool hasProcessConflicts)
     {
         if (ProtectionCheck.BlocksApply) return "REFUSE_GAME_PROTECTION";
+        bool otherwiseActionable = Status is "CompatibleOriginal" or "PatchSupersededByOfficialUpdate"
+            or "PatchSupersededByCatalogUpdate" or "PatchedByThisTool" or "RecoveryRequired";
+        if (NonstandardRootVerified || !MutationRootAuthorized && otherwiseActionable)
+            return "REFUSE_NONSTANDARD_CACHE_ROOT";
         if (Status is "UnknownBuild" or "InconsistentState" or "MissingFiles")
             return "REFUSE_UNKNOWN_OR_INCONSISTENT";
         bool installable = TranslationUpdateAvailable

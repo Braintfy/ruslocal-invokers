@@ -740,6 +740,12 @@ namespace InvokersRu.Cli
                 : Array.Empty<string>();
             bool remoteApplyAuthorized = RuntimeUpdateAuthorization.CanApply(resolution, DateTimeOffset.UtcNow);
             GameProtectionCheck protection = GameProtectionGuard.Inspect(cacheRoot);
+            bool mutationRootAuthorized = RuntimeCacheService.IsMutationRootAuthorized(cacheRoot);
+            // The selected folder can contain a valid language tuple while its unrelated default-root
+            // patch state makes inspection look inconsistent. Confirm the tuple independently before
+            // giving that read-only folder refusal precedence over state/profile diagnostics.
+            bool nonstandardRootVerified = !mutationRootAuthorized
+                && RuntimeUpdateResolver.TryReadObserved(cacheRoot, out _, out _, out _);
             bool restorationAuthorized = RuntimeUpdateAuthorization.CanRestoreOrRecover(resolution);
             bool translationUpdateAvailable = resolution.TranslationUpdateAvailable
                 || inspection.Status == InstallationStatus.PatchSupersededByCatalogUpdate;
@@ -751,6 +757,8 @@ namespace InvokersRu.Cli
                 translationUpdateAvailable,
                 remoteApplyAuthorized,
                 restorationAuthorized);
+            action = ApplyRuntimeCacheRootRefusal(
+                inspection.Status, action, mutationRootAuthorized, nonstandardRootVerified);
             if (protection.BlocksApply) action = "REFUSE_GAME_PROTECTION";
             if (options.Has("json"))
             {
@@ -797,6 +805,8 @@ namespace InvokersRu.Cli
                     schema = 4,
                     patcher_version = GetPatcherVersion(),
                     installation_writes_enabled = InstallationWritesEnabled,
+                    mutation_root_authorized = mutationRootAuthorized,
+                    nonstandard_root_verified = nonstandardRootVerified,
                     status = inspection.Status.ToString(),
                     message = inspection.Message,
                     cache_root = inspection.CacheRoot,
@@ -904,19 +914,24 @@ namespace InvokersRu.Cli
                         || inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate
                         || inspection.Status == InstallationStatus.PatchSupersededByCatalogUpdate)
                         && conflicts.Count == 0 && InstallationWritesEnabled && profile.Certified
-                        && catalog.ExactMatch && remoteApplyAuthorized && !protection.BlocksApply,
+                        && catalog.ExactMatch && remoteApplyAuthorized && mutationRootAuthorized
+                        && !protection.BlocksApply,
                     can_restore = plan && (inspection.Status == InstallationStatus.PatchedByThisTool
                             || inspection.Status == InstallationStatus.PatchSupersededByCatalogUpdate
                             || resolution.InstalledInspection?.Status == InstallationStatus.PatchedByThisTool)
-                        && conflicts.Count == 0 && InstallationWritesEnabled && restorationAuthorized,
+                        && conflicts.Count == 0 && InstallationWritesEnabled && restorationAuthorized
+                        && mutationRootAuthorized,
                     can_recover = plan && inspection.Status == InstallationStatus.RecoveryRequired
                         && conflicts.Count == 0 && InstallationWritesEnabled && restorationAuthorized
+                        && mutationRootAuthorized
                 }, new JsonSerializerOptions { WriteIndented = true }));
                 return RuntimeCacheStatusExitCode(inspection.Status);
             }
             Console.WriteLine($"Status: {inspection.Status}");
             Console.WriteLine(inspection.Message);
             Console.WriteLine($"Cache root: {inspection.CacheRoot}");
+            Console.WriteLine($"Mutation root authorized: {mutationRootAuthorized}");
+            if (nonstandardRootVerified) Console.WriteLine("Selected nonstandard root has a complete readable language tuple; writes remain blocked.");
             Console.WriteLine($"Protection preflight: {protection.Status}; {string.Join("; ", protection.Evidence)}");
             Console.WriteLine($"English SHA-256: {inspection.EnglishSha256 ?? "n/a"}");
             Console.WriteLine($"Base SHA-256: {inspection.BaseSha256 ?? "n/a"}");
@@ -993,6 +1008,11 @@ namespace InvokersRu.Cli
         {
             static RuntimePlanDiagnostic Value(string kind, string component, string? current, string? expected) =>
                 new RuntimePlanDiagnostic(kind, component, current, expected);
+
+            if (string.Equals(localProblem, "signed-profile-unavailable", StringComparison.Ordinal))
+                return Value("translation-data", "signed-profile-unavailable",
+                    $"EN={inspection.EnglishContentVersion ?? "unknown"};UK={inspection.BaseContentVersion ?? "unknown"};game={inspection.StampValue ?? "unknown"}",
+                    "matching signed exact or compatible profile");
 
             if (inspection.Status == InstallationStatus.MissingFiles)
                 return Value("structural-boundary", "missing-files", "missing", "fixed EN/UK/stamp tuple");
@@ -1155,6 +1175,22 @@ namespace InvokersRu.Cli
             if (status == InstallationStatus.RecoveryRequired && processConflictCount > 0) return "REFUSE_CLOSE_GAME_AND_LAUNCHER";
             if (status == InstallationStatus.RecoveryRequired) return InstallationWritesEnabled ? "RECOVERY_REQUIRED" : "REFUSE_DEV_WRITES_DISABLED";
             return "REFUSE_UNKNOWN_OR_INCONSISTENT";
+        }
+
+        internal static string ApplyRuntimeCacheRootRefusal(
+            InstallationStatus status,
+            string action,
+            bool mutationRootAuthorized,
+            bool nonstandardRootVerified)
+        {
+            if (!mutationRootAuthorized && (nonstandardRootVerified
+                || status is InstallationStatus.CompatibleOriginal
+                    or InstallationStatus.PatchSupersededByOfficialUpdate
+                    or InstallationStatus.PatchSupersededByCatalogUpdate
+                    or InstallationStatus.PatchedByThisTool
+                    or InstallationStatus.RecoveryRequired))
+                return "REFUSE_NONSTANDARD_CACHE_ROOT";
+            return action;
         }
 
         private static int RuntimeCacheStatusExitCode(InstallationStatus status)

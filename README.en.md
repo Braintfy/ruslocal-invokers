@@ -19,7 +19,7 @@ Only Windows and macOS builds are currently distributed. Legacy Android tools re
 
 ### Windows
 
-**Windows 3.1.12:** fixes migration from a previous installation to a translation composed for the player's local files. For compatible formats, the patcher applies rows matching the current English source and Ukrainian context; a separate release for each player is unnecessary. When the game has restored independently verified official files, obsolete installation state is preserved in history without restoring old game files over the new version. Unknown or damaged data is still not overwritten. Signed translation data has been updated for EN/UK `Prod_0.61.1_3` and is fetched when the patcher checks for updates; coverage on other revisions may differ. Do not delete files manually.
+**Windows 3.1.13:** distinguishes missing language files from a complete set whose revision does not yet have a supported translation. A nonstandard selected folder may be inspected, but writing remains restricted to the current Windows user's standard game cache. Checking the patcher version is followed by a separate translation-data check. Signed translation data supports English `Prod_0.61.1_3` with Ukrainian `Prod_0.61.1_3` or `_5`; no separate EXE is needed for each game revision. Unknown or damaged files are not overwritten. Do not delete files manually.
 
 An installed translation is now clearly shown as installed. An unavailable update does not mean the existing translation has disappeared.
 
@@ -29,7 +29,7 @@ An installed translation is now clearly shown as installed. An unavailable updat
 
 **After upgrading the game to 0.61:** select English, fully restart the game and wait for the main menu. Repeat with Ukrainian, then close the game and launcher. This downloads both current tables instead of retaining the previous game's English file.
 
-**Upgrading an old patcher:** versions 3.1.5–3.1.11 offer **3.1.12** through their updater. Install the current EXE over versions 3.1.2–3.1.4 once. It then checks GitHub for application updates on startup and when you click Check. The [previous direct link](https://github.com/Braintfy/ruslocal-invokers/releases/download/v3.1.2-preview/InvokersRu-3.1-Preview-3.1.2-preview-win-x64.exe) is preserved.
+**Upgrading an old patcher:** versions 3.1.5–3.1.12 offer **3.1.13** through their updater. Install the current EXE over versions 3.1.2–3.1.4 once. It then checks GitHub for application updates on startup and when you click Check. The [previous direct link](https://github.com/Braintfy/ruslocal-invokers/releases/download/v3.1.2-preview/InvokersRu-3.1-Preview-3.1.2-preview-win-x64.exe) is preserved.
 
 Translation data updates remain separate: click Update translation when offered to apply new text. Technical output is hidden under Support details, with show and copy buttons. Windows may warn about an unknown publisher: Authenticode signing is still pending; the signed update description and SHA-256 are verified independently.
 

@@ -81,10 +81,28 @@ namespace InvokersRu.SmokeTests
                     && observed?.StampValue == "0.61.1506:1123186"
                     && readyProblem.Length == 0,
                     "Observed numeric-family tuple did not pass the resolver's read-only input check.");
+                Require(RuntimeCacheService.IsMutationRootAuthorized(cache) == MutationCapability.IsTestWriteBuild,
+                    "Planning root authorization diverged from the fixed-root mutation policy.");
+                File.Delete(oldStampPath);
+                RuntimeUpdateResolution unsupported = RuntimeUpdateResolver.Resolve(
+                    cache, statePath, oldProfile, embeddedCatalogPath: string.Empty, coordinator: null);
+                Require(unsupported.Inspection.Status == InstallationStatus.UnknownBuild
+                    && unsupported.LocalProblem == "signed-profile-unavailable"
+                    && unsupported.Inspection.StampValue == "0.61.1506:1123186"
+                    && unsupported.Inspection.BaseContentVersion == "Prod_0.61.0_78"
+                    && !RuntimeUpdateAuthorization.CanApply(unsupported, DateTimeOffset.UtcNow),
+                    "A complete future language tuple was misreported as missing the old embedded .ver file.");
+                File.WriteAllBytes(oldStampPath, oldStamp);
                 File.Delete(oldEnglishPath);
                 Require(!RuntimeUpdateResolver.TryReadObserved(cache, out _, out _, out string missingEnglish)
                     && missingEnglish.Contains("dl_en_US.bin", StringComparison.Ordinal),
                     "Missing English download was not diagnosed by file name.");
+                RuntimeUpdateResolution trulyMissing = RuntimeUpdateResolver.Resolve(
+                    cache, statePath, oldProfile, embeddedCatalogPath: string.Empty, coordinator: null);
+                Require(trulyMissing.Inspection.Status == InstallationStatus.MissingFiles
+                    && trulyMissing.LocalProblem == "runtime-cache-input"
+                    && trulyMissing.Inspection.Message.Contains("dl_en_US.bin", StringComparison.Ordinal),
+                    "A genuinely missing English file was not distinguished from an unavailable signed profile.");
                 File.WriteAllBytes(oldEnglishPath, newEnglish);
                 File.Delete(targetPath);
                 Require(!RuntimeUpdateResolver.TryReadObserved(cache, out _, out _, out string missingBase)
@@ -138,6 +156,22 @@ namespace InvokersRu.SmokeTests
                     AppliedTranslations = oldProfile.ExpectedAppliedTranslations,
                     AppliedAt = DateTimeOffset.Parse("2026-09-12T12:00:00Z", CultureInfo.InvariantCulture)
                 };
+                File.WriteAllText(statePath, JsonSerializer.Serialize(state), new UTF8Encoding(false));
+                state.GameRoot = Path.Combine(root, "another-game-cache");
+                File.WriteAllText(statePath, JsonSerializer.Serialize(state), new UTF8Encoding(false));
+                RuntimeCacheInspection unrelatedState = RuntimeCacheService.Inspect(cache, newProfile, statePath);
+                Require(unrelatedState.Status == InstallationStatus.InconsistentState
+                    && RuntimeUpdateResolver.TryReadObserved(cache, out _, out _, out _)
+                    && InvokersRu.Cli.Program.ApplyRuntimeCacheRootRefusal(
+                        unrelatedState.Status, "REFUSE_UNKNOWN_OR_INCONSISTENT",
+                        mutationRootAuthorized: false, nonstandardRootVerified: true)
+                        == "REFUSE_NONSTANDARD_CACHE_ROOT"
+                    && InvokersRu.Cli.Program.ApplyRuntimeCacheRootRefusal(
+                        InstallationStatus.MissingFiles, "REFUSE_UNKNOWN_OR_INCONSISTENT",
+                        mutationRootAuthorized: false, nonstandardRootVerified: false)
+                        == "REFUSE_UNKNOWN_OR_INCONSISTENT",
+                    "A parseable read-only selection inherited unrelated default-root state, or missing input was masked.");
+                state.GameRoot = Path.GetFullPath(cache);
                 File.WriteAllText(statePath, JsonSerializer.Serialize(state), new UTF8Encoding(false));
                 RuntimeCacheInspection superseded = RuntimeCacheService.Inspect(cache, newProfile, statePath, oldProfile);
                 Require(superseded.Status == InstallationStatus.PatchSupersededByOfficialUpdate

@@ -35,6 +35,44 @@ namespace InvokersRu.SmokeTests
                 && parsed.Observed.GameVersion == "0.60.1247",
                 "A valid exact ready-to-apply response was rejected or lost its observed/catalog identity.");
 
+            JsonObject unavailableProfile = Clone(ready);
+            unavailableProfile["status"] = "UnknownBuild";
+            unavailableProfile["local_problem"] = "signed-profile-unavailable";
+            unavailableProfile["message"] = "Подходящий перевод для текущих языковых файлов пока недоступен.";
+            unavailableProfile["observed"]!["english_content"] = "Prod_0.61.1_3";
+            unavailableProfile["observed"]!["base_content"] = "Prod_0.61.1_5";
+            unavailableProfile["diagnostic"] = new JsonObject
+            {
+                ["kind"] = "translation-data", ["component"] = "signed-profile-unavailable",
+                ["current"] = "EN=Prod_0.61.1_3;UK=Prod_0.61.1_5;game=0.60.1247",
+                ["expected"] = "matching signed exact or compatible profile"
+            };
+            unavailableProfile["plan"] = "REFUSE_UNKNOWN_OR_INCONSISTENT";
+            unavailableProfile["can_apply"] = false;
+            CliPlanResult unsupported = Parse(unavailableProfile, 5);
+            Require(unsupported.LocalProblem == "signed-profile-unavailable"
+                && unsupported.Diagnostic.Component == "signed-profile-unavailable"
+                && !unsupported.CanApply,
+                "A readable unsupported language tuple was conflated with missing files or allowed to mutate.");
+            JsonObject forgedProfileApply = Clone(unavailableProfile);
+            forgedProfileApply["can_apply"] = true;
+            ExpectInvalid(forgedProfileApply, 5, "unsigned profile enabling installation");
+
+            JsonObject nonstandardRoot = Clone(ready);
+            nonstandardRoot["mutation_root_authorized"] = false;
+            nonstandardRoot["nonstandard_root_verified"] = true;
+            nonstandardRoot["plan"] = "REFUSE_NONSTANDARD_CACHE_ROOT";
+            nonstandardRoot["can_apply"] = false;
+            Require(!Parse(nonstandardRoot, 0).MutationRootAuthorized
+                && Parse(nonstandardRoot, 0).NonstandardRootVerified,
+                "A valid nonstandard root must be observable but read-only.");
+            JsonObject forgedRootApply = Clone(nonstandardRoot);
+            forgedRootApply["can_apply"] = true;
+            ExpectInvalid(forgedRootApply, 0, "nonstandard root enabling installation");
+            JsonObject forgedRootClaim = Clone(ready);
+            forgedRootClaim["nonstandard_root_verified"] = true;
+            ExpectInvalid(forgedRootClaim, 0, "authorized root falsely claiming nonstandard verification");
+
             JsonObject inputProblem = Clone(ready);
             inputProblem["status"] = "MissingFiles";
             inputProblem["local_problem"] = "runtime-cache-input";
@@ -645,6 +683,12 @@ namespace InvokersRu.SmokeTests
             JsonObject missingWriteFlag = Clone(ready);
             missingWriteFlag.Remove("installation_writes_enabled");
             ExpectInvalid(missingWriteFlag, 0, "missing write-enabled flag");
+            JsonObject missingMutationRootFlag = Clone(ready);
+            missingMutationRootFlag.Remove("mutation_root_authorized");
+            ExpectInvalid(missingMutationRootFlag, 0, "missing mutation-root authorization flag");
+            JsonObject missingNonstandardVerificationFlag = Clone(ready);
+            missingNonstandardVerificationFlag.Remove("nonstandard_root_verified");
+            ExpectInvalid(missingNonstandardVerificationFlag, 0, "missing nonstandard-root verification flag");
 
             foreach (string requiredNullable in new[] { "update", "channel_authority", "update_problem", "local_problem" })
             {
@@ -855,6 +899,8 @@ namespace InvokersRu.SmokeTests
                 ["schema"] = 4,
                 ["patcher_version"] = "3.0.0.0",
                 ["installation_writes_enabled"] = true,
+                ["mutation_root_authorized"] = true,
+                ["nonstandard_root_verified"] = false,
                 ["status"] = "CompatibleOriginal",
                 ["message"] = "Exact compatible original.",
                 ["cache_root"] = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "invokersru-contract-cache")),

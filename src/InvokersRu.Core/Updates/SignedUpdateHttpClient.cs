@@ -3,6 +3,7 @@ using System.Buffers;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
@@ -82,7 +83,8 @@ namespace InvokersRu.Core.Updates
 
         private async Task<byte[]> DownloadEnvelopeCoreAsync(Uri initialUri, CancellationToken cancellationToken)
         {
-            using HttpResponseMessage response = await SendWithValidatedRedirectsAsync(initialUri, cancellationToken).ConfigureAwait(false);
+            using HttpResponseMessage response = await SendWithValidatedRedirectsAsync(
+                initialUri, cancellationToken, requestFresh: true).ConfigureAwait(false);
             EnsureSuccessWithoutContentEncoding(response, "Signed update envelope");
             if (response.Content.Headers.ContentLength is long contentLength
                 && (contentLength < 1 || contentLength > SignedUpdateLimits.MaxEnvelopeBytes))
@@ -140,7 +142,8 @@ namespace InvokersRu.Core.Updates
             Uri initialUri = SignedUpdateUrlPolicy.ValidateCatalogUrl(catalog.Url, verified.Manifest.ReleaseId);
             try
             {
-                using HttpResponseMessage response = await SendWithValidatedRedirectsAsync(initialUri, cancellationToken).ConfigureAwait(false);
+                using HttpResponseMessage response = await SendWithValidatedRedirectsAsync(
+                    initialUri, cancellationToken, requestFresh: false).ConfigureAwait(false);
                 EnsureSuccessWithoutContentEncoding(response, "Signed update catalog");
                 if (response.Content.Headers.ContentLength is long contentLength
                     && contentLength != catalog.CompressedBytes)
@@ -201,13 +204,26 @@ namespace InvokersRu.Core.Updates
 
         private async Task<HttpResponseMessage> SendWithValidatedRedirectsAsync(
             Uri initialUri,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool requestFresh)
         {
             Uri currentUri = initialUri;
             for (int redirectCount = 0; ; redirectCount++)
             {
                 using var request = new HttpRequestMessage(HttpMethod.Get, currentUri);
                 request.Headers.Accept.ParseAdd("application/octet-stream, application/json;q=0.9");
+                if (requestFresh)
+                {
+                    // The channel envelope URL is mutable. Avoid an intermediary's stale cached head;
+                    // an independently verified on-disk last-known-good remains the offline fallback.
+                    request.Headers.CacheControl = new CacheControlHeaderValue
+                    {
+                        NoCache = true,
+                        NoStore = true,
+                        MaxAge = TimeSpan.Zero
+                    };
+                    request.Headers.Pragma.ParseAdd("no-cache");
+                }
                 HttpResponseMessage response = await _client.SendAsync(
                     request,
                     HttpCompletionOption.ResponseHeadersRead,

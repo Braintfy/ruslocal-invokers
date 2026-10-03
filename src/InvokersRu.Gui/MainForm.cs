@@ -172,7 +172,13 @@ internal sealed class MainForm : Form
             if (!await CheckPatcherUpdateAsync(showCurrent: false))
                 await CheckAsync(showFailureDialog: true);
         };
-        _updatePatcherButton.Click += async (_, _) => await CheckPatcherUpdateAsync(showCurrent: true);
+        _updatePatcherButton.Click += async (_, _) =>
+        {
+            // A current EXE does not imply current translation data. Continue with the
+            // data-only refresh, without starting the self-update check again.
+            if (!await CheckPatcherUpdateAsync(showCurrent: true))
+                await CheckAsync(showFailureDialog: false);
+        };
         _applyButton.Click += async (_, _) => await ApplyOrRecoverAsync();
         _restoreButton.Click += async (_, _) => await RestoreAsync();
         Shown += async (_, _) => await InitialCheckAsync();
@@ -629,6 +635,7 @@ internal sealed class MainForm : Form
     {
         if (_busy) return false;
         SetBusy(true, "Проверяем обновления перевода");
+        ShowCheckingStatus("Проверяем языковые файлы и доступные переводы…");
         AppendLog("Проверяем стандартный путь, контрольные суммы, версию и запущенные процессы.");
         try
         {
@@ -848,10 +855,23 @@ internal sealed class MainForm : Form
                 + "Полностью закройте игру и лаунчер, затем нажмите «Проверить». "
                 + "Если ошибка повторяется, отправьте автору подробности и файлы из папки i18n. "
                 + "Не переименовывайте файлы и не удаляйте резервные копии.", Theme.Warning);
+        else if (plan.LocalProblem == "signed-profile-unavailable")
+            Show("Подходящий перевод пока недоступен",
+                $"Языковые файлы найдены: EN {plan.Observed.EnglishContent ?? "версия неизвестна"}, "
+                + $"UK {plan.Observed.BaseContent ?? "версия неизвестна"}. Для этого сочетания ещё нет проверенного перевода.",
+                "Нажмите «Проверить» позже: патчер сам загрузит подходящее обновление, когда оно выйдет. "
+                + (plan.CanRestore ? "Проверенный оригинал можно восстановить кнопкой ниже. " : string.Empty)
+                + "Переустанавливать игру или удалять языковые файлы не нужно.", Theme.Warning);
         else if (plan.Status == "MissingFiles")
             Show("Набор файлов языка не найден", "Не удалось найти полный набор английских, украинских и служебных файлов.",
                 "Проверьте выбранную папку i18n кнопкой «Найти / выбрать папку». "
                 + "Для новой установки загрузите в игре английский и украинский языки, затем полностью закройте игру и лаунчер.", Theme.Warning);
+        else if (plan.PlanAction == "REFUSE_NONSTANDARD_CACHE_ROOT")
+            Show("Нестандартная папка — только проверка",
+                "Патчер может прочитать выбранную папку, но не подтвердил её как рабочую папку этой установки игры.",
+                "Патчер не будет изменять файлы в этой папке. Нажмите «Найти / выбрать папку» и выберите "
+                + "рабочую папку i18n игры. Если путь верный, скопируйте подробности для поддержки; "
+                + "не переносите языковые файлы вручную.", Theme.Warning);
         else if (plan.Status == "InconsistentState"
             && plan.Diagnostic.Kind == "local-state" && plan.Diagnostic.Component == "patch-state")
             Show("Нужно проверить предыдущую установку", "Не удалось подтвердить сохранённые сведения о прошлой установке перевода.",
@@ -990,6 +1010,17 @@ internal sealed class MainForm : Form
         UpdateButtons();
     }
 
+    private void ShowCheckingStatus(string summary)
+    {
+        // Clear the previous verdict before a modal self-update dialog appears.
+        // Otherwise a stale "files missing" banner appears to describe the new check.
+        SetBadge("Идёт проверка", Theme.Muted);
+        _stateLabel.Text = summary;
+        _stateLabel.ForeColor = Theme.Muted;
+        _noticeLabel.Text = "Подождите окончания проверки. Перевод игры пока не изменяется.";
+        _noticeLabel.ForeColor = Theme.Text;
+    }
+
     private void SetBusyStage(string stage)
     {
         _busyStage = stage;
@@ -1118,6 +1149,7 @@ internal sealed class MainForm : Form
             "locale-slot" => "locale slot EN/UK",
             "ordered-keyset" => "порядок ключей LOC1",
             "missing-files" => "фиксированный набор EN/UK/stamp",
+            "signed-profile-unavailable" => "профиль перевода для текущих языковых файлов",
             "official-base-refresh" => "официальный UK-файл после обновления",
             "journal" => "журнал незавершённой операции",
             "journal-authentication" => "проверка журнала незавершённой операции",
@@ -1144,6 +1176,8 @@ internal sealed class MainForm : Form
             "locale-slot" => $"Locale slot сейчас EN {plan.Observed.EnglishLocaleId?.ToString() ?? "?"}, UK {plan.Observed.BaseLocaleId?.ToString() ?? "?"}; ожидается EN {plan.Profile.EnglishLocaleId}, UK {plan.Profile.BaseLocaleId}.",
             "ordered-keyset" => $"Порядок ключей LOC1 сейчас {ShortDigest(plan.Observed.OrderedKeysetSha256)}; ожидается {ShortDigest(plan.Profile.OrderedKeysetSha256)}.",
             "missing-files" => "Не удалось прочитать полный фиксированный набор EN/UK/stamp по пути установки игры.",
+            "signed-profile-unavailable" => $"Языковые файлы найдены: EN {FormatCorpus(plan.Observed.EnglishContent, plan.Observed.EnglishReleaseRevision, plan.Observed.EnglishLocaleRevision)}, "
+                + $"UK {FormatCorpus(plan.Observed.BaseContent, plan.Observed.BaseReleaseRevision, plan.Observed.BaseLocaleRevision)}. Подписанного профиля для них пока нет.",
             "official-base-refresh" => $"Официальный UK-файл сейчас {FormatCorpus(plan.Observed.BaseContent, plan.Observed.BaseReleaseRevision, plan.Observed.BaseLocaleRevision)}; "
                 + "состояние установленного перевода относится к предыдущему официальному UK-файлу.",
             "journal" => "Журнал незавершённой операции не прошёл аутентификацию состояния.",
@@ -1193,6 +1227,7 @@ internal sealed class MainForm : Form
     {
         if (_busy) return false;
         SetBusy(true, "Проверяем обновление самого патчера");
+        ShowCheckingStatus("Проверяем версию патчера; затем проверим перевод…");
         bool started = false;
         try
         {

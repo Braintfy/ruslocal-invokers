@@ -45,6 +45,16 @@ namespace InvokersRu.Core.Patching
             return root != null;
         }
 
+        // Read-only mirror of the mutation guard for plan/UI decisions. The write path still
+        // independently calls MutationPolicy.RequireRuntimeRoot immediately before any mutation.
+        public static bool IsMutationRootAuthorized(string cacheRoot)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(cacheRoot);
+            if (MutationPolicy.IsTestWriteBuild) return true;
+            return TryDefaultCacheRoot(out string fixedRoot, out _)
+                && PathEquals(cacheRoot, fixedRoot);
+        }
+
         private static (string? Root, string? Problem) ResolveDefaultCacheRoot()
         {
             string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);

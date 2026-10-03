@@ -106,9 +106,61 @@ internal static class Program
                 && !Field<Label>(form, "_versionLabel").Text.Contains("1506"),
                 "Client version was mislabeled as the LOC1 language family.");
         }
+        AssertUnavailableProfileAndRootRendering();
         Console.WriteLine("PASS working-area sizing and concise process explanation.");
         Console.WriteLine("PASS precise input-failure rendering and separate client/language identities.");
+        Console.WriteLine("PASS absent signed profile, actual missing files, nonstandard root and cleared checking status.");
         Console.WriteLine("PASS installed status survives update warnings; stale state and protection remain refusals.");
+    }
+
+    private static void AssertUnavailableProfileAndRootRendering()
+    {
+        using Form form = (Form)Activator.CreateInstance(MainFormType)!;
+        Type planType = MainFormType.Assembly.GetType("InvokersRu.Gui.CliPlanResult", true)!;
+        object plan = Activator.CreateInstance(planType)!;
+        Set(plan, "PatcherVersion", "3.1.13");
+        object protection = planType.GetProperty("ProtectionCheck")!.GetValue(plan)!;
+        Set(protection, "Status", "no-known-markers");
+        object observed = planType.GetProperty("Observed")!.GetValue(plan)!;
+        Set(observed, "EnglishContent", "Prod_0.61.1_3");
+        Set(observed, "BaseContent", "Prod_0.61.1_5");
+        Set(plan, "Status", "UnknownBuild");
+        Set(plan, "LocalProblem", "signed-profile-unavailable");
+        Set(plan, "PlanAction", "REFUSE_UNKNOWN_OR_INCONSISTENT");
+        Invoke(form, "RenderPlan", plan);
+        Require(Field<Label>(form, "_statusBadge").Text == "Подходящий перевод пока недоступен"
+            && Field<Label>(form, "_stateLabel").Text.Contains("EN Prod_0.61.1_3")
+            && Field<Label>(form, "_stateLabel").Text.Contains("UK Prod_0.61.1_5")
+            && !Field<Label>(form, "_noticeLabel").Text.Contains("загрузите в игре"),
+            "A valid but unsupported tuple must not be described as missing game files.");
+        Require(!Field<Button>(form, "_applyButton").Enabled,
+            "An unavailable signed profile must not enable Apply.");
+
+        Invoke(form, "ShowCheckingStatus", "Проверяем новую версию…");
+        Require(Field<Label>(form, "_statusBadge").Text == "Идёт проверка"
+            && !Field<Label>(form, "_stateLabel").Text.Contains("Prod_0.61.1_5"),
+            "A modal self-update dialog must not leave a stale profile verdict behind it.");
+
+        Set(plan, "Status", "MissingFiles");
+        Set(plan, "LocalProblem", null!);
+        Invoke(form, "RenderPlan", plan);
+        Require(Field<Label>(form, "_statusBadge").Text == "Набор файлов языка не найден",
+            "Actually missing files must keep the dedicated missing-files explanation.");
+
+        Set(plan, "Status", "CompatibleOriginal");
+        Set(plan, "MutationRootAuthorized", false);
+        Set(plan, "NonstandardRootVerified", true);
+        Set(plan, "PlanAction", "REFUSE_NONSTANDARD_CACHE_ROOT");
+        Invoke(form, "RenderPlan", plan);
+        Require(Field<Label>(form, "_statusBadge").Text == "Нестандартная папка — только проверка"
+            && Field<Label>(form, "_noticeLabel").Text.Contains("не будет изменять файлы")
+            && !Field<Button>(form, "_applyButton").Enabled
+            && !Field<Button>(form, "_restoreButton").Enabled,
+            "Nonstandard root must be a visible read-only refusal, not a misleading ready state.");
+        Set(plan, "Status", "InconsistentState");
+        Invoke(form, "RenderPlan", plan);
+        Require(Field<Label>(form, "_statusBadge").Text == "Нестандартная папка — только проверка",
+            "An unrelated standard-root patch state must not hide a verified nonstandard-root refusal.");
     }
 
     private static void AssertInstalledStateRendering(Form form)

@@ -1,5 +1,12 @@
 # Changelog
 
+## Windows 3.1.13 Preview / translation data 13 — 2026-10-03
+
+- Refreshed only 20 Ukrainian hint bindings for `Prod_0.61.1_5`; English source and all language keys are unchanged. Shortened seven equipment stat labels that wrapped awkwardly, without modifying Unity fonts or other game resources.
+- The signed catalog includes exact profiles for both Ukrainian `Prod_0.61.1_3` and `_5` with the same English `Prod_0.61.1_3`, preserving full translation coverage on either revision.
+- Corrected false “language files not found” diagnostics when a complete package lacks an authorized translation profile. A selected nonstandard folder no longer advertises an install action that production writes would refuse. App-update checks no longer leave a stale translation result, and the mutable translation channel is requested fresh while verified offline fallback remains available.
+- Delivered via the existing signed Windows application- and translation-data channels. Installed translations and immutable backups are preserved; game files are not changed by downloading either update.
+
 ## Translation data 12 — 2026-09-30
 
 - Added a signed profile for the game's downloaded EN/UK `Prod_0.61.1_3` tables. The Windows patcher 3.1.12 can fetch this data through its existing update channel; its EXE is unchanged.

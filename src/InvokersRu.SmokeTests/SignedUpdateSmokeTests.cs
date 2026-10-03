@@ -381,8 +381,22 @@ namespace InvokersRu.SmokeTests
             const string cdnUrl = "https://release-assets.githubusercontent.com/github-production-release-asset/123?sig=a%2Fb&response-content-type=application%2Foctet-stream";
             byte[] envelopeBytes = Encoding.UTF8.GetBytes("{\"signed\":true}");
             var envelopeHandler = new QueueHttpMessageHandler(
-                _ => Redirect(HttpStatusCode.Found, cdnUrl),
-                _ => Content(HttpStatusCode.OK, envelopeBytes));
+                request =>
+                {
+                    Require(request.Headers.CacheControl?.NoCache == true
+                        && request.Headers.CacheControl.NoStore
+                        && request.Headers.CacheControl.MaxAge == TimeSpan.Zero
+                        && request.Headers.Pragma.Any(item => item.Name == "no-cache"),
+                        "Mutable signed channel pointer did not request a fresh response.");
+                    return Redirect(HttpStatusCode.Found, cdnUrl);
+                },
+                request =>
+                {
+                    Require(request.Headers.CacheControl?.NoCache == true
+                        && request.Headers.CacheControl.NoStore,
+                        "Mutable pointer cache policy was lost across a validated redirect.");
+                    return Content(HttpStatusCode.OK, envelopeBytes);
+                });
             using (var client = new SignedUpdateHttpClient(envelopeHandler))
             {
                 byte[] downloaded = client.DownloadEnvelopeAsync(envelopeUrl).GetAwaiter().GetResult();
@@ -427,7 +441,12 @@ namespace InvokersRu.SmokeTests
                 SignedUpdateStateStore stateStore = CreateIsolatedStateStore(stateRoot, () => httpClock);
                 stateStore.RecordAcceptedManifest(catalogUpdate);
                 var catalogHandler = new QueueHttpMessageHandler(
-                    _ => Redirect(HttpStatusCode.TemporaryRedirect, cdnUrl),
+                    request =>
+                    {
+                        Require(request.Headers.CacheControl == null,
+                            "Immutable content-addressed catalog inherited the mutable pointer cache policy.");
+                        return Redirect(HttpStatusCode.TemporaryRedirect, cdnUrl);
+                    },
                     _ => Content(HttpStatusCode.OK, catalogBytes));
                 using (var client = new SignedUpdateHttpClient(catalogHandler))
                 using (var destination = new MemoryStream())

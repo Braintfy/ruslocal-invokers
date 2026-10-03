@@ -168,7 +168,7 @@ namespace InvokersRu.Cli
                         channelAuthority: null,
                         "The active transaction journal does not match the embedded recovery profile.");
                 }
-                return embedded;
+                return WithUnsupportedObservedTupleIfPresent(cacheRoot, embedded, null);
             }
 
             SignedUpdateBundle? bundle = coordinator.LoadBestAvailable();
@@ -203,7 +203,7 @@ namespace InvokersRu.Cli
                         channelAuthority: null,
                         "The active transaction journal does not match any authenticated recovery profile.");
                 }
-                return embedded;
+                return WithUnsupportedObservedTupleIfPresent(cacheRoot, embedded, channelAuthority);
             }
 
             PatchJournal? journal = PatchJournalStore.FindActive(statePath);
@@ -482,13 +482,15 @@ namespace InvokersRu.Cli
             }
 
             if (remoteProfile == null)
-                return WithUnavailableSignedData(
-                    embedded,
-                    bundle,
-                    channelAuthority!,
-                    "Current authenticated translation data cannot materialize a supported exact or compatible-revision profile for the observed tuple.",
-                    installedProfile,
-                    installedInspection);
+            {
+                const string unavailable = "Current authenticated translation data cannot materialize a supported exact or compatible-revision profile for the observed tuple.";
+                if (installedInspection?.Status is InstallationStatus.PatchedByThisTool
+                    or InstallationStatus.RecoveryRequired)
+                    return WithUnavailableSignedData(embedded, bundle, channelAuthority!, unavailable,
+                        installedProfile, installedInspection);
+                return WithUnsupportedObservedTuple(cacheRoot, embedded, directObserved!, target!,
+                    channelAuthority, unavailable, installedProfile, installedInspection);
+            }
             RuntimeCacheCompatibility signedCurrentExact = CloneCompatibleProfile(remoteProfile);
             remoteProfile = AttachEmbeddedMigrationAllowlist(embeddedProfile, remoteProfile);
             RuntimeCacheInspection remoteInspection = RuntimeCacheService.Inspect(cacheRoot, remoteProfile, statePath);
@@ -1444,6 +1446,97 @@ namespace InvokersRu.Cli
                 Source = installed.Source,
                 RemoteProblem = remoteProblem,
                 RemoteProblemBlocksApply = remoteProblemBlocksApply
+            };
+        }
+
+        private static RuntimeUpdateResolution WithUnsupportedObservedTupleIfPresent(
+            string cacheRoot,
+            RuntimeUpdateResolution embedded,
+            VerifiedSignedUpdate? channelAuthority)
+        {
+            if (embedded.Inspection.Status is not (InstallationStatus.UnknownBuild
+                or InstallationStatus.MissingFiles))
+                return embedded;
+            if (!TryReadObserved(cacheRoot, out RuntimeCacheCompatibility? observed,
+                    out Loc1Document? target, out string inputProblem))
+            {
+                if (embedded.Inspection.Status == InstallationStatus.MissingFiles)
+                {
+                    embedded.Inspection.Message = inputProblem;
+                    return new RuntimeUpdateResolution
+                    {
+                        Profile = embedded.Profile,
+                        Inspection = embedded.Inspection,
+                        CatalogPath = embedded.CatalogPath,
+                        Source = embedded.Source,
+                        LocalProblem = "runtime-cache-input",
+                        RemoteProblem = inputProblem,
+                        RemoteProblemBlocksApply = true
+                    };
+                }
+                return embedded;
+            }
+            return WithUnsupportedObservedTuple(cacheRoot, embedded, observed!, target!,
+                channelAuthority, "Подходящий подписанный перевод для этой версии языковых файлов пока недоступен.");
+        }
+
+        private static RuntimeUpdateResolution WithUnsupportedObservedTuple(
+            string cacheRoot,
+            RuntimeUpdateResolution embedded,
+            RuntimeCacheCompatibility observed,
+            Loc1Document target,
+            VerifiedSignedUpdate? channelAuthority,
+            string problem,
+            RuntimeCacheCompatibility? installedProfile = null,
+            RuntimeCacheInspection? installedInspection = null)
+        {
+            (string englishPath, string targetPath, string stampPath) =
+                RuntimeCacheService.ResolveTuplePaths(cacheRoot);
+            var inspection = new RuntimeCacheInspection
+            {
+                Status = InstallationStatus.UnknownBuild,
+                Message = $"Подходящий перевод пока недоступен: EN {observed.EnglishContentVersion}, UK {observed.BaseContentVersion}. Дождитесь обновления перевода и нажмите «Проверить».",
+                CacheRoot = Path.GetFullPath(cacheRoot),
+                EnglishPath = englishPath,
+                TargetPath = targetPath,
+                StampPath = stampPath,
+                EnglishSha256 = observed.EnglishSha256,
+                BaseSha256 = observed.BaseSha256,
+                StampSha256 = observed.StampSha256,
+                StampValue = observed.StampValue,
+                EnglishContentVersion = observed.EnglishContentVersion,
+                BaseContentVersion = observed.BaseContentVersion,
+                EnglishFormatVersion = target.FormatVersion,
+                BaseFormatVersion = target.FormatVersion,
+                EnglishContentGuid = observed.ContentGuid,
+                BaseContentGuid = target.ContentGuid,
+                EnglishLocaleId = observed.EnglishLocaleId,
+                EnglishLocaleRevision = observed.EnglishLocaleRevision,
+                EnglishReleaseRevision = observed.EnglishReleaseRevision,
+                BaseLocaleId = observed.BaseLocaleId,
+                BaseLocaleRevision = observed.BaseLocaleRevision,
+                BaseReleaseRevision = observed.BaseReleaseRevision,
+                EntryCount = target.Entries.Count,
+                OrderedKeysetSha256 = Loc1Compatibility.ComputeOrderedKeysetSha256(target),
+                Profile = embedded.Profile,
+                // A stale local state is not an authenticated installation for this unsupported
+                // current tuple. Historical installed state is surfaced separately only after
+                // exact authentication, never inferred from the mere presence of state.json.
+                State = null
+            };
+            return new RuntimeUpdateResolution
+            {
+                Profile = embedded.Profile,
+                Inspection = inspection,
+                CatalogPath = embedded.CatalogPath,
+                Bundle = null,
+                ChannelAuthority = channelAuthority,
+                InstalledProfile = installedProfile,
+                InstalledInspection = installedInspection,
+                Source = embedded.Source,
+                LocalProblem = "signed-profile-unavailable",
+                RemoteProblem = problem,
+                RemoteProblemBlocksApply = true
             };
         }
 

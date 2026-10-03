@@ -1693,6 +1693,7 @@ namespace InvokersRu.SmokeTests
             Require(response.GetProperty("schema").GetInt32() == 4
                 && response.GetProperty("patcher_version").ValueKind == JsonValueKind.String
                 && !response.GetProperty("installation_writes_enabled").GetBoolean()
+                && !response.GetProperty("mutation_root_authorized").GetBoolean()
                 && response.GetProperty("status").ValueKind == JsonValueKind.String
                 && response.GetProperty("observed").ValueKind == JsonValueKind.Object
                 && response.GetProperty("observed").TryGetProperty("game_version", out _)
@@ -1706,9 +1707,9 @@ namespace InvokersRu.SmokeTests
                 && response.GetProperty("channel_authority").ValueKind == JsonValueKind.Null
                 && !response.GetProperty("translation_update_available").GetBoolean()
                 && response.GetProperty("translation_update_kind").GetString() == "none"
-                && response.GetProperty("update_problem").ValueKind == JsonValueKind.Null
-                && response.GetProperty("local_problem").ValueKind == JsonValueKind.Null
-                && !response.GetProperty("update_problem_blocks_apply").GetBoolean()
+                && response.GetProperty("update_problem").GetString()!.Contains("dl_en_US.bin", StringComparison.Ordinal)
+                && response.GetProperty("local_problem").GetString() == "runtime-cache-input"
+                && response.GetProperty("update_problem_blocks_apply").GetBoolean()
                 && !response.GetProperty("restore_recovery_authorized").GetBoolean()
                 && response.GetProperty("state").ValueKind is JsonValueKind.Null or JsonValueKind.Object
                 && response.GetProperty("journal").ValueKind is JsonValueKind.Null or JsonValueKind.Object
