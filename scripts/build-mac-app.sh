@@ -87,7 +87,14 @@ install -m 755 "${REPO_ROOT}/mac/patcher-main.sh" "${APP_DIR}/Contents/Resources
 # The bundle's main executable is a small native Cocoa control panel. Keeping the shell worker as its
 # child preserves Full Disk Access inheritance while giving the user a persistent, verifiable status
 # screen instead of a chain of unrelated dialogs.
-cc -O2 -Wall -Wextra -fobjc-arc -framework Cocoa \
+# Prefer the selected toolchain's stable SDK symlink. Some CLT installations expose a newer preview
+# SDK as the implicit default before the installed linker understands its .tbd architecture list.
+MACOS_SDK="${MACOS_SDK:-$(xcode-select -p)/SDKs/MacOSX.sdk}"
+if [ ! -d "$MACOS_SDK" ]; then
+    MACOS_SDK="$(xcrun --sdk macosx --show-sdk-path)"
+fi
+echo "  compiling Cocoa panel with SDK ${MACOS_SDK}"
+cc -O2 -Wall -Wextra -fobjc-arc -framework Cocoa -isysroot "$MACOS_SDK" \
    -arch arm64 -arch x86_64 -mmacosx-version-min="${MIN_MACOS}" \
    -o "${APP_DIR}/Contents/MacOS/${APP_NAME}" "${REPO_ROOT}/mac/launcher.m"
 chmod 755 "${APP_DIR}/Contents/MacOS/${APP_NAME}"
@@ -131,7 +138,7 @@ PLIST
 # A minimal generated icon keeps the bundle self-describing without committing binary art.
 ICONSET="${OUT_DIR}/AppIcon.iconset"
 rm -rf "$ICONSET"; mkdir -p "$ICONSET"
-python3 - "$ICONSET" <<'PY'
+python3 - "$ICONSET" "${APP_DIR}/Contents/Resources/AppIcon.icns" <<'PY'
 import struct, sys, zlib, os
 
 def png(path, size):
@@ -158,8 +165,25 @@ target = sys.argv[1]
 for size in (16, 32, 128, 256, 512):
     png(os.path.join(target, f'icon_{size}x{size}.png'), size)
     png(os.path.join(target, f'icon_{size}x{size}@2x.png'), size * 2)
+
+# iconutil can reject even an iconset it just extracted on some macOS/CLT combinations.
+# ICNS PNG chunks are deterministic and avoid that host-tool dependency.
+entries = (
+    ('icp4', 'icon_16x16.png'), ('ic11', 'icon_16x16@2x.png'),
+    ('icp5', 'icon_32x32.png'), ('ic12', 'icon_32x32@2x.png'),
+    ('ic07', 'icon_128x128.png'), ('ic13', 'icon_128x128@2x.png'),
+    ('ic08', 'icon_256x256.png'), ('ic14', 'icon_256x256@2x.png'),
+    ('ic09', 'icon_512x512.png'), ('ic10', 'icon_512x512@2x.png'),
+)
+chunks = []
+for kind, filename in entries:
+    with open(os.path.join(target, filename), 'rb') as handle:
+        data = handle.read()
+    chunks.append(kind.encode('ascii') + struct.pack('>I', 8 + len(data)) + data)
+with open(sys.argv[2], 'wb') as handle:
+    handle.write(b'icns' + struct.pack('>I', 8 + sum(map(len, chunks))))
+    handle.writelines(chunks)
 PY
-iconutil -c icns "$ICONSET" -o "${APP_DIR}/Contents/Resources/AppIcon.icns"
 rm -rf "$ICONSET"
 
 # An ad-hoc signature keeps the bundle launchable after the user clears quarantine; it is not a
@@ -175,7 +199,15 @@ rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp -R "$APP_DIR" "$STAGE/"
 ln -s /Applications "${STAGE}/Applications"
 cp "${REPO_ROOT}/mac/README-macos.txt" "${STAGE}/ПРОЧТИ МЕНЯ.txt"
-hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG_PATH" >/dev/null
+# Let the source copy settle before diskimages-helper sizes the temporary volume. A fast hand-off
+# on recent macOS can otherwise report ENOSPC even when the destination disk has ample space.
+sync
+if ! hdiutil create -verbose -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG_PATH" \
+        >"${OUT_DIR}/hdiutil.log" 2>&1; then
+    tail -40 "${OUT_DIR}/hdiutil.log" >&2
+    exit 1
+fi
+hdiutil verify "$DMG_PATH" >/dev/null
 rm -rf "$STAGE" "$PUBLISH_DIR"
 
 echo "App: ${APP_DIR}"

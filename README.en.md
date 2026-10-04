@@ -39,12 +39,16 @@ If EN/UK changed after installation, do not manually delete state or backups. Up
 
 ### macOS
 
-Script 2.10.0 and the current catalog download automatically; no new DMG is needed. After a major game update, start the game in English and then Ukrainian, waiting for the main menu each time.
+The observed native client has launcher `1.0.319`, game `0.61.1506`, and downloaded language tables `Prod_0.61.1_3`. Mac app `3.1.0` uses script `2.11.0`; **Проверить** also checks for script updates. A compatible installed app receives script and translation catalog updates without replacing the DMG manually.
+
+English and Ukrainian table revisions may differ: the catalog also covers EN `Prod_0.61.1_3` with UK `Prod_0.61.1_5`. The patcher checks their shared content family and validates rows during composition.
+
+The Mac DMG is in the [separate macOS release](https://github.com/Braintfy/ruslocal-invokers/releases/tag/invokersru-update-channel-v1); existing direct download links remain valid.
 
 1. Install and launch the native **Invokers Titan Legacy** client once.
-2. Select **Ukrainian** in both the official launcher and the game, wait for it to download, then quit the game completely (`Cmd+Q`). Russian replaces the Ukrainian language slot.
+2. After a major update, start the game in **English** and wait for the main menu. Fully restart it in **Ukrainian**, wait for the main menu, then quit the game and launcher (`Cmd+Q`). Russian replaces the Ukrainian language slot.
 3. Move **Русификатор Invokers** to Applications. On first launch, right-click it and choose **Open**.
-4. Select **Установить перевод**. The app displays the detected client, game version, and cache path before installation.
+4. Select **Проверить**, then **Установить перевод**. The app displays the detected client, language-table version, and cache path before installation.
 
 Do not reopen the language selector after installation: the client downloads the official file again and overwrites the translation. Reinstall the translation after a game update or language change.
 
@@ -52,11 +56,11 @@ The Mac localizer's **Открыть игру** button starts the native client 
 
 ## What changes
 
-**Protection checks and account risk.** Windows 3.1.7 and Mac script 2.9.0 inspect the selected cache and discovered game installation before writing. Recognized anti-cheat files or localization signature/checksum metadata pause installation. Do not delete those files or disable protection; send the diagnostic details to the maintainer. Restoring a verified original backup remains available with the game closed.
+**Protection checks and account risk.** The Windows patcher and Mac script inspect the selected cache and discovered game installation before writing. Recognized anti-cheat files or localization signature/checksum metadata pause installation. Do not delete those files or disable protection; send the diagnostic details to the maintainer. On Mac, restore requires the game to be closed and the current file to exactly match the installed translation.
 
 This is not an anti-ban guarantee. Unknown protection, server checks, and changes to game rules cannot reliably be detected from local files. When the game installation cannot be located, only the cache is checked; Windows support details list the checked paths. No detected markers does not mean an account cannot be banned. Avoid applying the translation if the developers prohibit it. [Technical scope and limitations](docs/game-protection-checks.md).
 
-The localizer composes `dl_uk_UA.bin` from the installed game files and the public translation catalog. It modifies only the user localization cache; game executables, code signature, and protection remain untouched. A verified backup is created before replacement, and **Восстановить оригинал** restores it.
+The localizer composes `dl_uk_UA.bin` from the game's downloaded files and the public translation catalog. It modifies only the user localization cache; game executables, code signature, and protection remain untouched. A verified backup is created before replacement. **Восстановить оригинал** is available only while the current file exactly matches this patcher's installed output; a newer official file is never replaced with an older backup.
 
 Current native Mac cache:
 

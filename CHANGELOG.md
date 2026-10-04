@@ -1,5 +1,12 @@
 # Changelog
 
+## macOS 3.1.0 / script 2.11.0 — 2026-10-04
+
+- Updated the Mac patcher for the observed native launcher `1.0.319`, game `0.61.1506` and downloaded EN/UK `Prod_0.61.1_3` tables. These 42,673-entry files have no `.ver` sidecars; local composition applies 42,451 Russian strings, with two English fallbacks and 220 empty source entries. The installed file and Russian in-game UI were verified on 2026-10-04.
+- Select the native Application Support cache whenever it exists, even if an obsolete iOS-on-Mac container has a higher version. For other discovered caches, use the downloaded LOC1 identity before legacy `.ver` stamps. Require matching downloaded EN/UK content families while allowing the catalog's EN `Prod_0.61.1_3` / UK `Prod_0.61.1_5` revision pair, and show both table versions when they differ.
+- Make **Проверить** check for script updates. The existing compatible app can receive a new script and catalog without replacing its DMG; bundle `3.1.0` contains the refreshed Mac interface.
+- Permit restoration only when the current Ukrainian file exactly matches this patcher's recorded output and its original backup passes SHA-256 verification. A newly downloaded official file cannot be overwritten with an older backup. Status also detects when the English table changed under an installed translation.
+
 ## Windows 3.1.13 Preview / translation data 13 — 2026-10-03
 
 - Refreshed only 20 Ukrainian hint bindings for `Prod_0.61.1_5`; English source and all language keys are unchanged. Shortened seven equipment stat labels that wrapped awkwardly, without modifying Unity fonts or other game resources.

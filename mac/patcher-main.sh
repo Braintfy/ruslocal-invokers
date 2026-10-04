@@ -5,9 +5,9 @@
 set -uo pipefail
 
 # Version of this script. It updates itself from the repository; the bundle around it stays frozen.
-APP_VERSION="2.10.0"
+APP_VERSION="2.11.0"
 # Version of the application bundle, which only changes when the launcher or the CLI has to change.
-BUNDLE_VERSION="3.0.0"
+BUNDLE_VERSION="3.1.0"
 # Oldest bundle that still works. Kept apart from BUNDLE_VERSION so rebuilding the image does not tell
 # everyone to download it again: a new bundle is only mandatory when the old one genuinely cannot run.
 MINIMUM_BUNDLE_VERSION="3.0.0"
@@ -95,8 +95,8 @@ json_field() {
 
 # Every place a build of the game is known to keep its localization cache. The native desktop client
 # introduced in 0.60.1289 writes to Application Support, while the retired iOS-on-Mac client hides its
-# cache in a container named after a random UUID. Both may remain on one Mac, so merely taking the first
-# match is wrong: cache selection below ranks the newest client data and prefers the native location.
+# cache in a container named after a random UUID. Both may remain on one Mac, so cache selection
+# explicitly prefers the native location and only searches older paths when it is absent.
 cache_candidates() {
     local containers="${HOME}/Library/Containers" container candidate explicit
 
@@ -131,7 +131,39 @@ cache_version() {
         printf '%s' "$family"
         return 0
     fi
-    [ -f "$stamp" ] && tr -d '\r\n' < "$stamp" || printf '0'
+    [ -r "$stamp" ] && tr -d '\r\n' < "$stamp" 2>/dev/null || printf '0'
+}
+
+cache_display_version() {
+    local english target
+    english="$(inspect_field "$1/${ENGLISH_NAME}" content_version || true)"
+    target="$(inspect_field "$1/${TARGET_NAME}" content_version || true)"
+    if [ -n "$english" ] && [ -n "$target" ] && [ "$english" != "$target" ]; then
+        printf 'EN %s / UK %s' "$english" "$target"
+    elif [ -n "$english" ]; then
+        printf '%s' "$english"
+    else
+        cache_version "$1"
+    fi
+}
+
+matching_downloaded_tables() {
+    local cache_root="$1" english_guid target_guid english_version target_version
+    local numeric_version='^Prod_([0-9]+\.[0-9]+\.[0-9]+)_([0-9]+)$'
+    english_guid="$(inspect_field "$cache_root/${ENGLISH_NAME}" content_guid || true)"
+    target_guid="$(inspect_field "$cache_root/${TARGET_NAME}" content_guid || true)"
+    [ -n "$english_guid" ] && [ "$english_guid" = "$target_guid" ] || return 1
+    # The 0.61+ tables may have independent EN/UK revisions (for example EN Prod_0.61.1_3
+    # with UK Prod_0.61.1_5), but each must identify the same LOC1 content family.
+    # Older UUID families could legitimately use a different content-version format.
+    if [[ "$english_guid" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        english_version="$(inspect_field "$cache_root/${ENGLISH_NAME}" content_version || true)"
+        target_version="$(inspect_field "$cache_root/${TARGET_NAME}" content_version || true)"
+        [[ "$english_version" =~ $numeric_version ]] || return 1
+        [ "${BASH_REMATCH[1]}" = "$english_guid" ] || return 1
+        [[ "$target_version" =~ $numeric_version ]] || return 1
+        [ "${BASH_REMATCH[1]}" = "$target_guid" ] || return 1
+    fi
 }
 
 cache_priority() {
@@ -164,6 +196,13 @@ find_cache_root() {
     if [ -n "${INVOKERSRU_CACHE_ROOT:-}" ] \
         && [ -f "${INVOKERSRU_CACHE_ROOT}/${ENGLISH_NAME}" ]; then
         printf '%s\n' "$INVOKERSRU_CACHE_ROOT"
+        return 0
+    fi
+    # A retired iOS container is not a candidate while the native desktop client has its own cache.
+    # Its version may be higher due to an unrelated App Store build, but the native game never reads it.
+    candidate="${HOME}/Library/Application Support/hitzone.anima.spirit.guardians/i18n"
+    if [ -f "${candidate}/${ENGLISH_NAME}" ]; then
+        printf '%s\n' "$candidate"
         return 0
     fi
     list="$(cache_candidates | awk '!seen[$0]++')"
@@ -228,12 +267,15 @@ cpu_name() { sysctl -n machdep.cpu.brand_string 2>/dev/null || uname -m; }
 # the fallback for a machine with indexing switched off.
 game_bundle() {
     local hit
-    for hit in "${HOME}/Library/Application Support/zone.hitzone.invokers.launcher/game/Invokers.app" \
-               "/Applications/Invokers Titan Legacy.app"; do
-        [ -d "$hit" ] && { printf '%s\n' "$hit"; return 0; }
-    done
-    hit="$(mdfind "kMDItemCFBundleIdentifier == 'hitzone.anima.spirit.guardians'" 2>/dev/null | head -1)"
-    if [ -n "$hit" ] && [ -d "$hit" ]; then printf '%s\n' "$hit"; return 0; fi
+    hit="${HOME}/Library/Application Support/zone.hitzone.invokers.launcher/game/Invokers.app"
+    [ -d "$hit" ] && { printf '%s\n' "$hit"; return 0; }
+    while IFS= read -r hit; do
+        if [ -x "$hit/Contents/MacOS/Invokers" ]; then
+            printf '%s\n' "$hit"
+            return 0
+        fi
+    done < <(mdfind "kMDItemCFBundleIdentifier == 'hitzone.anima.spirit.guardians'" 2>/dev/null)
+    [ -d "/Applications/Invokers Titan Legacy.app" ] && { printf '%s\n' "/Applications/Invokers Titan Legacy.app"; return 0; }
     [ -d "/Applications/Invokers.app" ] && { printf '%s\n' "/Applications/Invokers.app"; return 0; }
     return 1
 }
@@ -458,6 +500,7 @@ atomic_install() {
 
 # The overlay is tens of megabytes of JSONL, which compresses roughly tenfold in transit.
 fetch() { curl -fsSL --compressed --max-time 300 "$1" -o "$2" 2>>"$LOG_FILE"; }
+fetch_update() { curl -fsSL --compressed --connect-timeout 5 --max-time 15 "$1" -o "$2" 2>>"$LOG_FILE"; }
 
 # Replaces this script from the repository without touching the application bundle, so the Full Disk
 # Access grant — which macOS pins to the bundle's code signature — keeps working. The download is
@@ -467,7 +510,7 @@ self_update() {
     [ ! -f "${SUPPORT_DIR}/no-self-update" ] || return 0
 
     local manifest="${WORK_DIR}/manifest.json" published expected fresh
-    fetch "$MANIFEST_URL" "$manifest" || return 0
+    fetch_update "$MANIFEST_URL" "$manifest" || return 0
     published="$(json_field "$manifest" patcher_version || true)"
     expected="$(json_field "$manifest" patcher_sha256 || true)"
     [ -n "$published" ] && [ -n "$expected" ] || return 0
@@ -485,7 +528,7 @@ self_update() {
     fi
 
     fresh="${WORK_DIR}/patcher.sh.new"
-    fetch "$PATCHER_URL" "$fresh" || { rm -f "$fresh"; return 0; }
+    fetch_update "$PATCHER_URL" "$fresh" || { rm -f "$fresh"; return 0; }
     if [ "$(sha256_of "$fresh")" != "$(printf '%s' "$expected" | tr '[:lower:]' '[:upper:]')" ]; then
         printf 'self-update refused: checksum mismatch\n' >>"$LOG_FILE"
         rm -f "$fresh"
@@ -501,11 +544,13 @@ self_update() {
     chmod 755 "$fresh"
     mv -f "$fresh" "${RUNTIME_DIR}/patcher.sh"
     printf 'self-update applied: %s -> %s\n' "$APP_VERSION" "$published" >>"$LOG_FILE"
-    say_info "Русификатор обновлён: ${APP_VERSION} → ${published}.
+    if [ "${1:-}" != "--gui-status" ]; then
+        say_info "Русификатор обновлён: ${APP_VERSION} → ${published}.
 
 $(json_field "$manifest" notes || true)
 
 Переустанавливать приложение и заново выдавать доступ к диску не нужно."
+    fi
     INVOKERSRU_UPDATED=1 exec /bin/bash "${RUNTIME_DIR}/patcher.sh" "$@"
 }
 
@@ -776,6 +821,21 @@ ${reason}
 Если ошибка остается, отправьте автору эти версии и журнал: ${LOG_FILE}"
 }
 
+restore_available() {
+    local target="$1" original patched recorded_backup expected_backup recorded_root
+    [ -f "$STATE_FILE" ] && [ -f "$target" ] || return 1
+    original="$(json_field "$STATE_FILE" original_sha256 || true)"
+    patched="$(json_field "$STATE_FILE" patched_sha256 || true)"
+    recorded_backup="$(json_field "$STATE_FILE" backup_path || true)"
+    recorded_root="$(json_field "$STATE_FILE" cache_root || true)"
+    [[ "$original" =~ ^[A-F0-9]{64}$ && "$patched" =~ ^[A-F0-9]{64}$ ]] || return 1
+    [ "$recorded_root" = "$(dirname "$target")" ] || return 1
+    expected_backup="${BACKUP_DIR}/${original}.${TARGET_NAME}"
+    [ "$recorded_backup" = "$expected_backup" ] || return 1
+    [ "$(sha256_of "$target")" = "$patched" ] || return 1
+    [ -f "$expected_backup" ] && [ "$(sha256_of "$expected_backup")" = "$original" ]
+}
+
 # A build can succeed and still leave English on screen: that happens when the game rewrites strings it
 # had before, which invalidates the rows translated from the old wording. Saying so up front beats
 # letting the player find it mid-fight and assume the patcher broke.
@@ -794,7 +854,8 @@ composition_note() {
 }
 
 do_install() {
-    local cache_root="$1" english target built current original backup applied
+    local cache_root="$1" english target built current original backup applied english_sha
+    local known_patched="" saved_english=""
 
     english="${cache_root}/${ENGLISH_NAME}"
     target="${cache_root}/${TARGET_NAME}"
@@ -806,7 +867,15 @@ do_install() {
         return 1
     fi
 
+    if ! matching_downloaded_tables "$cache_root"; then
+        say_error "Английская и украинская таблицы относятся к разным выпускам игры.
+
+Запустите игру сначала с английским, затем с украинским языком, каждый раз дождавшись главного меню. Полностью закройте игру и повторите установку."
+        return 1
+    fi
+
     require_patch_preflight "$cache_root" || return 1
+    english_sha="$(sha256_of "$english")"
     progress_start "downloading overlay"
     if ! refresh_overlay; then
         say_error "Не удалось загрузить перевод и нет сохранённой копии.
@@ -834,14 +903,28 @@ do_install() {
     [ -n "$applied" ] || applied="?"
 
     current="$(sha256_of "$target")"
+    [ -f "$STATE_FILE" ] && known_patched="$(json_field "$STATE_FILE" patched_sha256 || true)"
+    if [ -n "$known_patched" ] && [ "$current" = "$known_patched" ]; then
+        saved_english="$(json_field "$STATE_FILE" english_sha256 || true)"
+        if [ -n "$saved_english" ] && [ "$saved_english" != "$english_sha" ]; then
+            say_error "Английская таблица игры изменилась, а украинский файл всё ещё содержит перевод предыдущего выпуска.
+
+Обновите украинский язык в игре и полностью закройте её перед установкой нового перевода."
+            return 1
+        fi
+    fi
     if [ "$current" = "$(sha256_of "$built")" ]; then
-        say_info "Перевод уже установлен и совпадает с актуальной сборкой."
-        return 0
+        if restore_available "$target"; then
+            say_info "Перевод уже установлен и совпадает с актуальной сборкой."
+            return 0
+        fi
+        say_error "Русский файл уже находится в кеше, но у русификатора нет проверенной резервной копии для него.
+
+Файл не изменён. Чтобы создать безопасную точку восстановления, обновите украинский язык в игре, полностью закройте её и установите перевод снова."
+        return 1
     fi
 
     # Decide what counts as the pristine original.
-    local known_patched=""
-    [ -f "$STATE_FILE" ] && known_patched="$(json_field "$STATE_FILE" patched_sha256 || true)"
     if [ -n "$known_patched" ] && [ "$current" = "$known_patched" ]; then
         original="$(json_field "$STATE_FILE" original_sha256)"
         backup="${BACKUP_DIR}/${original}.${TARGET_NAME}"
@@ -868,6 +951,10 @@ do_install() {
 
     # Recheck after downloads/build/backup: the launcher may have added protection in that time.
     require_patch_preflight "$cache_root" || return 1
+    if [ "$(sha256_of "$english")" != "$english_sha" ] || [ "$(sha256_of "$target")" != "$current" ]; then
+        say_error "Языковые файлы изменились во время сборки. Ничего не записано; закройте игру и повторите установку."
+        return 1
+    fi
     if ! atomic_install "$built" "$target"; then
         say_error "Не удалось записать файл перевода. Ничего не изменено."
         return 1
@@ -885,6 +972,7 @@ do_install() {
   "schema": 1,
   "app_version": "${APP_VERSION}",
   "cache_root": "${cache_root}",
+  "english_sha256": "${english_sha}",
   "original_sha256": "${original}",
   "patched_sha256": "${final}",
   "backup_path": "${backup}"
@@ -916,30 +1004,47 @@ JSON
 }
 
 do_restore() {
-    local cache_root="$1" target original backup
+    local cache_root="$1" target original backup current saved_english current_english
     target="${cache_root}/${TARGET_NAME}"
     [ -f "$STATE_FILE" ] || { say_info "Русификатор ничего не изменял, восстанавливать нечего."; return 0; }
-    original="$(json_field "$STATE_FILE" original_sha256)"
-    backup="$(json_field "$STATE_FILE" backup_path)"
-    if [ ! -f "$backup" ] || [ "$(sha256_of "$backup")" != "$original" ]; then
-        say_error "Резервная копия повреждена или отсутствует.
-
-Переключите язык в настройках игры — клиент скачает оригинальный файл заново."
-        return 1
-    fi
-    if [ -f "$target" ] && [ "$(sha256_of "$target")" = "$original" ]; then
+    original="$(json_field "$STATE_FILE" original_sha256 || true)"
+    current="$(sha256_of "$target")"
+    if [ -n "$original" ] && [ "$current" = "$original" ]; then
         say_info "В игре уже стоит оригинальный файл."
         return 0
     fi
+    if ! restore_available "$target"; then
+        say_error "Текущий языковой файл не совпадает с переводом, установленным этим русификатором, либо его резервная копия недоступна.
+
+Возможно, клиент уже загрузил новую официальную версию. Старую копию поверх неё записывать нельзя. Проверьте состояние игры или установите перевод для текущей версии заново."
+        return 1
+    fi
+    backup="${BACKUP_DIR}/${original}.${TARGET_NAME}"
     if game_running; then
         say_error "Полностью закройте игру и лаунчер перед восстановлением оригинала."
+        return 1
+    fi
+    if [ "$(sha256_of "$target")" != "$(json_field "$STATE_FILE" patched_sha256)" ]; then
+        say_error "Языковой файл изменился во время восстановления. Ничего не записано."
         return 1
     fi
     if ! atomic_install "$backup" "$target"; then
         say_error "Не удалось восстановить оригинал."
         return 1
     fi
-    say_info "Оригинальный украинский текст восстановлен."
+    if [ "$(sha256_of "$target")" != "$original" ]; then
+        say_error "Восстановленный файл не прошёл проверку. Не запускайте игру до повторной загрузки украинского языка."
+        return 1
+    fi
+    saved_english="$(json_field "$STATE_FILE" english_sha256 || true)"
+    current_english="$(sha256_of "${cache_root}/${ENGLISH_NAME}")"
+    if [ -n "$saved_english" ] && [ "$saved_english" != "$current_english" ]; then
+        say_info "Резервная копия оригинального украинского текста восстановлена, но английская таблица игры уже обновилась.
+
+Откройте игру и заново загрузите украинский язык, чтобы оба официальных файла соответствовали одной версии."
+    else
+        say_info "Оригинальный украинский текст восстановлен."
+    fi
     return 0
 }
 
@@ -974,7 +1079,8 @@ gui_emit() {
 
 gui_status() {
     local cache_root target version client state title detail current original patched running="no"
-    local language language_label can_install="no" protection
+    local language language_label can_install="no" can_restore="no" protection
+    local saved_english tables_match="yes"
     cache_root="$(find_cache_root || true)"
     game_running && running="yes"
     language="$(preferred_language)"
@@ -1001,7 +1107,7 @@ gui_status() {
 
     select_state_file "$cache_root"
     target="${cache_root}/${TARGET_NAME}"
-    version="$(cache_version "$cache_root")"
+    version="$(cache_display_version "$cache_root")"
     case "$cache_root" in
         "${HOME}/Library/Application Support/hitzone.anima.spirit.guardians/i18n") client="Нативный Mac-клиент" ;;
         "${HOME}/Library/Containers/"*) client="Старый iOS-клиент" ;;
@@ -1014,10 +1120,21 @@ gui_status() {
         detail="Откройте игру, выберите украинский язык, дождитесь загрузки и полностью закройте игру."
     else
         current="$(sha256_of "$target")"
-        original=""; patched=""
+        original=""; patched=""; saved_english=""
         [ -f "$STATE_FILE" ] && original="$(json_field "$STATE_FILE" original_sha256 || true)"
         [ -f "$STATE_FILE" ] && patched="$(json_field "$STATE_FILE" patched_sha256 || true)"
-        if [ -n "$patched" ] && [ "$current" = "$patched" ]; then
+        [ -f "$STATE_FILE" ] && saved_english="$(json_field "$STATE_FILE" english_sha256 || true)"
+        matching_downloaded_tables "$cache_root" || tables_match="no"
+        if [ "$tables_match" = "no" ]; then
+            state="changed"
+            title="Языковые файлы разных версий"
+            detail="Заново загрузите английский и украинский языки в игре, затем полностью закройте её."
+        elif [ -n "$patched" ] && [ "$current" = "$patched" ] \
+             && [ -n "$saved_english" ] && [ "$saved_english" != "$(sha256_of "$cache_root/${ENGLISH_NAME}")" ]; then
+            state="changed"
+            title="Английская таблица обновилась"
+            detail="Перевод относится к прежнему английскому файлу. Обновите также украинский язык в игре и установите перевод заново."
+        elif [ -n "$patched" ] && [ "$current" = "$patched" ]; then
             state="russian"
             title="Русский перевод установлен"
             detail="Файл проверен и совпадает с установленной сборкой перевода."
@@ -1044,9 +1161,11 @@ gui_status() {
         title="В игре выбран не украинский язык"
         detail="Откройте игру, выберите украинский язык, дождитесь загрузки и полностью закройте игру. Иначе русский слот не будет активен."
     fi
-    if [ -f "$target" ] && { [ -z "$language" ] || [ "$language" = "8" ]; }; then
+    if [ -f "$target" ] && [ "$tables_match" = "yes" ] \
+        && { [ -z "$language" ] || [ "$language" = "8" ]; }; then
         can_install="yes"
     fi
+    restore_available "$target" && can_restore="yes"
     protection="$(protection_reason "$cache_root")" || protection="Не удалось завершить проверку файлов игры."
     if [ -n "$protection" ]; then
         state="changed"
@@ -1065,7 +1184,7 @@ gui_status() {
     gui_emit RUNNING "$running"
     gui_emit PATCHER "$APP_VERSION"
     gui_emit CAN_INSTALL "$can_install"
-    [ -f "$STATE_FILE" ] && gui_emit CAN_RESTORE "yes" || gui_emit CAN_RESTORE "no"
+    gui_emit CAN_RESTORE "$can_restore"
 }
 
 wait_until_game_closed() {
@@ -1137,12 +1256,12 @@ if [ -f "$RESUME_MARKER" ]; then
 fi
 
 COMMAND="${1:-interactive}"
+self_update "$@"
+
 if [ "$COMMAND" = "--gui-status" ]; then
     gui_status
     exit 0
 fi
-
-self_update "$@"
 
 case "$COMMAND" in
     --gui-install)
