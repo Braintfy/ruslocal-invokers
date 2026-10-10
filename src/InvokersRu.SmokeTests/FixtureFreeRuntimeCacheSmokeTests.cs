@@ -27,6 +27,7 @@ namespace InvokersRu.SmokeTests
         {
             RuntimeCacheSourceStampSmokeTests.Run(passed);
             CompatibleResolutionFailureSmokeTests.Run(passed);
+            SignedCompatibleObsoleteStateSmokeTests.Run(passed);
             string profilePath = Path.Combine(AppContext.BaseDirectory, CurrentProfileFileName);
             CurrentProfileStrictParsingCheck(profilePath);
             passed("0.60.1247 profile strict parsing, community policy, and fallback pins");
@@ -1694,7 +1695,7 @@ namespace InvokersRu.SmokeTests
             Require(response.GetProperty("schema").GetInt32() == 4
                 && response.GetProperty("patcher_version").ValueKind == JsonValueKind.String
                 && !response.GetProperty("installation_writes_enabled").GetBoolean()
-                && !response.GetProperty("mutation_root_authorized").GetBoolean()
+                && response.GetProperty("mutation_root_authorized").GetBoolean() == MutationCapability.IsTestWriteBuild
                 && response.GetProperty("status").ValueKind == JsonValueKind.String
                 && response.GetProperty("observed").ValueKind == JsonValueKind.Object
                 && response.GetProperty("observed").TryGetProperty("game_version", out _)

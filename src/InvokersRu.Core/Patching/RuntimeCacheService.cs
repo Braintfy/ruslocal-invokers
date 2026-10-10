@@ -383,6 +383,85 @@ namespace InvokersRu.Core.Patching
             return result;
         }
 
+        // This is a fresh installation, not restoration of the untrusted predecessor. Authority comes
+        // only from the current signed catalog and strict materialization of the present fixed tuple.
+        // The obsolete backup path is opaque metadata and must never be opened on this route.
+        internal static bool TryInspectSignedCompatibleWithObsoleteState(
+            string cacheRoot,
+            string statePath,
+            VerifiedSignedUpdate signedUpdate,
+            RuntimeCacheCompatibility compatibleProfile,
+            string catalogPath,
+            out RuntimeCacheInspection inspection) =>
+            TryInspectSignedCompatibleWithObsoleteState(cacheRoot, statePath, signedUpdate,
+                compatibleProfile, catalogPath, out inspection, out _);
+
+        internal static bool TryInspectSignedCompatibleWithObsoleteState(
+            string cacheRoot,
+            string statePath,
+            VerifiedSignedUpdate signedUpdate,
+            RuntimeCacheCompatibility compatibleProfile,
+            string catalogPath,
+            out RuntimeCacheInspection inspection,
+            out string problem)
+        {
+            ArgumentNullException.ThrowIfNull(signedUpdate);
+            ArgumentNullException.ThrowIfNull(compatibleProfile);
+            string root = Path.GetFullPath(cacheRoot);
+            inspection = new RuntimeCacheInspection
+            {
+                CacheRoot = root,
+                Profile = compatibleProfile,
+                Status = InstallationStatus.InconsistentState,
+                Message = "Current signed catalog has not authorized preservation of obsolete patch metadata."
+            };
+            problem = string.Empty;
+            try
+            {
+                RuntimeCacheCompatibility materialized = RequireSignedCompatibleCurrentTuple(
+                    root, statePath, signedUpdate, compatibleProfile, catalogPath);
+                (string english, string target, string stamp) = ResolveFixedPaths(root, materialized);
+                byte[] stateBytes = ReadCompatibleObsoleteState(root, target, statePath, materialized,
+                    expectedStateSha256: null, out PatchState state);
+                inspection.EnglishPath = english;
+                inspection.TargetPath = target;
+                inspection.StampPath = stamp;
+                inspection.EnglishSha256 = materialized.EnglishSha256;
+                inspection.BaseSha256 = materialized.BaseSha256;
+                inspection.StampSha256 = materialized.StampSha256;
+                inspection.StampValue = materialized.StampValue;
+                inspection.EnglishContentVersion = materialized.EnglishContentVersion;
+                inspection.BaseContentVersion = materialized.BaseContentVersion;
+                inspection.EnglishFormatVersion = 4;
+                inspection.BaseFormatVersion = 4;
+                inspection.EnglishContentGuid = materialized.ContentGuid;
+                inspection.BaseContentGuid = materialized.ContentGuid;
+                inspection.EnglishLocaleId = materialized.EnglishLocaleId;
+                inspection.BaseLocaleId = materialized.BaseLocaleId;
+                inspection.EnglishLocaleRevision = materialized.EnglishLocaleRevision;
+                inspection.BaseLocaleRevision = materialized.BaseLocaleRevision;
+                inspection.EnglishReleaseRevision = materialized.EnglishReleaseRevision;
+                inspection.BaseReleaseRevision = materialized.BaseReleaseRevision;
+                inspection.EntryCount = materialized.EntryCount;
+                inspection.OrderedKeysetSha256 = materialized.OrderedKeysetSha256;
+                inspection.State = state;
+                inspection.Status = InstallationStatus.PatchSupersededByOfficialUpdate;
+                inspection.Message = "The current language files can be translated with the signed catalog; obsolete patch metadata will be preserved and a fresh current backup created. The old backup will not be used.";
+                inspection.SignedCompatibleStaleStateSha256 = Hashing.Sha256Bytes(stateBytes);
+                inspection.SignedCompatibleStaleSignedUpdate = signedUpdate;
+                inspection.SignedCompatibleStaleCatalogPath = Path.GetFullPath(catalogPath);
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                or InvalidDataException or InvalidOperationException or Loc1FormatException or JsonException
+                or DecoderFallbackException or ArgumentException)
+            {
+                problem = exception.Message.Length <= 512 ? exception.Message : exception.Message.Substring(0, 512);
+                inspection.Message = $"The current signed compatible tuple cannot safely preserve obsolete patch metadata: {problem}";
+                return false;
+            }
+        }
+
         internal static PatchApplyResult Apply(RuntimeCacheInspection inspection, string translationsPath, string statePath)
         {
             MutationPolicy.RequireEnabled();
@@ -395,6 +474,12 @@ namespace InvokersRu.Core.Patching
             MutationPolicy.RequireRuntimeBinding(cacheRoot, statePath);
             bool supersededByOfficialUpdate = inspection.Status == InstallationStatus.PatchSupersededByOfficialUpdate;
             bool supersededByCatalogUpdate = inspection.Status == InstallationStatus.PatchSupersededByCatalogUpdate;
+            bool signedCompatibleObsolete = inspection.SignedCompatibleStaleStateSha256 != null;
+            if (signedCompatibleObsolete && (!supersededByOfficialUpdate
+                || inspection.OfficialOriginalStaleStateSha256 != null
+                || inspection.SnapshotlessStateSha256 != null
+                || inspection.OfficialUpdatePredecessor != null))
+                throw new InvalidDataException("Signed compatible obsolete-state inspection has conflicting transition authority.");
             if (inspection.Status != InstallationStatus.CompatibleOriginal
                 && !supersededByOfficialUpdate
                 && !supersededByCatalogUpdate)
@@ -422,7 +507,7 @@ namespace InvokersRu.Core.Patching
                 throw new InvalidOperationException("An interrupted transaction requires recovery before runtime-cache apply.");
             }
             PatchState? supersededCatalogState = null;
-            if (supersededByOfficialUpdate)
+            if (supersededByOfficialUpdate && !signedCompatibleObsolete)
             {
                 MutationTestHooks.InvokeBeforeSupersededStateArchive(statePath);
                 if (inspection.OfficialOriginalStaleStateSha256 != null)
@@ -456,7 +541,7 @@ namespace InvokersRu.Core.Patching
                     statePath,
                     profile);
             }
-            else if (File.Exists(statePath))
+            else if (!signedCompatibleObsolete && File.Exists(statePath))
             {
                 throw new InvalidOperationException("Runtime-cache patch state appeared after inspection; refusing to overwrite it.");
             }
@@ -549,6 +634,18 @@ namespace InvokersRu.Core.Patching
             string tempPath = Path.Combine(targetDirectory, $".{TargetFileName}.invokersru-{Guid.NewGuid():N}.tmp");
             string stateRoot = Path.GetDirectoryName(Path.GetFullPath(statePath)) ?? PatchPlanner.DefaultStateRoot();
             string backupPath = Path.Combine(stateRoot, "backups", SafeProfileId(profile.Id), $"{profile.BaseSha256}.{TargetFileName}");
+            if (signedCompatibleObsolete)
+            {
+                if (inspection.SignedCompatibleStaleCatalogPath == null
+                    || !PathEquals(translationsPath, inspection.SignedCompatibleStaleCatalogPath))
+                    throw new InvalidDataException("Signed compatible catalog path changed after inspection.");
+                ArchiveSignedCompatibleStaleStateUnderLock(
+                    cacheRoot, targetPath, statePath, profile,
+                    inspection.SignedCompatibleStaleStateSha256!,
+                    inspection.SignedCompatibleStaleSignedUpdate
+                        ?? throw new InvalidDataException("Signed compatible catalog authority was lost before archival."),
+                    translationsPath, backupPath);
+            }
             string sourcePreimageHash = supersededCatalogState?.PatchedSha256 ?? profile.BaseSha256;
             string operation = supersededCatalogState == null ? "runtime-cache-apply" : "runtime-cache-upgrade";
             var journal = NewJournal(operation, profile, cacheRoot, targetPath, backupPath,
@@ -1168,6 +1265,132 @@ namespace InvokersRu.Core.Patching
                 throw new InvalidDataException("Current runtime-cache profile does not exactly match the signed official tuple and output pins.");
             (Loc1Document englishDocument, Loc1Document baseDocument) = VerifyExactTuple(cacheRoot, signedExact);
             return (observed, englishDocument, baseDocument);
+        }
+
+        private static RuntimeCacheCompatibility RequireSignedCompatibleCurrentTuple(
+            string cacheRoot,
+            string statePath,
+            VerifiedSignedUpdate signedUpdate,
+            RuntimeCacheCompatibility compatibleProfile,
+            string catalogPath)
+        {
+            compatibleProfile.Validate();
+            if (!MutationPolicy.IsTestWriteBuild && !PathEquals(cacheRoot, DefaultCacheRoot()))
+                throw new InvalidDataException("Compatible obsolete-state root is not the fixed game cache.");
+            MutationPolicy.RequireRuntimeStatePath(statePath);
+            if (compatibleProfile.Mode != CompatibleRevisionProfileBuilder.Mode
+                || !compatibleProfile.Certified || compatibleProfile.Readiness != "ready"
+                || compatibleProfile.ExpectedAppliedTranslations < 1
+                || compatibleProfile.ExpectedOutputSha256 == null)
+                throw new InvalidDataException("Current compatible profile has no nonempty certified materialization.");
+            if (signedUpdate.IsExpired || !signedUpdate.CanDownloadRemoteArtifactAt(DateTimeOffset.UtcNow)
+                || signedUpdate.Manifest.RevokedReleaseIds.Contains(signedUpdate.Manifest.ReleaseId, StringComparer.Ordinal))
+                throw new InvalidDataException("Current signed catalog is expired, revoked, or requires a newer patcher.");
+            string policy = signedUpdate.Manifest.Catalog.TranslationPolicy switch
+            {
+                "release-approved-v1" => "release-approved",
+                "validated-preview-v1" => "community-preview-all-drafts",
+                _ => throw new InvalidDataException("Current signed catalog policy is unsupported.")
+            };
+            if (!Hashing.FixedEqualsHex(compatibleProfile.TranslationCatalogSha256!,
+                    signedUpdate.Manifest.Catalog.UncompressedSha256)
+                || !string.Equals(compatibleProfile.TranslationPolicy, policy, StringComparison.Ordinal))
+                throw new InvalidDataException("Current compatible catalog hash or policy differs from signed authority.");
+            (string english, string target, string stamp) = ResolveFixedPaths(cacheRoot, compatibleProfile);
+            foreach (string path in new[] { statePath, english, target, stamp, catalogPath })
+                PatchService.RejectExistingReparseComponents(path, "signed compatible obsolete-state source");
+            if (PatchJournalStore.FindActive(statePath) != null)
+                throw new InvalidDataException("An active runtime-cache journal requires recovery before a fresh compatible installation.");
+
+            byte[] catalogBytes = BoundedArtifactReader.ReadCatalog(catalogPath,
+                signedUpdate.Manifest.Catalog.UncompressedSha256, "current signed compatible catalog");
+            // A current signed catalog may be used on a future canonical raw LOC1 family, but only
+            // through the same complete structural checks and exact per-row source+hint matching.
+            // This authority is not inherited by cached historical catalogs or last-known-good data.
+            CompatibleRevisionProfileBuild rebuilt = CompatibleRevisionProfileBuilder.Build(
+                english, target, stamp, compatibleProfile.ContentGuid, catalogBytes,
+                signedUpdate.Manifest.Catalog.UncompressedSha256, policy);
+            if (!string.Equals(JsonSerializer.Serialize(rebuilt.Profile),
+                    JsonSerializer.Serialize(compatibleProfile), StringComparison.Ordinal))
+                throw new InvalidDataException("Current compatible source, output, composition or profile pins changed after materialization.");
+            return rebuilt.Profile;
+        }
+
+        private static byte[] ReadCompatibleObsoleteState(
+            string cacheRoot,
+            string targetPath,
+            string statePath,
+            RuntimeCacheCompatibility currentProfile,
+            string? expectedStateSha256,
+            out PatchState state)
+        {
+            PatchService.RejectExistingReparseComponents(statePath, "compatible obsolete-state metadata");
+            byte[] bytes = BoundedArtifactReader.ReadFile(statePath, 64 * 1024, "compatible obsolete-state metadata");
+            string actualStateSha256 = Hashing.Sha256Bytes(bytes);
+            if (expectedStateSha256 != null && !Hashing.FixedEqualsHex(actualStateSha256, expectedStateSha256))
+                throw new InvalidDataException("Obsolete compatible patch metadata changed after inspection.");
+            state = ParseObsoleteState(bytes);
+            if (state.BuildId == null || state.GameRoot == null || state.TargetPath == null
+                || state.BackupPath == null || state.OriginalSha256 == null || state.PatchedSha256 == null
+                || state.TranslationsSha256 == null)
+                throw new InvalidDataException("Obsolete compatible patch metadata has null identity fields.");
+            RequireObsoleteStateIdentity(cacheRoot, targetPath, currentProfile, state);
+            return bytes;
+        }
+
+        private static void ArchiveSignedCompatibleStaleStateUnderLock(
+            string cacheRoot,
+            string targetPath,
+            string statePath,
+            RuntimeCacheCompatibility currentProfile,
+            string expectedStateSha256,
+            VerifiedSignedUpdate signedUpdate,
+            string catalogPath,
+            string backupPath)
+        {
+            RequireSignedCompatibleCurrentTuple(cacheRoot, statePath, signedUpdate, currentProfile, catalogPath);
+            ReadCompatibleObsoleteState(cacheRoot, targetPath, statePath, currentProfile,
+                expectedStateSha256, out _);
+            string expectedBackup = ExpectedBackupPath(statePath, currentProfile);
+            if (!PathEquals(expectedBackup, backupPath))
+                throw new InvalidDataException("Fresh compatible backup is not the current content-addressed path.");
+
+            // Do not retire old metadata before the current source has a durable verified backup.
+            // None of these paths comes from the obsolete BackupPath, which remains completely opaque.
+            (string english, _, string stamp) = ResolveFixedPaths(cacheRoot, currentProfile);
+            PatchService.EnsureVerifiedBoundedBackup(targetPath, backupPath, currentProfile.BaseSha256,
+                BoundedArtifactReader.MaximumRuntimeLoc1Bytes, "fresh compatible Ukrainian base");
+            EnsureCompatibleSourceSnapshots(currentProfile, english, stamp, backupPath);
+            VerifyExactImmutableBackup(backupPath, currentProfile.BaseSha256, "fresh compatible Ukrainian backup");
+            MutationTestHooks.InvokeBeforeSupersededStateArchive(statePath);
+
+            // Revalidate under the execution lock after backup creation and immediately before archival.
+            RequireSignedCompatibleCurrentTuple(cacheRoot, statePath, signedUpdate, currentProfile, catalogPath);
+            byte[] stateBytes = ReadCompatibleObsoleteState(cacheRoot, targetPath, statePath, currentProfile,
+                expectedStateSha256, out _);
+            VerifyCompatibleSourceSnapshots(currentProfile, backupPath);
+            string stateRoot = Path.GetDirectoryName(Path.GetFullPath(statePath))
+                ?? throw new InvalidDataException("Compatible state has no parent directory.");
+            string historyRoot = Path.Combine(stateRoot, "history", "obsolete-official");
+            PatchService.RejectExistingReparseComponents(historyRoot, "compatible obsolete-state history");
+            Directory.CreateDirectory(historyRoot);
+            PatchService.RejectExistingReparseComponents(historyRoot, "compatible obsolete-state history");
+            string name = $"{expectedStateSha256}-{Guid.NewGuid():N}";
+            string capturePath = Path.Combine(historyRoot, name + ".capture");
+            string historyPath = Path.Combine(historyRoot, name + ".json");
+            // Preserve the inspected bytes before retiring the path. If an unrelated writer races the
+            // final rename, both the original capture and the raced file survive for diagnosis.
+            PatchService.WriteDurably(capturePath, stateBytes);
+            if (!Hashing.FixedEqualsHex(BoundedArtifactReader.Sha256File(capturePath, 64 * 1024,
+                    "captured compatible obsolete state"), expectedStateSha256))
+                throw new IOException("Durable compatible obsolete-state capture changed.");
+            ReadCompatibleObsoleteState(cacheRoot, targetPath, statePath, currentProfile,
+                expectedStateSha256, out _);
+            File.Move(statePath, historyPath);
+            PatchService.RejectExistingReparseComponents(historyPath, "archived compatible obsolete state");
+            if (!Hashing.FixedEqualsHex(BoundedArtifactReader.Sha256File(historyPath, 64 * 1024,
+                    "archived compatible obsolete state"), expectedStateSha256))
+                throw new IOException("Archived compatible obsolete state differs from the captured bytes.");
         }
 
         private static PatchState ParseObsoleteState(byte[] stateBytes)

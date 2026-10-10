@@ -1,5 +1,12 @@
 # Changelog
 
+## Windows 3.1.15 Preview — 2026-10-10
+
+- Added automatic fresh installation preparation when a game update leaves obsolete patch metadata behind. A current authenticated catalog is rematerialized against the supported EN/UK/stamp tuple; obsolete metadata is preserved byte-for-byte, and a new verified backup of the current target is prepared before archival. Old backup paths are not followed and old backups are never restored over new game files.
+- Compatible raw LOC1 revisions use exact ID/source/hint matching rather than requiring a published profile for every player's hashes. Supported structural families can use the current signed catalog, including partial coverage; unknown texts remain English. Unsupported formats, mismatched corpora, active operations and unsafe paths remain refusals.
+- Kept authenticated installed/restore paths independent of fresh-install preparation. A currently recorded original or patched target, malformed state, expired authority, altered tuple or catalog cannot be silently rebound as a new original.
+- Clarified the update action in the Windows interface. Translation data 14 and its historical variants remain unchanged; application update delivery uses the existing channel and download links.
+
 ## Windows 3.1.14 Preview / translation data 14 — 2026-10-10
 
 - Updated the catalog for EN/UK `Prod_0.61.2_10`: 316 new strings and 46 changed English source bindings (43 Russian text changes). The other 42,405 records, including the seven compact equipment stat labels, are unchanged. Composition applies 42,767 Russian rows, retains two purchase-service English fallbacks and 220 empty entries; zero validation errors.

@@ -343,6 +343,9 @@ namespace InvokersRu.Core.Patching
         internal string? SnapshotlessStateSha256 { get; set; }
         internal string? OfficialOriginalStaleStateSha256 { get; set; }
         internal VerifiedSignedUpdate? OfficialOriginalStaleSignedUpdate { get; set; }
+        internal string? SignedCompatibleStaleStateSha256 { get; set; }
+        internal VerifiedSignedUpdate? SignedCompatibleStaleSignedUpdate { get; set; }
+        internal string? SignedCompatibleStaleCatalogPath { get; set; }
         public PatchState? State { get; set; }
         public PatchJournal? Journal { get; set; }
     }

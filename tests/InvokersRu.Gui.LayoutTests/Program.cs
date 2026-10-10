@@ -122,7 +122,7 @@ internal static class Program
         object plan = Activator.CreateInstance(planType)!;
         MainFormType.GetField("_lastPlan", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(form, plan);
         Set(plan, "Status", "UnknownBuild");
-        Set(plan, "PatcherVersion", "3.1.14");
+        Set(plan, "PatcherVersion", "3.1.15");
         Set(plan, "PlanAction", "REFUSE_UNKNOWN_OR_INCONSISTENT");
         Set(plan, "UpdateProblemBlocksApply", true);
         object protection = planType.GetProperty("ProtectionCheck")!.GetValue(plan)!;
@@ -171,6 +171,15 @@ internal static class Program
             && Field<Label>(form, "_stateLabel").Text.Contains("На английском: 2")
             && Field<Button>(form, "_applyButton").Enabled,
             "Verified partial translation must display both matched rows and English fallback and permit Apply.");
+
+        Set(plan, "Status", "PatchSupersededByOfficialUpdate");
+        Set(plan, "PlanAction", "READY_TO_REAPPLY_AFTER_GAME_UPDATE");
+        Invoke(form, "RenderPlan", plan);
+        Require(Field<Label>(form, "_statusBadge").Text == "Можно обновить перевод"
+            && Field<Label>(form, "_noticeLabel").Text.Contains("новую резервную копию")
+            && !Field<Label>(form, "_noticeLabel").Text.Contains("отправьте автору")
+            && Field<Button>(form, "_applyButton").Enabled,
+            "Prepared obsolete-state refresh must explain automatic preservation and permit updating, not ask for files.");
     }
 
     private static void AssertUnavailableProfileAndRootRendering()

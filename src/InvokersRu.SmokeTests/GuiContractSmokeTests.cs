@@ -287,6 +287,59 @@ namespace InvokersRu.SmokeTests
             compatibleRemote["channel_authority"] = ChannelAuthority(CurrentRemoteUpdateObject());
             Require(Parse(compatibleRemote, 0).CanApply,
                 "A signed compatible catalog was incorrectly required to share its provenance with channel authority.");
+
+            JsonObject opaqueOfficialRefresh = Clone(compatibleRemote);
+            opaqueOfficialRefresh["patcher_version"] = "3.1.15";
+            opaqueOfficialRefresh["status"] = "PatchSupersededByOfficialUpdate";
+            opaqueOfficialRefresh["message"] = "Current signed catalogue permits a fresh compatible installation; old metadata will be archived, not restored.";
+            opaqueOfficialRefresh["observed"]!["game_version"] = "0.61.1506:1123186";
+            opaqueOfficialRefresh["observed"]!["english_content"] = "Prod_0.61.2_10";
+            opaqueOfficialRefresh["observed"]!["base_content"] = "Prod_0.61.2_8";
+            opaqueOfficialRefresh["observed"]!["english_content_guid"] = "0.61.2";
+            opaqueOfficialRefresh["observed"]!["base_content_guid"] = "0.61.2";
+            opaqueOfficialRefresh["observed"]!["english_release_revision"] = 10;
+            opaqueOfficialRefresh["observed"]!["base_release_revision"] = 8;
+            opaqueOfficialRefresh["observed"]!["entry_count"] = 42_989;
+            JsonObject opaqueProfile = Profile(opaqueOfficialRefresh);
+            opaqueProfile["id"] = "runtime-cache-compatible-" + new string('D', 32);
+            opaqueProfile["game_version"] = "0.61.1506:1123186";
+            opaqueProfile["english_content"] = "Prod_0.61.2_10";
+            opaqueProfile["base_content"] = "Prod_0.61.2_8";
+            opaqueProfile["content_guid"] = "0.61.2";
+            opaqueProfile["english_release_revision"] = 10;
+            opaqueProfile["base_release_revision"] = 8;
+            opaqueProfile["expected_output_sha256"] = new string('D', 64);
+            opaqueProfile["entry_count"] = 42_989;
+            opaqueProfile["applied_translations"] = 42_767;
+            opaqueProfile["english_fallbacks"] = 2;
+            opaqueProfile["base_fallbacks"] = 220;
+            opaqueOfficialRefresh["state"] = StateObject();
+            opaqueOfficialRefresh["state"]!["build_id"] = "runtime-cache-win64-0.60.1289-prod97";
+            opaqueOfficialRefresh["state"]!["applied_translations"] = 41_040;
+            opaqueOfficialRefresh["state"]!["original_sha256"] = new string('E', 64);
+            opaqueOfficialRefresh["state"]!["translations_sha256"] = new string('F', 64);
+            foreach (string field in new[] { "update", "channel_authority" })
+            {
+                opaqueOfficialRefresh[field]!["minimum_patcher_version"] = "3.1.14";
+                opaqueOfficialRefresh[field]!["latest_patcher_version"] = "3.1.15";
+            }
+            opaqueOfficialRefresh["diagnostic"] = new JsonObject
+            {
+                ["kind"] = "translation-data", ["component"] = "official-base-refresh",
+                ["current"] = HashC, ["expected"] = HashB
+            };
+            opaqueOfficialRefresh["plan"] = "READY_TO_REAPPLY_AFTER_GAME_UPDATE";
+            CliPlanResult archivedCompatible = Parse(opaqueOfficialRefresh, 0);
+            Require(archivedCompatible.CanApply && !archivedCompatible.CanRestore && !archivedCompatible.CanRecover
+                && !archivedCompatible.RestoreRecoveryAuthorized
+                && archivedCompatible.Profile.Mode == "compatible-revision"
+                && archivedCompatible.State?.BuildId == "runtime-cache-win64-0.60.1289-prod97"
+                && archivedCompatible.Diagnostic.Component == "official-base-refresh",
+                "Current signed compatible refresh rejected opaque foreign-family old state or mistakenly made it restorable.");
+            JsonObject forgedOpaqueRestore = Clone(opaqueOfficialRefresh);
+            forgedOpaqueRestore["can_restore"] = true;
+            ExpectInvalid(forgedOpaqueRestore, 0, "opaque obsolete state incorrectly authorizing restoration");
+
             JsonObject forgedCatalogProvenance = Clone(compatibleRemote);
             Catalog(forgedCatalogProvenance)["source"] = "Remote";
             forgedCatalogProvenance["update"]!["source"] = "CachedCurrent";

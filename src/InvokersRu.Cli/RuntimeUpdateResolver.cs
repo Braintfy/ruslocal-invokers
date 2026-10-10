@@ -907,7 +907,7 @@ namespace InvokersRu.Cli
             };
         }
 
-        private static RuntimeUpdateResolution? TryResolveCompatibleRevision(
+        internal static RuntimeUpdateResolution? TryResolveCompatibleRevision(
             string cacheRoot,
             string statePath,
             RuntimeCacheCompatibility embeddedProfile,
@@ -923,7 +923,7 @@ namespace InvokersRu.Cli
                 remoteProblemBlocksApply, out _);
         }
 
-        private static RuntimeUpdateResolution? TryResolveCompatibleRevision(
+        internal static RuntimeUpdateResolution? TryResolveCompatibleRevision(
             string cacheRoot,
             string statePath,
             RuntimeCacheCompatibility embeddedProfile,
@@ -990,7 +990,9 @@ namespace InvokersRu.Cli
                     embeddedCatalogPath,
                     coordinator,
                     bundle,
-                    observedContentGuid);
+                    observedContentGuid,
+                    channelAuthority,
+                    remoteProblemBlocksApply);
                 if (catalogs.Count == 0)
                 {
                     failure = new RuntimeCompatibilityFailure("signed-profile-unavailable", stage,
@@ -1273,7 +1275,17 @@ namespace InvokersRu.Cli
                             InstalledInspection = installedInspection,
                             Source = installed.Value.Catalog.Source
                         }, failure);
-                    return null;
+                    return WithCompatibilityFailure(new RuntimeUpdateResolution
+                    {
+                        Profile = selectedProfile,
+                        Inspection = RuntimeCacheService.Inspect(root, selectedProfile, statePath),
+                        CatalogPath = selected.Value.Catalog.Path,
+                        Bundle = selected.Value.Catalog.Bundle,
+                        ChannelAuthority = channelAuthority,
+                        Source = selected.Value.Catalog.Source,
+                        RemoteProblem = remoteProblem,
+                        RemoteProblemBlocksApply = remoteProblemBlocksApply
+                    }, failure);
                 }
                 if (installedExact != null)
                 {
@@ -1353,6 +1365,26 @@ namespace InvokersRu.Cli
                     && RuntimeCacheService.TryInspectSnapshotlessLegacyOfficialUpdate(
                         root, statePath, selectedProfile, out RuntimeCacheInspection legacyOfficialUpdate))
                     selectedInspection = legacyOfficialUpdate;
+                string? obsoleteStateProblem = null;
+                SignedUpdateBundle? selectedBundle = selected.Value.Catalog.Bundle;
+                if (installed == null && state != null && journal == null
+                    && selectedInspection.Status == InstallationStatus.InconsistentState
+                    && selectedBundle != null
+                    && selectedBundle.Source != SignedUpdateBundleSource.LastKnownGood
+                    && channelAuthority != null
+                    && Hashing.FixedEqualsHex(selectedBundle.Update.PayloadSha256, channelAuthority.PayloadSha256)
+                    && !selectedBundle.Update.IsExpiredAt(DateTimeOffset.UtcNow)
+                    && channelAuthority.PatcherDisposition != SignedUpdatePatcherDisposition.TooOld
+                    && !remoteProblemBlocksApply)
+                {
+                    if (RuntimeCacheService.TryInspectSignedCompatibleWithObsoleteState(
+                        root, statePath, selectedBundle.Update, selectedProfile,
+                        selected.Value.Catalog.Path, out RuntimeCacheInspection signedCompatibleWithObsoleteState,
+                        out string preservationProblem))
+                        selectedInspection = signedCompatibleWithObsoleteState;
+                    else
+                        obsoleteStateProblem = preservationProblem;
+                }
                 if (installed != null && translationUpdate
                     && selectedInspection.Status != InstallationStatus.PatchSupersededByCatalogUpdate)
                     return null;
@@ -1361,9 +1393,20 @@ namespace InvokersRu.Cli
                         or InstallationStatus.PatchSupersededByOfficialUpdate))
                 {
                     failure = new RuntimeCompatibilityFailure("runtime-state-untrusted", "authenticate-state",
-                        BoundFailureMessage("Текущие файлы языка подходят для частичного перевода, но запись прежней установки или её резервная копия не подтверждена. " + selectedInspection.Message),
+                        BoundFailureMessage("Текущие файлы языка подходят для частичного перевода, но запись прежней установки или её резервная копия не подтверждена. "
+                            + (obsoleteStateProblem ?? selectedInspection.Message)),
                         true, selected.Value.Build.Composition);
-                    return null;
+                    return WithCompatibilityFailure(new RuntimeUpdateResolution
+                    {
+                        Profile = selectedProfile,
+                        Inspection = selectedInspection,
+                        CatalogPath = selected.Value.Catalog.Path,
+                        Bundle = selected.Value.Catalog.Bundle,
+                        ChannelAuthority = channelAuthority,
+                        Source = selected.Value.Catalog.Source,
+                        RemoteProblem = remoteProblem,
+                        RemoteProblemBlocksApply = remoteProblemBlocksApply
+                    }, failure);
                 }
                 if (installed != null && !translationUpdate
                     && selectedInspection.Status != InstallationStatus.PatchedByThisTool)
@@ -1755,14 +1798,27 @@ namespace InvokersRu.Cli
             string embeddedCatalogPath,
             SignedUpdateCoordinator? coordinator,
             SignedUpdateBundle? bundle,
-            string observedContentGuid)
+            string observedContentGuid,
+            VerifiedSignedUpdate? channelAuthority = null,
+            bool remoteProblemBlocksApply = false)
         {
             var result = new List<CompatibleCatalogCandidate>();
             if (bundle != null
-                && SignedUpdateRuntimeProfileAdapter.AuthorizesContentFamily(
-                    bundle.Update.Manifest,
-                    observedContentGuid))
+                && (SignedUpdateRuntimeProfileAdapter.AuthorizesContentFamily(
+                        bundle.Update.Manifest,
+                        observedContentGuid)
+                    || (Loc1ContentFamily.IsCanonical(observedContentGuid)
+                        && bundle.Source != SignedUpdateBundleSource.LastKnownGood
+                        && channelAuthority != null
+                        && Hashing.FixedEqualsHex(bundle.Update.PayloadSha256, channelAuthority.PayloadSha256)
+                        && !bundle.Update.IsExpiredAt(DateTimeOffset.UtcNow)
+                        && channelAuthority.PatcherDisposition != SignedUpdatePatcherDisposition.TooOld
+                        && !remoteProblemBlocksApply)))
             {
+                // Only the current authenticated catalogue may materialize a previously unseen
+                // canonical family. The builder still requires raw schema-4 EN/UK with identical
+                // family and ordered keys, and every applied row must match source AND hint hashes.
+                // Historical/LKG/embedded catalogues keep their literal family authority unchanged.
                 AddCatalogCandidate(result, new CompatibleCatalogCandidate(
                     bundle.CatalogPath,
                     bundle.Update.Manifest.Catalog.UncompressedSha256,
