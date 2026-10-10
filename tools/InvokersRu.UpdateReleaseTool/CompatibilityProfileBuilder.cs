@@ -252,7 +252,7 @@ namespace InvokersRu.UpdateReleaseTool
 
             string expectedValidation = release ? "release" : "preview";
             string translationPolicy = release ? "release-approved-v1" : "validated-preview-v1";
-            if (release && catalog.Records.Any(record => !string.Equals(record.Status, "approved", StringComparison.OrdinalIgnoreCase)))
+            if (release && catalog.AllRecords.Any(record => !string.Equals(record.Status, "approved", StringComparison.OrdinalIgnoreCase)))
             {
                 throw new InvalidDataException("Release compatibility requires the same all-approved catalog enforced by release-approved-v1.");
             }

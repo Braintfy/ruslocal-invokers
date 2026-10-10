@@ -67,12 +67,18 @@ internal sealed class CliPlanResult
     {
         "none", "source-hint-coverage", "catalog-sha256", "english-source", "ukrainian-base",
         "version-stamp", "official-base-refresh", "loc1-schema", "content-guid", "locale-slot",
-        "ordered-keyset", "missing-files", "signed-profile-unavailable", "patch-state", "journal", "journal-authentication"
+        "ordered-keyset", "missing-files", "signed-profile-unavailable", "patch-state", "journal", "journal-authentication",
+        "runtime-state-unreadable", "runtime-backup-unavailable", "runtime-state-untrusted",
+        "runtime-input-access-denied", "runtime-input-unavailable", "runtime-container-unsupported",
+        "runtime-structure-incompatible", "catalog-no-current-matches"
     };
 
     private static readonly HashSet<string> KnownLocalProblems = new(StringComparer.Ordinal)
     {
-        "journal-authentication", "runtime-cache-input", "signed-profile-unavailable"
+        "journal-authentication", "runtime-cache-input", "signed-profile-unavailable",
+        "runtime-state-unreadable", "runtime-backup-unavailable", "runtime-state-untrusted",
+        "runtime-input-access-denied", "runtime-input-unavailable", "runtime-container-unsupported",
+        "runtime-structure-incompatible", "catalog-no-current-matches"
     };
 
     private static readonly HashSet<string> KnownJournalPhases = new(StringComparer.Ordinal)
@@ -142,6 +148,9 @@ internal sealed class CliPlanResult
     [JsonPropertyName("local_problem")]
     [JsonRequired]
     public string? LocalProblem { get; set; }
+
+    [JsonPropertyName("compatibility_failure")]
+    public CompatibilityFailureInfo? CompatibilityFailure { get; set; }
 
     [JsonPropertyName("update")]
     [JsonRequired]
@@ -340,6 +349,22 @@ internal sealed class CliPlanResult
         ValidateCatalog(catalog, profile);
         Require(LocalProblem == null || KnownLocalProblems.Contains(LocalProblem),
             "неизвестная локальная причина отказа");
+        if (CompatibilityFailure is { } failure)
+        {
+            Require(KnownLocalProblems.Contains(failure.Code) && failure.Code == LocalProblem
+                && !CanApply && UpdateProblemBlocksApply && !TranslationUpdateAvailable,
+                "причина отказа частичного перевода противоречит разрешению установки");
+            Require(failure.Stage is "read-input" or "read-state" or "authenticate-backup" or "read-original"
+                or "authorize-family" or "materialize" or "authenticate-journal" or "authenticate-installed"
+                or "authenticate-predecessor" or "authenticate-state" or "match-records",
+                "неизвестный этап подготовки частичного перевода");
+            Require(!string.IsNullOrWhiteSpace(failure.Message) && failure.Message.Length <= 4096,
+                "неверное сообщение отказа частичного перевода");
+            int?[] counts = { failure.AppliedTranslations, failure.EnglishFallbacks, failure.BaseFallbacks,
+                failure.StaleSourceRecords, failure.StaleHintRecords, failure.RejectedRecords };
+            Require(counts.All(count => count == null) || counts.All(count => count is >= 0 and <= 100000),
+                "неполные или неверные счётчики частичного перевода");
+        }
         Require(LocalProblem != "journal-authentication"
                 || Status == "InconsistentState" && Journal == null && !RestoreRecoveryAuthorized,
             "причина аутентификации журнала противоречит состоянию установки");
@@ -348,7 +373,8 @@ internal sealed class CliPlanResult
                     && !TranslationUpdateAvailable,
             "ошибка чтения языковых файлов не может разрешать установку перевода");
         Require(LocalProblem != "signed-profile-unavailable"
-                || Status == "UnknownBuild" && !CanApply && !TranslationUpdateAvailable
+                || (Status == "UnknownBuild" || CompatibilityFailure != null && Status is "PatchedByThisTool" or "RecoveryRequired")
+                    && !CanApply && !TranslationUpdateAvailable
                     && Observed.EnglishSha256 != null && Observed.BaseSha256 != null
                     && Observed.StampSha256 != null,
             "отсутствие подписанного профиля противоречит наблюдаемым языковым файлам");
@@ -482,7 +508,8 @@ internal sealed class CliPlanResult
             "неизвестный тип или компонент диагностики");
         Require(diagnostic.Current == null || diagnostic.Current.Length is > 0 and <= 1024,
             "некорректное текущее значение диагностики");
-        Require(diagnostic.Expected == null || diagnostic.Expected.Length is > 0 and <= 1024,
+        Require(diagnostic.Expected == null || diagnostic.Expected.Length > 0
+                && diagnostic.Expected.Length <= (CompatibilityFailure == null ? 1024 : 4096),
             "некорректное ожидаемое значение диагностики");
         RuntimePlanDiagnostic canonical = DeriveCanonicalDiagnostic(observed, catalog, profile);
         Require(string.Equals(diagnostic.Kind, canonical.Kind, StringComparison.Ordinal)
@@ -499,6 +526,13 @@ internal sealed class CliPlanResult
     {
         static RuntimePlanDiagnostic Value(string kind, string component, string? current, string? expected) =>
             new() { Kind = kind, Component = component, Current = current, Expected = expected };
+
+        if (CompatibilityFailure is { } failure)
+            return Value(failure.Code is "runtime-state-unreadable" or "runtime-backup-unavailable"
+                or "runtime-state-untrusted" or "journal-authentication" ? "local-state"
+                : failure.Code is "signed-profile-unavailable" or "catalog-no-current-matches"
+                    ? "translation-data" : "structural-boundary",
+                failure.Code, failure.Stage, failure.Message);
 
         if (LocalProblem == "signed-profile-unavailable")
             return Value("translation-data", "signed-profile-unavailable",
@@ -950,6 +984,31 @@ internal sealed class CliPlanResult
     {
         return new InvalidDataException($"Проверяющий модуль вернул противоречивый ответ: {problem}.");
     }
+}
+
+internal sealed class CompatibilityFailureInfo
+{
+    [JsonPropertyName("code")]
+    [JsonRequired]
+    public string Code { get; set; } = string.Empty;
+    [JsonPropertyName("stage")]
+    [JsonRequired]
+    public string Stage { get; set; } = string.Empty;
+    [JsonPropertyName("message")]
+    [JsonRequired]
+    public string Message { get; set; } = string.Empty;
+    [JsonPropertyName("applied_translations")]
+    public int? AppliedTranslations { get; set; }
+    [JsonPropertyName("english_fallbacks")]
+    public int? EnglishFallbacks { get; set; }
+    [JsonPropertyName("base_fallbacks")]
+    public int? BaseFallbacks { get; set; }
+    [JsonPropertyName("stale_source_records")]
+    public int? StaleSourceRecords { get; set; }
+    [JsonPropertyName("stale_hint_records")]
+    public int? StaleHintRecords { get; set; }
+    [JsonPropertyName("rejected_records")]
+    public int? RejectedRecords { get; set; }
 }
 
 internal sealed class ProtectionCheckInfo

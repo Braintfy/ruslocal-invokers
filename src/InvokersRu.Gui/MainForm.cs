@@ -838,9 +838,7 @@ internal sealed class MainForm : Form
             _noticeLabel.Text = next;
             _noticeLabel.ForeColor = Theme.Text;
         }
-        string coverage = $"Доступно русских строк: {plan.Profile.AppliedTranslations:N0}.";
-        if (plan.Profile.EnglishFallbacks > 0)
-            coverage += $" Пока на английском: {plan.Profile.EnglishFallbacks:N0}.";
+        string coverage = FriendlyCoverage(plan);
 
         if (plan.ProtectionCheck.BlocksApply && plan.Status != "MissingFiles")
             Show("Установка приостановлена", plan.ProtectionCheck.Status == "blocked"
@@ -855,6 +853,8 @@ internal sealed class MainForm : Form
                 + "Полностью закройте игру и лаунчер, затем нажмите «Проверить». "
                 + "Если ошибка повторяется, отправьте автору подробности и файлы из папки i18n. "
                 + "Не переименовывайте файлы и не удаляйте резервные копии.", Theme.Warning);
+        else if (plan.CompatibilityFailure != null && !plan.IsPatched && plan.Status != "RecoveryRequired")
+            RenderCompatibilityFailure(plan, Show);
         else if (plan.LocalProblem == "signed-profile-unavailable")
             Show("Подходящий перевод пока недоступен",
                 $"Языковые файлы найдены: EN {plan.Observed.EnglishContent ?? "версия неизвестна"}, "
@@ -892,7 +892,7 @@ internal sealed class MainForm : Form
             else if (plan.UpdateProblem == null)
                 next += "\n\nДоступных обновлений перевода для этих файлов сейчас нет.";
             Show("Русский язык установлен",
-                $"Проверка подтвердила установленный перевод. Русских строк: {plan.State?.AppliedTranslations ?? plan.Profile.AppliedTranslations:N0}.",
+                $"Проверка подтвердила установленный перевод. {coverage}",
                 next, Theme.Green);
         }
         else if (plan.IsVersionRisk)
@@ -914,7 +914,8 @@ internal sealed class MainForm : Form
         else if (plan.CanApply)
         {
             bool updating = plan.TranslationUpdateAvailable || plan.Status is "PatchSupersededByOfficialUpdate" or "PatchSupersededByCatalogUpdate";
-            Show(updating ? "Можно обновить перевод" : "Всё готово к установке", coverage,
+            bool partial = plan.Profile.Mode == "compatible-revision" && plan.Profile.EnglishFallbacks > 0;
+            Show(updating ? "Можно обновить перевод" : partial ? "Можно установить частичный перевод" : "Всё готово к установке", coverage,
                 plan.TranslationUpdateKind == "metadata-only"
                     ? "Тексты уже актуальны. Нажмите «Обновить перевод», чтобы сохранить новые служебные данные."
                     : $"Нажмите «{(updating ? "Обновить перевод" : "Установить перевод")}». Оригинал сохранится в резервной копии."
@@ -933,6 +934,65 @@ internal sealed class MainForm : Form
                 + "Подробности доступны для поддержки.";
         _noticeLabel.Text += PatcherVersionNotice(plan);
         UpdateButtons();
+    }
+
+    private static string FriendlyCoverage(CliPlanResult plan)
+    {
+        int applied = plan.IsPatched && !plan.TranslationUpdateAvailable
+            ? plan.State?.AppliedTranslations ?? plan.Profile.AppliedTranslations
+            : plan.Profile.AppliedTranslations;
+        int untranslated = plan.Profile.EnglishFallbacks;
+        int meaningful = applied + Math.Max(0, untranslated);
+        string result = meaningful > 0
+            ? $"Русских строк: {applied:N0} из {meaningful:N0}."
+            : $"Русских строк: {applied:N0}.";
+        if (untranslated > 0)
+            result += $" На английском: {untranslated:N0}.";
+        if (plan.Profile.BaseFallbacks > 0)
+            result += $" Пустых или служебных записей без изменений: {plan.Profile.BaseFallbacks:N0}.";
+        return result;
+    }
+
+    private static void RenderCompatibilityFailure(CliPlanResult plan, Action<string, string, string, Color> show)
+    {
+        CompatibilityFailureInfo failure = plan.CompatibilityFailure!;
+        string files = $"Файлы найдены: EN {plan.Observed.EnglishContent ?? "версия не прочитана"}, "
+            + $"UK {plan.Observed.BaseContent ?? "версия не прочитана"}. ";
+        switch (failure.Code)
+        {
+            case "runtime-state-unreadable":
+            case "runtime-backup-unavailable":
+            case "runtime-state-untrusted":
+            case "journal-authentication":
+                show("Нужно проверить предыдущую установку",
+                    failure.Code == "runtime-backup-unavailable"
+                        ? "Не удалось прочитать резервную копию прошлой установки перевода."
+                        : "Не удалось подтвердить сведения о прошлой установке перевода.",
+                    "Скопируйте подробности для поддержки и отправьте автору. Не удаляйте состояние патчера или резервные копии. "
+                        + "Переустановка игры не исправит эти сведения.", Theme.Warning);
+                break;
+            case "catalog-no-current-matches":
+                show("Для этих текстов нужен свежий перевод", files
+                    + $"Совпадающих русских строк: {failure.AppliedTranslations ?? 0:N0}. "
+                    + $"Без актуального перевода: {failure.EnglishFallbacks ?? 0:N0}.",
+                    "Нажмите «Проверить» позже. Патчер применяет доступную часть перевода, когда совпадают исходные тексты; "
+                        + "сейчас подходящих строк нет. Удалять языковые файлы или переустанавливать игру не нужно.", Theme.Warning);
+                break;
+            case "signed-profile-unavailable":
+                show("Подходящий перевод пока недоступен", files + "Эта ветка языковых данных ещё не поддерживается.",
+                    "Нажмите «Проверить» позже — подходящий пакет загрузится автоматически после публикации. "
+                        + "Переустанавливать игру или удалять файлы не нужно.", Theme.Warning);
+                break;
+            default:
+                show("Не удалось проверить языковые файлы", files
+                    + (failure.Code == "runtime-container-unsupported" ? "Этот формат пока не поддерживается."
+                        : failure.Code is "runtime-input-access-denied" or "runtime-input-unavailable"
+                            ? "Не удалось получить доступ к необходимым файлам."
+                            : "Структура английского и украинского пакетов не прошла проверку совместимости."),
+                    "Полностью закройте игру и лаунчер, затем нажмите «Проверить». Если сообщение осталось, "
+                        + "скопируйте подробности для поддержки. Не переименовывайте и не удаляйте файлы.", Theme.Warning);
+                break;
+        }
     }
 
     private static string RunningProcessNotice(string[] conflicts)

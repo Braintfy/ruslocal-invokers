@@ -107,10 +107,70 @@ internal static class Program
                 "Client version was mislabeled as the LOC1 language family.");
         }
         AssertUnavailableProfileAndRootRendering();
+        AssertCompatibilityFailureRendering();
         Console.WriteLine("PASS working-area sizing and concise process explanation.");
         Console.WriteLine("PASS precise input-failure rendering and separate client/language identities.");
         Console.WriteLine("PASS absent signed profile, actual missing files, nonstandard root and cleared checking status.");
         Console.WriteLine("PASS installed status survives update warnings; stale state and protection remain refusals.");
+        Console.WriteLine("PASS structured compatibility reasons and honest partial coverage rendering.");
+    }
+
+    private static void AssertCompatibilityFailureRendering()
+    {
+        using Form form = (Form)Activator.CreateInstance(MainFormType)!;
+        Type planType = MainFormType.Assembly.GetType("InvokersRu.Gui.CliPlanResult", true)!;
+        object plan = Activator.CreateInstance(planType)!;
+        MainFormType.GetField("_lastPlan", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(form, plan);
+        Set(plan, "Status", "UnknownBuild");
+        Set(plan, "PatcherVersion", "3.1.14");
+        Set(plan, "PlanAction", "REFUSE_UNKNOWN_OR_INCONSISTENT");
+        Set(plan, "UpdateProblemBlocksApply", true);
+        object protection = planType.GetProperty("ProtectionCheck")!.GetValue(plan)!;
+        Set(protection, "Status", "no-known-markers");
+        object observed = planType.GetProperty("Observed")!.GetValue(plan)!;
+        Set(observed, "EnglishContent", "Prod_0.61.2_11");
+        Set(observed, "BaseContent", "Prod_0.61.2_11");
+        Type failureType = MainFormType.Assembly.GetType("InvokersRu.Gui.CompatibilityFailureInfo", true)!;
+        object failure = Activator.CreateInstance(failureType)!;
+        Set(failure, "Code", "catalog-no-current-matches");
+        Set(failure, "Stage", "match-records");
+        Set(failure, "AppliedTranslations", 0);
+        Set(failure, "EnglishFallbacks", 12);
+        Set(plan, "LocalProblem", "catalog-no-current-matches");
+        Set(plan, "CompatibilityFailure", failure);
+        Invoke(form, "RenderPlan", plan);
+        Require(Field<Label>(form, "_statusBadge").Text == "Для этих текстов нужен свежий перевод"
+            && Field<Label>(form, "_stateLabel").Text.Contains("12")
+            && !Field<Button>(form, "_applyButton").Enabled,
+            "Zero matching rows must show actual coverage without enabling installation.");
+
+        Set(plan, "Status", "InconsistentState");
+        Set(plan, "LocalProblem", "runtime-backup-unavailable");
+        Set(failure, "Code", "runtime-backup-unavailable");
+        Set(failure, "Stage", "authenticate-backup");
+        Invoke(form, "RenderPlan", plan);
+        Require(Field<Label>(form, "_stateLabel").Text.Contains("резервную копию")
+            && !Field<Label>(form, "_statusBadge").Text.Contains("перевод пока недоступен")
+            && !Field<Label>(form, "_noticeLabel").Text.Contains("загрузите в игре"),
+            "A backup failure must not imply missing languages or unavailable translations.");
+
+        Set(plan, "CompatibilityFailure", null!);
+        Set(plan, "LocalProblem", null!);
+        Set(plan, "Status", "CompatibleOriginal");
+        Set(plan, "PlanAction", "READY_TO_APPLY");
+        Set(plan, "UpdateProblemBlocksApply", false);
+        Set(plan, "CanApply", true);
+        object profile = planType.GetProperty("Profile")!.GetValue(plan)!;
+        Set(profile, "Mode", "compatible-revision");
+        Set(profile, "AppliedTranslations", 5);
+        Set(profile, "EnglishFallbacks", 2);
+        Set(profile, "BaseFallbacks", 1);
+        Invoke(form, "RenderPlan", plan);
+        Require(Field<Label>(form, "_statusBadge").Text == "Можно установить частичный перевод"
+            && Field<Label>(form, "_stateLabel").Text.Contains("5 из 7")
+            && Field<Label>(form, "_stateLabel").Text.Contains("На английском: 2")
+            && Field<Button>(form, "_applyButton").Enabled,
+            "Verified partial translation must display both matched rows and English fallback and permit Apply.");
     }
 
     private static void AssertUnavailableProfileAndRootRendering()

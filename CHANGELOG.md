@@ -1,5 +1,13 @@
 # Changelog
 
+## Windows 3.1.14 Preview / translation data 14 — 2026-10-10
+
+- Updated the catalog for EN/UK `Prod_0.61.2_10`: 316 new strings and 46 changed English source bindings (43 Russian text changes). The other 42,405 records, including the seven compact equipment stat labels, are unchanged. Composition applies 42,767 Russian rows, retains two purchase-service English fallbacks and 220 empty entries; zero validation errors.
+- Added source-and-hint-bound historical variants to the signed Windows catalog. Exact profiles retain full coverage for EN `Prod_0.61.1_3` with UK `_3`, `_5` and `_7`, alongside the new 0.61.2 tuple. The shared plain catalog remains compatible with the existing Mac script. The enriched Windows catalog requires patcher 3.1.14; older clients receive the application update first through the unchanged channel.
+- Compatible revisions can apply the matching subset of the catalog and report Russian/English/unchanged counts. Unknown source texts are never given a translation from a different historical source or hint. Bounded variant parsing rejects duplicates, nesting and oversized histories.
+- Preserved specific compatible-composition failures instead of labeling all failures as an unavailable profile. Previous state/backup problems, unsupported containers, inaccessible or inconsistent inputs, and zero matching records have distinct diagnostics. Verified installed translations and their restore path remain available independently of a newer catalog.
+- Verified four exact install/recheck/restore paths and compatible partial translation on isolated copies. Authenticated older installations and immutable backups are retained during game/catalog updates; no live game files are altered by the release workflow.
+
 ## macOS 3.1.0 / script 2.11.0 — 2026-10-04
 
 - Updated the Mac patcher for the observed native launcher `1.0.319`, game `0.61.1506` and downloaded EN/UK `Prod_0.61.1_3` tables. These 42,673-entry files have no `.ver` sidecars; local composition applies 42,451 Russian strings, with two English fallbacks and 220 empty source entries. The installed file and Russian in-game UI were verified on 2026-10-04.

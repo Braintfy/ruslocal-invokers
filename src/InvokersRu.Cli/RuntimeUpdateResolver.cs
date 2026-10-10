@@ -1,6 +1,7 @@
 using InvokersRu.Core;
 using InvokersRu.Core.Loc1;
 using InvokersRu.Core.Patching;
+using InvokersRu.Core.Translations;
 using InvokersRu.Core.Updates;
 using System;
 using System.Collections.Generic;
@@ -9,6 +10,13 @@ using System.Linq;
 
 namespace InvokersRu.Cli
 {
+    internal sealed record RuntimeCompatibilityFailure(
+        string Code,
+        string Stage,
+        string Message,
+        bool IsLocalState = false,
+        CompositionSummary? Composition = null);
+
     internal sealed class RuntimeUpdateResolution
     {
         public required RuntimeCacheCompatibility Profile { get; init; }
@@ -24,6 +32,7 @@ namespace InvokersRu.Cli
         public string? LocalProblem { get; init; }
         public string? RemoteProblem { get; init; }
         public bool RemoteProblemBlocksApply { get; init; }
+        public RuntimeCompatibilityFailure? CompatibilityFailure { get; init; }
     }
 
     internal static class RuntimeUpdateAuthorization
@@ -158,7 +167,8 @@ namespace InvokersRu.Cli
                     bundle: null,
                     channelAuthority: null,
                     remoteProblem,
-                    remoteProblemBlocksApply);
+                    remoteProblemBlocksApply,
+                    out RuntimeCompatibilityFailure? compatibleFailure);
                 if (compatible != null) return compatible;
                 if (embeddedInspection.Status == InstallationStatus.RecoveryRequired && !embeddedInstalled)
                 {
@@ -168,7 +178,7 @@ namespace InvokersRu.Cli
                         channelAuthority: null,
                         "The active transaction journal does not match the embedded recovery profile.");
                 }
-                return WithUnsupportedObservedTupleIfPresent(cacheRoot, embedded, null);
+                return WithUnsupportedObservedTupleIfPresent(cacheRoot, embedded, null, compatibleFailure);
             }
 
             SignedUpdateBundle? bundle = coordinator.LoadBestAvailable();
@@ -193,7 +203,8 @@ namespace InvokersRu.Cli
                     bundle: null,
                     channelAuthority: null,
                     remoteProblem,
-                    remoteProblemBlocksApply);
+                    remoteProblemBlocksApply,
+                    out RuntimeCompatibilityFailure? compatibleFailure);
                 if (compatible != null) return compatible;
                 if (embeddedInspection.Status == InstallationStatus.RecoveryRequired && !embeddedInstalled)
                 {
@@ -203,7 +214,7 @@ namespace InvokersRu.Cli
                         channelAuthority: null,
                         "The active transaction journal does not match any authenticated recovery profile.");
                 }
-                return WithUnsupportedObservedTupleIfPresent(cacheRoot, embedded, channelAuthority);
+                return WithUnsupportedObservedTupleIfPresent(cacheRoot, embedded, channelAuthority, compatibleFailure);
             }
 
             PatchJournal? journal = PatchJournalStore.FindActive(statePath);
@@ -304,6 +315,7 @@ namespace InvokersRu.Cli
                 }
             }
 
+            RuntimeCompatibilityFailure? compatibleFailureForObserved = null;
             if (remoteProfile == null)
             {
                 RuntimeUpdateResolution? compatible = TryResolveCompatibleRevision(
@@ -315,7 +327,8 @@ namespace InvokersRu.Cli
                     bundle,
                     channelAuthority,
                     remoteProblem,
-                    remoteProblemBlocksApply);
+                    remoteProblemBlocksApply,
+                    out compatibleFailureForObserved);
                 if (compatible != null) return compatible;
             }
 
@@ -487,9 +500,10 @@ namespace InvokersRu.Cli
                 if (installedInspection?.Status is InstallationStatus.PatchedByThisTool
                     or InstallationStatus.RecoveryRequired)
                     return WithUnavailableSignedData(embedded, bundle, channelAuthority!, unavailable,
-                        installedProfile, installedInspection);
+                        installedProfile, installedInspection, compatibilityFailure: compatibleFailureForObserved);
                 return WithUnsupportedObservedTuple(cacheRoot, embedded, directObserved!, target!,
-                    channelAuthority, unavailable, installedProfile, installedInspection);
+                    channelAuthority, unavailable, installedProfile, installedInspection,
+                    compatibleFailureForObserved);
             }
             RuntimeCacheCompatibility signedCurrentExact = CloneCompatibleProfile(remoteProfile);
             remoteProfile = AttachEmbeddedMigrationAllowlist(embeddedProfile, remoteProfile);
@@ -543,6 +557,23 @@ namespace InvokersRu.Cli
                     "A newer signed translation artifact is available for this exact game build.");
             }
 
+            bool exactFilesStillMatch = remoteInspection.EnglishFormatVersion == 4
+                && remoteInspection.BaseFormatVersion == 4
+                && remoteInspection.EnglishContentGuid == remoteProfile.ContentGuid
+                && remoteInspection.BaseContentGuid == remoteProfile.ContentGuid
+                && remoteInspection.EntryCount == remoteProfile.EntryCount
+                && Hashing.FixedEqualsHex(remoteInspection.EnglishSha256 ?? string.Empty, remoteProfile.EnglishSha256)
+                && Hashing.FixedEqualsHex(remoteInspection.StampSha256 ?? string.Empty, remoteProfile.StampSha256)
+                && (Hashing.FixedEqualsHex(remoteInspection.BaseSha256 ?? string.Empty, remoteProfile.BaseSha256)
+                    || state != null && Hashing.FixedEqualsHex(remoteInspection.BaseSha256 ?? string.Empty, state.PatchedSha256));
+            RuntimeCompatibilityFailure? exactStateFailure = remoteInspection.Status == InstallationStatus.InconsistentState
+                && exactFilesStillMatch
+                ? new RuntimeCompatibilityFailure("runtime-state-untrusted", "authenticate-state",
+                    BoundFailureMessage("Языковые файлы подходят для перевода, но сведения о прежней установке не подтверждены. " + remoteInspection.Message), true)
+                : null;
+            if (exactStateFailure != null)
+                remoteInspection.State = null; // Unauthenticated fields are diagnostics, never installed-state authority.
+
             return new RuntimeUpdateResolution
             {
                 Profile = remoteProfile,
@@ -554,8 +585,10 @@ namespace InvokersRu.Cli
                 InstalledInspection = installedInspection,
                 TranslationUpdateAvailable = updateAvailable,
                 Source = bundle?.Source.ToString() ?? "ChannelHead",
-                RemoteProblem = remoteProblem,
-                RemoteProblemBlocksApply = remoteProblemBlocksApply
+                LocalProblem = exactStateFailure?.Code,
+                CompatibilityFailure = exactStateFailure,
+                RemoteProblem = exactStateFailure?.Message ?? remoteProblem,
+                RemoteProblemBlocksApply = exactStateFailure != null || remoteProblemBlocksApply
             };
         }
 
@@ -657,7 +690,8 @@ namespace InvokersRu.Cli
                 Source = source.Source,
                 LocalProblem = source.LocalProblem,
                 RemoteProblem = source.RemoteProblem,
-                RemoteProblemBlocksApply = source.RemoteProblemBlocksApply
+                RemoteProblemBlocksApply = source.RemoteProblemBlocksApply,
+                CompatibilityFailure = source.CompatibilityFailure
             };
         }
 
@@ -668,7 +702,8 @@ namespace InvokersRu.Cli
             string problem,
             RuntimeCacheCompatibility? installedProfile = null,
             RuntimeCacheInspection? installedInspection = null,
-            bool runtimeCacheInput = false)
+            bool runtimeCacheInput = false,
+            RuntimeCompatibilityFailure? compatibilityFailure = null)
         {
             RuntimeCacheCompatibility selectedProfile = installedProfile ?? embedded.Profile;
             RuntimeCacheInspection selectedInspection = installedInspection ?? embedded.Inspection;
@@ -690,11 +725,12 @@ namespace InvokersRu.Cli
                 InstalledInspection = installedInspection ?? embedded.InstalledInspection,
                 TranslationUpdateAvailable = false,
                 Source = embedded.Source,
-                LocalProblem = runtimeCacheInput ? "runtime-cache-input" : null,
-                RemoteProblem = problem,
+                LocalProblem = runtimeCacheInput ? "runtime-cache-input" : compatibilityFailure?.Code,
+                RemoteProblem = compatibilityFailure?.Message ?? problem,
                 // An authenticated current head exists but did not authorize the selected embedded
                 // profile/catalog.  Never attach an unrelated bundle receipt to an embedded write.
-                RemoteProblemBlocksApply = true
+                RemoteProblemBlocksApply = true,
+                CompatibilityFailure = compatibilityFailure
             };
         }
 
@@ -882,12 +918,36 @@ namespace InvokersRu.Cli
             string? remoteProblem,
             bool remoteProblemBlocksApply)
         {
+            return TryResolveCompatibleRevision(cacheRoot, statePath, embeddedProfile,
+                embeddedCatalogPath, coordinator, bundle, channelAuthority, remoteProblem,
+                remoteProblemBlocksApply, out _);
+        }
+
+        private static RuntimeUpdateResolution? TryResolveCompatibleRevision(
+            string cacheRoot,
+            string statePath,
+            RuntimeCacheCompatibility embeddedProfile,
+            string embeddedCatalogPath,
+            SignedUpdateCoordinator? coordinator,
+            SignedUpdateBundle? bundle,
+            VerifiedSignedUpdate? channelAuthority,
+            string? remoteProblem,
+            bool remoteProblemBlocksApply,
+            out RuntimeCompatibilityFailure? failure)
+        {
+            failure = null;
+            string stage = "read-input";
             try
             {
                 string root = Path.GetFullPath(cacheRoot);
                 (string englishPath, string targetPath, string stampPath) = RuntimeCacheService.ResolveTuplePaths(root);
                 if (!File.Exists(englishPath) || !File.Exists(stampPath)) return null;
-                if (File.Exists(statePath) && PatchPlanner.TryLoadState(statePath) == null) return null;
+                if (File.Exists(statePath) && PatchPlanner.TryLoadState(statePath) == null)
+                {
+                    failure = new RuntimeCompatibilityFailure("runtime-state-unreadable", "read-state",
+                        "Файлы языка найдены, но запись прежней установки не читается. Скопируйте подробности для поддержки; языковые файлы и резервные копии удалять не нужно.", true);
+                    return null;
+                }
 
                 PatchState? state = PatchPlanner.TryLoadState(statePath);
                 PatchJournal? journal = PatchJournalStore.FindActive(statePath);
@@ -899,27 +959,45 @@ namespace InvokersRu.Cli
                         "compatible runtime-cache target")
                     : string.Empty;
                 string basePath = targetPath;
+                stage = "authenticate-backup";
                 if (journal != null)
                 {
                     if (!TryResolveJournalBasePath(root, targetPath, statePath, journal, targetSha256, out basePath))
+                    {
+                        failure = new RuntimeCompatibilityFailure("journal-authentication", stage,
+                            "Не удалось подтвердить исходные файлы незавершённой установки. Скопируйте подробности для поддержки.", true);
                         return null;
+                    }
                 }
                 else if (state != null && Hashing.FixedEqualsHex(targetSha256, state.PatchedSha256))
                 {
                     if (!TryResolveStateBackupPath(root, targetPath, statePath, state, out basePath))
+                    {
+                        failure = new RuntimeCompatibilityFailure("runtime-backup-unavailable", stage,
+                            "Установленный перевод найден, но его резервная копия отсутствует, повреждена или записана по неподходящему пути. Скопируйте подробности для поддержки.", true);
                         return null;
+                    }
                 }
 
+                stage = "read-original";
                 Loc1Document officialBase = Loc1Codec.Parse(BoundedArtifactReader.ReadRuntimeLoc1(
                     basePath,
                     "compatible-revision observed Ukrainian LOC1"));
                 string observedContentGuid = officialBase.ContentGuid;
+                stage = "authorize-family";
                 List<CompatibleCatalogCandidate> catalogs = LoadCompatibleCatalogCandidates(
                     embeddedProfile,
                     embeddedCatalogPath,
                     coordinator,
                     bundle,
                     observedContentGuid);
+                if (catalogs.Count == 0)
+                {
+                    failure = new RuntimeCompatibilityFailure("signed-profile-unavailable", stage,
+                        "Для обнаруженного семейства языковых файлов пока нет подписанного каталога перевода.");
+                    return null;
+                }
+                stage = "materialize";
                 var builds = new List<(CompatibleCatalogCandidate Catalog, CompatibleRevisionProfileBuild Build)>();
                 foreach (CompatibleCatalogCandidate catalog in catalogs)
                 {
@@ -957,14 +1035,16 @@ namespace InvokersRu.Cli
                         or InvalidOperationException
                         or Loc1FormatException)
                     {
-                        // A catalog that has no exact current source+hint rows or a tuple outside the
-                        // conservative family is simply ineligible. Another independently trusted catalog
-                        // may still authenticate an installed transaction for restore/recovery.
+                        // Keep the selected catalog's actual failure while still trying historical
+                        // catalogs independently for authenticated restore/recovery.
+                        if (catalog.Selected || failure == null)
+                            failure = DescribeCompatibleException(exception, stage);
                     }
                 }
 
                 if (builds.Count == 0) return null;
 
+                stage = "authenticate-journal";
                 if (journal != null)
                 {
                     CompatibleRecoveryCandidate[] authenticated = EnumerateCompatibleRecoveryCandidates(builds, journal)
@@ -980,7 +1060,12 @@ namespace InvokersRu.Cli
                             .ThenBy(item => item.Catalog.Path, StringComparer.OrdinalIgnoreCase)
                             .First())
                         .ToArray();
-                    if (matches.Length != 1) return null;
+                    if (matches.Length != 1)
+                    {
+                        failure = new RuntimeCompatibilityFailure("journal-authentication", "authenticate-journal",
+                            "Незавершённая установка не совпадает с единственным проверенным набором исходных файлов. Скопируйте подробности для поддержки.", true);
+                        return null;
+                    }
                     CompatibleRecoveryCandidate match = matches[0];
                     RuntimeCacheInspection inspection = RuntimeCacheService.Inspect(root, match.Profile, statePath);
                     if (inspection.Status != InstallationStatus.RecoveryRequired) return null;
@@ -1003,6 +1088,7 @@ namespace InvokersRu.Cli
                 RuntimeCacheInspection? installedInspection = null;
                 (RuntimeCacheCompatibility Profile, RuntimeCacheInspection Inspection,
                     string CatalogPath, string Source)? installedExact = null;
+                stage = "authenticate-installed";
                 if (state != null && Hashing.FixedEqualsHex(targetSha256, state.PatchedSha256))
                 {
                     var stateMatches = new List<((CompatibleCatalogCandidate Catalog, CompatibleRevisionProfileBuild Build) Item, RuntimeCacheInspection Inspection)>();
@@ -1017,7 +1103,12 @@ namespace InvokersRu.Cli
                     var artifactGroups = stateMatches
                         .GroupBy(match => StateArtifactAuthorityKey(match.Item.Build.Profile), StringComparer.Ordinal)
                         .ToArray();
-                    if (artifactGroups.Length > 1) return null;
+                    if (artifactGroups.Length > 1)
+                    {
+                        failure = new RuntimeCompatibilityFailure("runtime-state-untrusted", "authenticate-installed",
+                            "Запись прежней установки неоднозначна и не может подтвердить резервную копию. Скопируйте подробности для поддержки.", true);
+                        return null;
+                    }
                     if (artifactGroups.Length == 1)
                     {
                         var selectedInstalled = artifactGroups[0]
@@ -1038,11 +1129,17 @@ namespace InvokersRu.Cli
                         installedExact = TryResolveExactInstalledForCompatible(
                             root, statePath, state, embeddedProfile, embeddedCatalogPath,
                             coordinator, officialBase);
-                        if (installedExact == null) return null;
+                        if (installedExact == null)
+                        {
+                            failure = new RuntimeCompatibilityFailure("runtime-state-untrusted", "authenticate-installed",
+                                "Установленный файл перевода совпадает с записью установки, но её исходные файлы и каталог не удалось подтвердить. Скопируйте подробности для поддержки.", true);
+                            return null;
+                        }
                     }
                 }
 
                 RuntimeCacheCompatibility? officialUpdatePredecessor = null;
+                stage = "authenticate-predecessor";
                 if (state != null
                     && !Hashing.FixedEqualsHex(targetSha256, state.PatchedSha256)
                     && TryResolveStateBackupPath(root, targetPath, statePath, state, out string predecessorBasePath))
@@ -1135,11 +1232,14 @@ namespace InvokersRu.Cli
 
                 if (selected == null)
                 {
+                    RuntimeCompatibilityFailure selectedFailure = failure
+                        ?? new RuntimeCompatibilityFailure("signed-profile-unavailable", "authorize-family",
+                            "Последний подписанный пакет не содержит доступного каталога для обнаруженного семейства языковых файлов.");
                     if (installedExact != null)
-                        return ExactInstalledWithoutMaterialUpdate(installedExact.Value,
-                            channelAuthority, remoteProblem, remoteProblemBlocksApply);
+                        return WithCompatibilityFailure(ExactInstalledWithoutMaterialUpdate(installedExact.Value,
+                            channelAuthority, remoteProblem, remoteProblemBlocksApply), selectedFailure);
                     if (installed == null || installedInspection == null) return null;
-                    return new RuntimeUpdateResolution
+                    return WithCompatibilityFailure(new RuntimeUpdateResolution
                     {
                         Profile = installed.Value.Build.Profile,
                         Inspection = installedInspection,
@@ -1150,10 +1250,31 @@ namespace InvokersRu.Cli
                         Source = installed.Value.Catalog.Source,
                         RemoteProblem = remoteProblem ?? "Current trusted catalog cannot materialize this compatible game revision.",
                         RemoteProblemBlocksApply = remoteProblemBlocksApply
-                    };
+                    }, selectedFailure);
                 }
 
                 RuntimeCacheCompatibility selectedProfile = selected.Value.Build.Profile;
+                if (!selectedProfile.Certified || selectedProfile.Readiness != "ready")
+                {
+                    failure = new RuntimeCompatibilityFailure("catalog-no-current-matches", "match-records",
+                        "Каталог загружен, но ни одна русская строка не совпадает с текущим английским исходником и украинской подсказкой. Дождитесь обновления перевода.",
+                        Composition: selected.Value.Build.Composition);
+                    if (installedExact != null)
+                        return WithCompatibilityFailure(ExactInstalledWithoutMaterialUpdate(installedExact.Value,
+                            channelAuthority, remoteProblem, remoteProblemBlocksApply), failure);
+                    if (installed != null && installedInspection != null)
+                        return WithCompatibilityFailure(new RuntimeUpdateResolution
+                        {
+                            Profile = installed.Value.Build.Profile,
+                            Inspection = installedInspection,
+                            CatalogPath = installed.Value.Catalog.Path,
+                            ChannelAuthority = channelAuthority,
+                            InstalledProfile = installed.Value.Build.Profile,
+                            InstalledInspection = installedInspection,
+                            Source = installed.Value.Catalog.Source
+                        }, failure);
+                    return null;
+                }
                 if (installedExact != null)
                 {
                     if (!selectedProfile.Certified || selectedProfile.Readiness != "ready"
@@ -1238,7 +1359,12 @@ namespace InvokersRu.Cli
                 if (installed == null
                     && selectedInspection.Status is not (InstallationStatus.CompatibleOriginal
                         or InstallationStatus.PatchSupersededByOfficialUpdate))
+                {
+                    failure = new RuntimeCompatibilityFailure("runtime-state-untrusted", "authenticate-state",
+                        BoundFailureMessage("Текущие файлы языка подходят для частичного перевода, но запись прежней установки или её резервная копия не подтверждена. " + selectedInspection.Message),
+                        true, selected.Value.Build.Composition);
                     return null;
+                }
                 if (installed != null && !translationUpdate
                     && selectedInspection.Status != InstallationStatus.PatchedByThisTool)
                     return null;
@@ -1264,8 +1390,55 @@ namespace InvokersRu.Cli
                 or InvalidOperationException
                 or Loc1FormatException)
             {
+                failure = DescribeCompatibleException(exception, stage);
                 return null;
             }
+        }
+
+        private static RuntimeCompatibilityFailure DescribeCompatibleException(Exception exception, string stage)
+        {
+            bool localState = stage is "authenticate-backup" or "authenticate-state"
+                or "authenticate-installed" or "authenticate-predecessor" or "authenticate-journal";
+            string code = localState ? "runtime-state-untrusted"
+                : exception is UnauthorizedAccessException ? "runtime-input-access-denied"
+                : exception is IOException && exception is not InvalidDataException ? "runtime-input-unavailable"
+                : exception.Message.Contains("not an uncompressed raw LOC1", StringComparison.Ordinal)
+                    ? "runtime-container-unsupported"
+                : "runtime-structure-incompatible";
+            string message = localState
+                ? "Не удалось подтвердить состояние прежней установки. "
+                : code == "runtime-container-unsupported"
+                    ? "Файлы языка найдены в контейнере, который пока не поддерживается для частичного перевода. "
+                    : "Не удалось подготовить частичный перевод по обнаруженным языковым файлам. ";
+            return new RuntimeCompatibilityFailure(code, stage, BoundFailureMessage(message + exception.Message), localState);
+        }
+
+        private static string BoundFailureMessage(string message) => message.Length <= 4096
+            ? message : message[..4093] + "...";
+
+        private static RuntimeUpdateResolution WithCompatibilityFailure(
+            RuntimeUpdateResolution resolution, RuntimeCompatibilityFailure failure)
+        {
+            if (failure.IsLocalState && resolution.InstalledInspection == null
+                && resolution.Inspection.Status is InstallationStatus.InconsistentState or InstallationStatus.UnknownBuild)
+                resolution.Inspection.State = null;
+            return new RuntimeUpdateResolution
+            {
+                Profile = resolution.Profile,
+                Inspection = resolution.Inspection,
+                CatalogPath = resolution.CatalogPath,
+                Bundle = resolution.Bundle,
+                ChannelAuthority = resolution.ChannelAuthority,
+                InstalledProfile = resolution.InstalledProfile,
+                InstalledInspection = resolution.InstalledInspection,
+                TranslationUpdateAvailable = false,
+                EquivalentCatalogMetadataUpdate = false,
+                Source = resolution.Source,
+                LocalProblem = failure.Code,
+                RemoteProblem = failure.Message,
+                RemoteProblemBlocksApply = true,
+                CompatibilityFailure = failure
+            };
         }
 
         private static RuntimeUpdateResolution? TryResolveExactJournalRecovery(
@@ -1452,10 +1625,14 @@ namespace InvokersRu.Cli
         private static RuntimeUpdateResolution WithUnsupportedObservedTupleIfPresent(
             string cacheRoot,
             RuntimeUpdateResolution embedded,
-            VerifiedSignedUpdate? channelAuthority)
+            VerifiedSignedUpdate? channelAuthority,
+            RuntimeCompatibilityFailure? failure = null)
         {
+            if (failure != null && embedded.InstalledInspection?.Status
+                is InstallationStatus.PatchedByThisTool or InstallationStatus.RecoveryRequired)
+                return WithCompatibilityFailure(embedded, failure);
             if (embedded.Inspection.Status is not (InstallationStatus.UnknownBuild
-                or InstallationStatus.MissingFiles))
+                or InstallationStatus.MissingFiles) && failure == null)
                 return embedded;
             if (!TryReadObserved(cacheRoot, out RuntimeCacheCompatibility? observed,
                     out Loc1Document? target, out string inputProblem))
@@ -1474,10 +1651,16 @@ namespace InvokersRu.Cli
                         RemoteProblemBlocksApply = true
                     };
                 }
+                if (failure != null)
+                {
+                    embedded.Inspection.Message = failure.Message;
+                    return WithCompatibilityFailure(embedded, failure);
+                }
                 return embedded;
             }
             return WithUnsupportedObservedTuple(cacheRoot, embedded, observed!, target!,
-                channelAuthority, "Подходящий подписанный перевод для этой версии языковых файлов пока недоступен.");
+                channelAuthority, "Подходящий подписанный перевод для этой версии языковых файлов пока недоступен.",
+                failure: failure);
         }
 
         private static RuntimeUpdateResolution WithUnsupportedObservedTuple(
@@ -1488,14 +1671,15 @@ namespace InvokersRu.Cli
             VerifiedSignedUpdate? channelAuthority,
             string problem,
             RuntimeCacheCompatibility? installedProfile = null,
-            RuntimeCacheInspection? installedInspection = null)
+            RuntimeCacheInspection? installedInspection = null,
+            RuntimeCompatibilityFailure? failure = null)
         {
             (string englishPath, string targetPath, string stampPath) =
                 RuntimeCacheService.ResolveTuplePaths(cacheRoot);
             var inspection = new RuntimeCacheInspection
             {
-                Status = InstallationStatus.UnknownBuild,
-                Message = $"Подходящий перевод пока недоступен: EN {observed.EnglishContentVersion}, UK {observed.BaseContentVersion}. Дождитесь обновления перевода и нажмите «Проверить».",
+                Status = failure?.IsLocalState == true ? InstallationStatus.InconsistentState : InstallationStatus.UnknownBuild,
+                Message = failure?.Message ?? $"Подходящий перевод пока недоступен: EN {observed.EnglishContentVersion}, UK {observed.BaseContentVersion}. Дождитесь обновления перевода и нажмите «Проверить».",
                 CacheRoot = Path.GetFullPath(cacheRoot),
                 EnglishPath = englishPath,
                 TargetPath = targetPath,
@@ -1534,9 +1718,10 @@ namespace InvokersRu.Cli
                 InstalledProfile = installedProfile,
                 InstalledInspection = installedInspection,
                 Source = embedded.Source,
-                LocalProblem = "signed-profile-unavailable",
-                RemoteProblem = problem,
-                RemoteProblemBlocksApply = true
+                LocalProblem = failure?.Code ?? "signed-profile-unavailable",
+                RemoteProblem = failure?.Message ?? problem,
+                RemoteProblemBlocksApply = true,
+                CompatibilityFailure = failure
             };
         }
 

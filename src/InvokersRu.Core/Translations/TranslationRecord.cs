@@ -61,6 +61,12 @@ namespace InvokersRu.Core.Translations
 
         [JsonPropertyName("notes")]
         public string? Notes { get; set; }
+
+        // Signed runtime catalogs may retain exact historical source/context pairs. The shared
+        // legacy catalog omits this field so older bundled CLI readers can still consume it.
+        [JsonPropertyName("variants")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public TranslationRecord[]? Variants { get; set; }
     }
 
     public sealed class TranslationJob

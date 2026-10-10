@@ -83,28 +83,36 @@ namespace InvokersRu.Core.Translations
                 SourceRecords = english.Entries.Count(entry => entry.Value != null)
             };
             var releaseReadyIds = new HashSet<ulong>();
-            foreach (TranslationRecord record in catalog.Records)
+            foreach (TranslationRecord primary in catalog.Records)
             {
-                if (!TryParseId(record.Id, out ulong id) || !sourceByHash.TryGetValue(id, out Loc1Entry? sourceEntry) || sourceEntry.Value == null)
+                if (!TryParseId(primary.Id, out ulong id) || !sourceByHash.TryGetValue(id, out Loc1Entry? sourceEntry) || sourceEntry.Value == null)
                 {
                     report.MissingSourceIds++;
-                    report.Issues.Add(new TranslationIssue(record.Id, "unknown-id", ValidationSeverity.Error, "Translation id is absent from the current English package."));
+                    report.Issues.Add(new TranslationIssue(primary.Id, "unknown-id",
+                        profile == ValidationProfile.Release ? ValidationSeverity.Error : ValidationSeverity.Warning,
+                        "Translation id is absent from the current English package and will not be composed."));
                     continue;
                 }
 
                 string source = sourceEntry.Value;
-                if (!Hashing.FixedEqualsHex(record.SourceSha256, Hashing.Sha256Text(source)))
+                string? currentHint = hintByHash != null && hintByHash.TryGetValue(id, out Loc1Entry? selectedHint)
+                    ? selectedHint.Value : null;
+                if (!catalog.TrySelectRecord(id, source, currentHint, requireExactHint: false,
+                    out TranslationRecord? selectedRecord, out string selectionProblem))
                 {
                     report.StaleRecords++;
                     // A stale record is never composed: TryGetUsable refuses it and the official English text
                     // is kept instead. That is a defect for a release, but a preview should still assemble the
                     // records that did survive the content update.
-                    report.Issues.Add(new TranslationIssue(record.Id, "stale-source",
+                    report.Issues.Add(new TranslationIssue(primary.Id, selectionProblem,
                         profile == ValidationProfile.Release ? ValidationSeverity.Error : ValidationSeverity.Warning,
-                        "English source changed; this translation must be reviewed again."));
+                        selectionProblem == "ambiguous-source"
+                            ? "Historical translations for this English source need an exact Ukrainian context match."
+                            : "English source changed; this translation must be reviewed again."));
                     continue;
                 }
 
+                TranslationRecord record = selectedRecord!;
                 report.FreshRecords++;
                 if (hintByHash != null && hintByHash.TryGetValue(id, out Loc1Entry? hintEntry))
                 {
@@ -139,7 +147,7 @@ namespace InvokersRu.Core.Translations
                 {
                     report.Issues.Add(new TranslationIssue(record.Id, "risk-metadata-mismatch", profile == ValidationProfile.Release ? ValidationSeverity.Error : ValidationSeverity.Warning, "Risk flags are not derived from the current source."));
                 }
-                if (catalog.TryGetUsable(id, source, includeDraft, out _, out _))
+                if (catalog.TryGetUsableForHint(id, source, currentHint, includeDraft, out _, out _))
                 {
                     report.UsableRecords++;
                 }

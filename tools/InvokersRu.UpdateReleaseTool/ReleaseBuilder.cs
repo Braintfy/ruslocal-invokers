@@ -38,8 +38,16 @@ namespace InvokersRu.UpdateReleaseTool
                 throw new InvalidDataException("Translation catalog record count is outside the fixed protocol limits.");
             }
 
+            // Old clients must stop at the readable signed manifest, before downloading a
+            // catalog whose optional historical-record fields their strict parser rejects.
+            if (catalog.VariantCount > 0 && (!Version.TryParse(request.MinimumPatcherVersion, out Version? minimum)
+                || minimum < new Version(3, 1, 14)))
+            {
+                throw new InvalidDataException("Historical catalog variants require minimum patcher version 3.1.14 or newer.");
+            }
+
             if (request.TranslationPolicy == "release-approved-v1"
-                && catalog.Records.Any(record => !string.Equals(record.Status, "approved", StringComparison.OrdinalIgnoreCase)))
+                && catalog.AllRecords.Any(record => !string.Equals(record.Status, "approved", StringComparison.OrdinalIgnoreCase)))
             {
                 throw new InvalidDataException("release-approved-v1 requires every catalog record to have approved status.");
             }

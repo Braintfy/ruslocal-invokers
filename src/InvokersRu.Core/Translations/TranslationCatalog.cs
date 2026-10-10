@@ -14,6 +14,8 @@ namespace InvokersRu.Core.Translations
 {
     public sealed class TranslationCatalog
     {
+        public const int MaximumVariantsPerRecord = 16;
+        public const int MaximumHistoricalVariants = 100_000;
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true,
@@ -44,6 +46,8 @@ namespace InvokersRu.Core.Translations
 
         public int Count => _records.Count;
         public IEnumerable<TranslationRecord> Records => _records.Values;
+        public int VariantCount => _records.Values.Sum(record => record.Variants?.Length ?? 0);
+        public IEnumerable<TranslationRecord> AllRecords => _records.Values.SelectMany(EnumerateVariants);
 
         public static TranslationCatalog Empty()
         {
@@ -93,6 +97,7 @@ namespace InvokersRu.Core.Translations
         {
             var records = new Dictionary<ulong, TranslationRecord>();
             int lineNumber = 0;
+            int historicalVariants = 0;
             foreach (string line in lines)
             {
                 lineNumber++;
@@ -116,36 +121,26 @@ namespace InvokersRu.Core.Translations
                     throw new InvalidDataException($"Invalid 16-digit hexadecimal translation id at line {lineNumber}.");
                 }
 
-                record.Id = id.ToString("X16", CultureInfo.InvariantCulture);
-                if (record.SourceSha256 == null || record.SourceSha256.Length != 64 || !record.SourceSha256.All(IsHex))
+                ValidateRecord(record, id, lineNumber);
+                if (record.Variants != null)
                 {
-                    throw new InvalidDataException($"Invalid source_sha256 at line {lineNumber}.");
-                }
-
-                if (record.Translation == null || record.Status == null)
-                {
-                    throw new InvalidDataException($"Translation and status cannot be null at line {lineNumber}.");
-                }
-
-                if (!string.IsNullOrWhiteSpace(record.HintSha256)
-                    && (record.HintSha256.Length != 64 || !record.HintSha256.All(IsHex)))
-                {
-                    throw new InvalidDataException($"Invalid hint_sha256 at line {lineNumber}.");
-                }
-
-                if (!AllowedStatuses.Contains(record.Status))
-                {
-                    throw new InvalidDataException($"Unsupported translation status at line {lineNumber}: {record.Status}");
-                }
-
-                if (record.IssueCodes == null || record.RiskFlags == null || record.ReviewerIds == null)
-                {
-                    throw new InvalidDataException($"Translation arrays cannot be null at line {lineNumber}.");
-                }
-
-                if (record.Confidence != null && record.Confidence != "high" && record.Confidence != "medium" && record.Confidence != "low")
-                {
-                    throw new InvalidDataException($"Unsupported confidence at line {lineNumber}: {record.Confidence}");
+                    if (record.Variants.Length > MaximumVariantsPerRecord)
+                        throw new InvalidDataException($"Too many historical variants at line {lineNumber}.");
+                    historicalVariants += record.Variants.Length;
+                    if (historicalVariants > MaximumHistoricalVariants)
+                        throw new InvalidDataException("Translation catalog exceeds the historical variant limit.");
+                    var tuples = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        VariantTuple(record)
+                    };
+                    foreach (TranslationRecord? variant in record.Variants)
+                    {
+                        if (variant == null || variant.Variants != null)
+                            throw new InvalidDataException($"Null or nested historical variant at line {lineNumber}.");
+                        ValidateRecord(variant, id, lineNumber);
+                        if (!tuples.Add(VariantTuple(variant)))
+                            throw new InvalidDataException($"Duplicate source/context variant for {record.Id} at line {lineNumber}.");
+                    }
                 }
 
                 if (records.Count >= maximumRecords)
@@ -165,19 +160,18 @@ namespace InvokersRu.Core.Translations
 
         public bool TryGetUsable(ulong id, string source, bool includeDraft, out TranslationRecord? record, out string reason, bool approvedOnly = false)
         {
-            if (!_records.TryGetValue(id, out record))
-            {
-                reason = "missing";
-                return false;
-            }
+            return TryGetUsableForHint(id, source, null, includeDraft, out record, out reason,
+                approvedOnly, requireExactHint: false);
+        }
 
-            if (!Hashing.FixedEqualsHex(record.SourceSha256, Hashing.Sha256Text(source)))
-            {
-                reason = "stale-source";
+        public bool TryGetUsableForHint(ulong id, string source, string? hint, bool includeDraft,
+            out TranslationRecord? record, out string reason, bool approvedOnly = false,
+            bool requireExactHint = false)
+        {
+            if (!TrySelectRecord(id, source, hint, requireExactHint, out record, out reason))
                 return false;
-            }
 
-            bool statusAccepted = record.Status.Equals("approved", StringComparison.OrdinalIgnoreCase)
+            bool statusAccepted = record!.Status.Equals("approved", StringComparison.OrdinalIgnoreCase)
                 || (!approvedOnly && record.Status.Equals("reviewed", StringComparison.OrdinalIgnoreCase))
                 || (!approvedOnly && includeDraft && record.Status.Equals("draft", StringComparison.OrdinalIgnoreCase));
             if (!statusAccepted)
@@ -194,6 +188,86 @@ namespace InvokersRu.Core.Translations
 
             reason = "usable";
             return true;
+        }
+
+        // Selection precedes policy validation: each historical tuple retains its own review metadata.
+        // Matching only the ID or borrowing a hint from another source revision is never sufficient.
+        public bool TrySelectRecord(ulong id, string source, string? hint, bool requireExactHint,
+            out TranslationRecord? record, out string reason)
+        {
+            record = null;
+            if (!_records.TryGetValue(id, out TranslationRecord? primary))
+            {
+                reason = "missing";
+                return false;
+            }
+
+            string sourceHash = Hashing.Sha256Text(source);
+            string? hintHash = hint == null ? null : Hashing.Sha256Text(hint);
+            TranslationRecord[] sourceMatches = EnumerateVariants(primary)
+                .Where(candidate => Hashing.FixedEqualsHex(candidate.SourceSha256, sourceHash))
+                .ToArray();
+            if (sourceMatches.Length == 0)
+            {
+                reason = "stale-source";
+                return false;
+            }
+
+            record = sourceMatches.FirstOrDefault(candidate => hintHash != null
+                && candidate.HintSha256 != null
+                && Hashing.FixedEqualsHex(candidate.HintSha256, hintHash));
+            if (record != null)
+            {
+                reason = "selected";
+                return true;
+            }
+            if (requireExactHint)
+            {
+                reason = "stale-hint";
+                return false;
+            }
+
+            // Legacy exact profiles did not require a context pin. Preserve that behavior only when
+            // this source has one unambiguous Russian result; different contextual translations need
+            // their exact hint rather than depending on the order of variants in the JSON array.
+            if (sourceMatches.Select(candidate => candidate.Translation).Distinct(StringComparer.Ordinal).Count() != 1)
+            {
+                reason = "ambiguous-source";
+                return false;
+            }
+            record = sourceMatches.FirstOrDefault(candidate => ReferenceEquals(candidate, primary))
+                ?? sourceMatches.OrderBy(candidate => candidate.HintSha256, StringComparer.Ordinal).First();
+            reason = "selected";
+            return true;
+        }
+
+        private static IEnumerable<TranslationRecord> EnumerateVariants(TranslationRecord primary)
+        {
+            yield return primary;
+            if (primary.Variants != null)
+                foreach (TranslationRecord variant in primary.Variants) yield return variant;
+        }
+
+        private static string VariantTuple(TranslationRecord record) =>
+            record.SourceSha256 + ":" + (record.HintSha256 ?? "-");
+
+        private static void ValidateRecord(TranslationRecord record, ulong expectedId, int lineNumber)
+        {
+            if (!TryParseId(record.Id, out ulong id) || id != expectedId)
+                throw new InvalidDataException($"Historical variant id differs from its parent at line {lineNumber}.");
+            record.Id = id.ToString("X16", CultureInfo.InvariantCulture);
+            if (record.SourceSha256 == null || record.SourceSha256.Length != 64 || !record.SourceSha256.All(IsHex))
+                throw new InvalidDataException($"Invalid source_sha256 at line {lineNumber}.");
+            if (record.HintSha256 != null && (record.HintSha256.Length != 64 || !record.HintSha256.All(IsHex)))
+                throw new InvalidDataException($"Invalid hint_sha256 at line {lineNumber}.");
+            if (record.Translation == null || record.Status == null)
+                throw new InvalidDataException($"Translation and status cannot be null at line {lineNumber}.");
+            if (!AllowedStatuses.Contains(record.Status))
+                throw new InvalidDataException($"Unsupported translation status at line {lineNumber}: {record.Status}");
+            if (record.IssueCodes == null || record.RiskFlags == null || record.ReviewerIds == null)
+                throw new InvalidDataException($"Translation arrays cannot be null at line {lineNumber}.");
+            if (record.Confidence != null && record.Confidence != "high" && record.Confidence != "medium" && record.Confidence != "low")
+                throw new InvalidDataException($"Unsupported confidence at line {lineNumber}: {record.Confidence}");
         }
 
         public bool TryGetRecord(ulong id, out TranslationRecord? record)

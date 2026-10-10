@@ -49,19 +49,9 @@ namespace InvokersRu.Core.Translations
                     continue;
                 }
 
-                if (catalog.TryGetUsable(target.KeyHash, source.Value, includeDraft, out TranslationRecord? record, out string reason, approvedOnly))
+                if (catalog.TryGetUsableForHint(target.KeyHash, source.Value, target.Value, includeDraft,
+                    out TranslationRecord? record, out string reason, approvedOnly, requireExactHint))
                 {
-                    if (requireExactHint
-                        && (record!.HintSha256 == null
-                            || target.Value == null
-                            || !Hashing.FixedEqualsHex(record.HintSha256, Hashing.Sha256Text(target.Value))))
-                    {
-                        summary.StaleHintRecords++;
-                        target.Value = source.Value;
-                        summary.EnglishFallbacks++;
-                        continue;
-                    }
-
                     if (excludeNeedsReview && record!.NeedsReview)
                     {
                         summary.NeedsReviewFallbacks++;
@@ -101,6 +91,10 @@ namespace InvokersRu.Core.Translations
                     else if (reason == "stale-source")
                     {
                         summary.StaleCatalogRecords++;
+                    }
+                    else if (reason == "stale-hint")
+                    {
+                        summary.StaleHintRecords++;
                     }
                     else
                     {

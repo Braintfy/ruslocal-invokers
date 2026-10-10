@@ -734,7 +734,8 @@ namespace InvokersRu.Cli
                 inspection,
                 profile,
                 catalog,
-                resolution.LocalProblem);
+                resolution.LocalProblem,
+                resolution.CompatibilityFailure);
             IReadOnlyList<string> conflicts = plan
                 ? PatchService.FindRuntimeCacheProcessConflicts()
                 : Array.Empty<string>();
@@ -877,6 +878,18 @@ namespace InvokersRu.Cli
                         expected = diagnostic.Expected
                     },
                     local_problem = resolution.LocalProblem,
+                    compatibility_failure = resolution.CompatibilityFailure == null ? null : new
+                    {
+                        code = resolution.CompatibilityFailure.Code,
+                        stage = resolution.CompatibilityFailure.Stage,
+                        message = resolution.CompatibilityFailure.Message,
+                        applied_translations = resolution.CompatibilityFailure.Composition?.AppliedTranslations,
+                        english_fallbacks = resolution.CompatibilityFailure.Composition?.EnglishFallbacks,
+                        base_fallbacks = resolution.CompatibilityFailure.Composition?.BaseFallbacks,
+                        stale_source_records = resolution.CompatibilityFailure.Composition?.StaleCatalogRecords,
+                        stale_hint_records = resolution.CompatibilityFailure.Composition?.StaleHintRecords,
+                        rejected_records = resolution.CompatibilityFailure.Composition?.RejectedCatalogRecords
+                    },
                     update = signedUpdate,
                     channel_authority = signedChannelAuthority,
                     translation_update_available = translationUpdateAvailable,
@@ -1004,10 +1017,17 @@ namespace InvokersRu.Cli
             RuntimeCacheInspection inspection,
             RuntimeCacheCompatibility profile,
             RuntimeCatalogPlanInfo catalog,
-            string? localProblem)
+            string? localProblem,
+            RuntimeCompatibilityFailure? compatibilityFailure)
         {
             static RuntimePlanDiagnostic Value(string kind, string component, string? current, string? expected) =>
                 new RuntimePlanDiagnostic(kind, component, current, expected);
+
+            if (compatibilityFailure != null)
+                return Value(compatibilityFailure.IsLocalState ? "local-state"
+                    : compatibilityFailure.Code is "signed-profile-unavailable" or "catalog-no-current-matches"
+                        ? "translation-data" : "structural-boundary",
+                    compatibilityFailure.Code, compatibilityFailure.Stage, compatibilityFailure.Message);
 
             if (string.Equals(localProblem, "signed-profile-unavailable", StringComparison.Ordinal))
                 return Value("translation-data", "signed-profile-unavailable",
