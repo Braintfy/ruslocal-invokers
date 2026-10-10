@@ -1371,6 +1371,11 @@ namespace InvokersRu.Cli
                     && selectedInspection.Status == InstallationStatus.InconsistentState
                     && selectedBundle != null
                     && selectedBundle.Source != SignedUpdateBundleSource.LastKnownGood
+                    // A published exact current tuple has stronger migration authority. Let the
+                    // outer resolver authenticate its predecessor (or archive via its established
+                    // exact route), rather than replacing that result with opaque adaptive state.
+                    && !SignedUpdateRuntimeProfileAdapter.TrySelectExact(
+                        selectedBundle.Update.Manifest, selectedProfile, officialBase, out _)
                     && channelAuthority != null
                     && Hashing.FixedEqualsHex(selectedBundle.Update.PayloadSha256, channelAuthority.PayloadSha256)
                     && !selectedBundle.Update.IsExpiredAt(DateTimeOffset.UtcNow)

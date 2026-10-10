@@ -117,6 +117,19 @@ namespace InvokersRu.SmokeTests
                     && File.ReadAllBytes(targetPath).SequenceEqual(uk8), "Read-only inspection changed the live copies.");
                 passed("current signed catalogue permits UK8 with obsolete foreign-family state and remains usable from verified offline CachedCurrent");
 
+                File.WriteAllBytes(targetPath, uk10);
+                RuntimeUpdateResolution? exactCurrent = Resolve();
+                Require(exactCurrent == null || (exactCurrent.Inspection.Status != InstallationStatus.PatchSupersededByOfficialUpdate
+                    && exactCurrent.Inspection.SignedCompatibleStaleStateSha256 == null),
+                    "Adaptive opaque-state migration pre-empted the stronger published exact current tuple.");
+                Require(RuntimeCacheService.TryInspectSignedExactOfficialWithObsoleteState(
+                    cache, statePath, signed, embedded, out RuntimeCacheInspection exactMigration)
+                    && exactMigration.Status == InstallationStatus.PatchSupersededByOfficialUpdate
+                    && exactMigration.Profile?.Mode == "exact",
+                    "Deferring opaque compatible migration lost the established exact current-state route.");
+                Reset();
+                passed("published exact current tuples retain stronger exact migration precedence over opaque compatible refresh");
+
                 Refused("Last-known-good catalogue", Resolve(source: SignedUpdateBundleSource.LastKnownGood));
                 Refused("Missing authenticated head", Resolve(useAuthority: false));
                 Refused("Embedded-only/offline catalogue", Resolve(useBundle: false, useAuthority: false));
