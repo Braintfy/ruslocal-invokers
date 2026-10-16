@@ -1,5 +1,11 @@
 # Changelog
 
+## macOS script 2.12.0 — 2026-10-16
+
+- Check and download the translation catalog when the Mac app opens and whenever the player clicks **Проверить**, using the same entry point already called by compatible installed bundles. Show whether the catalog was downloaded, updated, already current or kept from the local cache.
+- Validate changed downloads with the bundled CLI before atomically replacing the catalog. Network failures, invalid or truncated catalogs preserve the existing copy; an unavailable first download is explained and does not advertise installation. Catalog requests have bounded timeouts and request fresh upstream data.
+- Keep startup/check operations read-only for the game, installation state and backups. Applying the translation remains an explicit installation action, and the existing app bundle does not need replacement.
+
 ## Windows 3.1.15 Preview — 2026-10-10
 
 - Added automatic fresh installation preparation when a game update leaves obsolete patch metadata behind. A current authenticated catalog is rematerialized against the supported EN/UK/stamp tuple; obsolete metadata is preserved byte-for-byte, and a new verified backup of the current target is prepared before archival. Old backup paths are not followed and old backups are never restored over new game files.

@@ -5,7 +5,7 @@
 set -uo pipefail
 
 # Version of this script. It updates itself from the repository; the bundle around it stays frozen.
-APP_VERSION="2.11.0"
+APP_VERSION="2.12.0"
 # Version of the application bundle, which only changes when the launcher or the CLI has to change.
 BUNDLE_VERSION="3.1.0"
 # Oldest bundle that still works. Kept apart from BUNDLE_VERSION so rebuilding the image does not tell
@@ -16,6 +16,8 @@ REPO_RAW="https://raw.githubusercontent.com/Braintfy/ruslocal-invokers/main"
 OVERLAY_URL="${REPO_RAW}/translations/ru_RU.jsonl"
 MANIFEST_URL="${REPO_RAW}/config/mac-patcher.json"
 PATCHER_URL="${REPO_RAW}/mac/patcher-main.sh"
+CATALOG_STATUS=""
+CATALOG_DETAIL=""
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Set by the launcher, because this script may be running from the updatable copy outside the bundle.
@@ -501,6 +503,10 @@ atomic_install() {
 # The overlay is tens of megabytes of JSONL, which compresses roughly tenfold in transit.
 fetch() { curl -fsSL --compressed --max-time 300 "$1" -o "$2" 2>>"$LOG_FILE"; }
 fetch_update() { curl -fsSL --compressed --connect-timeout 5 --max-time 15 "$1" -o "$2" 2>>"$LOG_FILE"; }
+fetch_catalog() {
+    curl -fsSL --compressed --connect-timeout 5 --max-time 30 \
+        -H 'Cache-Control: no-cache' "$1" -o "$2" 2>>"$LOG_FILE"
+}
 
 # Replaces this script from the repository without touching the application bundle, so the Full Disk
 # Access grant — which macOS pins to the bundle's code signature — keeps working. The download is
@@ -589,35 +595,70 @@ ${notes}
     fi
 }
 
-# Downloads the public overlay. Returns 0 if a usable overlay is at $OVERLAY_CACHE.
+# A failed check must leave both the installed game and the last usable catalog alone.
+catalog_fallback() {
+    if [ -s "$OVERLAY_CACHE" ]; then
+        CATALOG_STATUS="cached"
+        CATALOG_DETAIL="$1 Используется сохранённый каталог."
+        return 0
+    fi
+    CATALOG_STATUS="unavailable"
+    CATALOG_DETAIL="$1 Сохранённого каталога нет; повторите проверку."
+    return 1
+}
+
+# Downloads the public overlay. The Mac caller supplies its English table so a changed download
+# passes the bundled production parser/validator before it can replace the working catalog.
 refresh_overlay() {
-    local fresh="${WORK_DIR}/ru_RU.jsonl.new" fresh_lines cached_lines
-    if fetch "$OVERLAY_URL" "$fresh" && [ -s "$fresh" ]; then
-        if [ ! -f "$OVERLAY_CACHE" ]; then
-            mv -f "$fresh" "$OVERLAY_CACHE"
-            printf 'overlay downloaded\n' >>"$LOG_FILE"
-            return 0
-        fi
-        if [ "$(sha256_of "$fresh")" = "$(sha256_of "$OVERLAY_CACHE")" ]; then
+    local english="${1:-}" fresh fresh_lines cached_lines had_catalog="no"
+    fresh="$(mktemp "${WORK_DIR}/ru_RU.jsonl.XXXXXX")" || {
+        catalog_fallback "Не удалось подготовить загрузку перевода."
+        return $?
+    }
+    if fetch_catalog "$OVERLAY_URL" "$fresh" && [ -s "$fresh" ]; then
+        [ -s "$OVERLAY_CACHE" ] && had_catalog="yes"
+        if [ "$had_catalog" = "yes" ] && [ "$(sha256_of "$fresh")" = "$(sha256_of "$OVERLAY_CACHE")" ]; then
             rm -f "$fresh"
+            CATALOG_STATUS="current"
+            CATALOG_DETAIL="Каталог перевода актуален."
             return 0
         fi
         # A catalog that suddenly lost most of its records means something is wrong upstream, not that
         # the translation shrank on purpose. Keeping the copy already on disk avoids turning a good
         # installation back into a mostly-English one without the user asking for it.
         fresh_lines="$(wc -l < "$fresh" | tr -d ' ')"
-        cached_lines="$(wc -l < "$OVERLAY_CACHE" | tr -d ' ')"
-        if [ "$fresh_lines" -lt $((cached_lines / 2)) ]; then
+        cached_lines=0
+        [ "$had_catalog" = "no" ] || cached_lines="$(wc -l < "$OVERLAY_CACHE" | tr -d ' ')"
+        if [ "$fresh_lines" -lt 1 ] || [ "$fresh_lines" -lt $((cached_lines / 2)) ]; then
             printf 'refusing overlay downgrade: fresh=%s cached=%s\n' "$fresh_lines" "$cached_lines" >>"$LOG_FILE"
             rm -f "$fresh"
-            return 0
+            catalog_fallback "Получен неполный каталог перевода."
+            return $?
         fi
-        mv -f "$fresh" "$OVERLAY_CACHE"
-        printf 'overlay updated: %s records\n' "$fresh_lines" >>"$LOG_FILE"
+        if [ -n "$english" ] && ! "$CLI" validate --english "$english" \
+                --translations "$fresh" --include-draft >>"$LOG_FILE" 2>&1; then
+            printf 'overlay rejected: validation failed\n' >>"$LOG_FILE"
+            rm -f "$fresh"
+            catalog_fallback "Новый каталог перевода не прошёл проверку."
+            return $?
+        fi
+        if ! mv -f "$fresh" "$OVERLAY_CACHE"; then
+            rm -f "$fresh"
+            catalog_fallback "Не удалось сохранить каталог перевода."
+            return $?
+        fi
+        if [ "$had_catalog" = "yes" ]; then
+            CATALOG_STATUS="updated"
+            CATALOG_DETAIL="Каталог перевода обновлён."
+        else
+            CATALOG_STATUS="downloaded"
+            CATALOG_DETAIL="Каталог перевода загружен."
+        fi
+        printf 'overlay %s: %s records\n' "$CATALOG_STATUS" "$fresh_lines" >>"$LOG_FILE"
         return 0
     fi
     rm -f "$fresh"
-    [ -s "$OVERLAY_CACHE" ]
+    catalog_fallback "Не удалось загрузить каталог перевода."
 }
 
 # ---------- Android ----------
@@ -877,7 +918,7 @@ do_install() {
     require_patch_preflight "$cache_root" || return 1
     english_sha="$(sha256_of "$english")"
     progress_start "downloading overlay"
-    if ! refresh_overlay; then
+    if ! refresh_overlay "$english"; then
         say_error "Не удалось загрузить перевод и нет сохранённой копии.
 
 Проверьте интернет-соединение и попробуйте ещё раз."
@@ -1077,6 +1118,23 @@ gui_emit() {
     printf '%s=%s\n' "$key" "$value"
 }
 
+# The existing Cocoa panel invokes --gui-status on launch and on every "Проверить".
+# Keep gui_status itself local for tests and diagnostics; this shared entry point refreshes data
+# before reporting the result, without composing or installing anything into the game cache.
+gui_check() {
+    local cache_root
+    cache_root="$(find_cache_root || true)"
+    if [ -n "$cache_root" ]; then
+        refresh_overlay "$cache_root/${ENGLISH_NAME}" || true
+    else
+        CATALOG_STATUS="not-checked"
+        CATALOG_DETAIL=""
+    fi
+    gui_status
+    gui_emit CATALOG_STATUS "$CATALOG_STATUS"
+    gui_emit CATALOG_SHA256 "$(sha256_of "$OVERLAY_CACHE")"
+}
+
 gui_status() {
     local cache_root target version client state title detail current original patched running="no"
     local language language_label can_install="no" can_restore="no" protection
@@ -1174,6 +1232,10 @@ gui_status() {
         can_install="no"
         printf 'PROTECTION_CHECK_BLOCKED: %s\n' "$protection" >>"$LOG_FILE"
     fi
+    if [ "${CATALOG_STATUS:-}" = "unavailable" ]; then
+        can_install="no"
+    fi
+    [ -z "${CATALOG_DETAIL:-}" ] || detail="${CATALOG_DETAIL} ${detail}"
     gui_emit STATE "$state"
     gui_emit TITLE "$title"
     gui_emit DETAIL "$detail"
@@ -1259,7 +1321,7 @@ COMMAND="${1:-interactive}"
 self_update "$@"
 
 if [ "$COMMAND" = "--gui-status" ]; then
-    gui_status
+    gui_check
     exit 0
 fi
 

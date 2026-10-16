@@ -267,3 +267,81 @@ printf 'PASS: mac protection markers, write-time recheck and original restoratio
 )
 
 printf 'PASS: mac installed status follows the current English source\n'
+
+# Launch and "Проверить" share the same read-only refresh. Downloads must never alter the game
+# or discard a working catalog when the network or the new catalog fails validation.
+(
+    OVERLAY_CACHE="${TEST_ROOT}/catalog-updates/ru_RU.jsonl"
+    mkdir -p "$(dirname "$OVERLAY_CACHE")"
+    incoming="${TEST_ROOT}/incoming-catalog.jsonl"
+    printf '{"translation":"новый перевод"}\n' >"$incoming"
+    fetch_result=0
+    validation_result=0
+    fetch_catalog() {
+        printf '%s\n' "$1" >>"${TEST_ROOT}/catalog-requests.txt"
+        [ "$fetch_result" -eq 0 ] || return 1
+        cp "$incoming" "$2"
+    }
+    catalog_cli() {
+        [ "$1" = validate ] || fail 'catalog refresh did not use the production validator'
+        printf 'validated\n' >>"${TEST_ROOT}/catalog-validation.txt"
+        return "$validation_result"
+    }
+    CLI=catalog_cli
+    find_cache_root() { printf '%s\n' "$NATIVE"; }
+    cache_display_version() { printf 'Prod_0.61.2_10'; }
+    matching_downloaded_tables() { return 0; }
+    game_running() { return 1; }
+    preferred_language() { printf '8'; }
+    protection_reason() { return 0; }
+    game_before="$(sha256_of "${NATIVE}/${TARGET_NAME}")"
+    state_before="$(sha256_of "$STATE_FILE")"
+
+    status="$(gui_check)"
+    [[ "$status" == *'CATALOG_STATUS=downloaded'* ]] || fail 'launch did not download the first catalog'
+    [[ "$status" == *'DETAIL=Каталог перевода загружен.'* ]] || fail 'catalog result is not visible in existing Mac windows'
+    [ "$(sha256_of "$OVERLAY_CACHE")" = "$(sha256_of "$incoming")" ] || fail 'downloaded catalog was not cached'
+    [ "$(wc -l < "${TEST_ROOT}/catalog-validation.txt" | tr -d ' ')" = 1 ] || fail 'new catalog was not validated once'
+
+    status="$(gui_check)"
+    [[ "$status" == *'CATALOG_STATUS=current'* ]] || fail 'check did not recognize the current catalog'
+    [ "$(wc -l < "${TEST_ROOT}/catalog-requests.txt" | tr -d ' ')" = 2 ] || fail 'check did not request the catalog again'
+    [ "$(wc -l < "${TEST_ROOT}/catalog-validation.txt" | tr -d ' ')" = 1 ] || fail 'identical catalog was needlessly revalidated'
+
+    printf '{"translation":"исправленный перевод"}\n' >"$incoming"
+    status="$(gui_check)"
+    [[ "$status" == *'CATALOG_STATUS=updated'* ]] || fail 'check did not cache the changed catalog'
+    [[ "$status" == *'CAN_INSTALL=yes'* ]] || fail 'changed official files incorrectly blocked installation'
+    good_catalog="$(sha256_of "$OVERLAY_CACHE")"
+
+    fetch_result=1
+    status="$(gui_check)"
+    [[ "$status" == *'CATALOG_STATUS=cached'* && "$status" == *'CAN_INSTALL=yes'* ]] || fail 'offline refresh blocked the working catalog'
+    [[ "$status" == *'Используется сохранённый каталог.'* ]] || fail 'offline fallback was not explained'
+    [ "$(sha256_of "$OVERLAY_CACHE")" = "$good_catalog" ] || fail 'offline refresh changed the cached catalog'
+
+    fetch_result=0
+    validation_result=1
+    printf 'not JSON\n' >"$incoming"
+    status="$(gui_check)"
+    [[ "$status" == *'CATALOG_STATUS=cached'* ]] || fail 'invalid download did not fall back to the working catalog'
+    [ "$(sha256_of "$OVERLAY_CACHE")" = "$good_catalog" ] || fail 'invalid download replaced the working catalog'
+
+    # Keep the existing protection against a truncated upstream catalog, even if it parses.
+    validation_result=0
+    printf 'one\ntwo\nthree\nfour\n' >"$OVERLAY_CACHE"
+    printf 'one\n' >"$incoming"
+    good_catalog="$(sha256_of "$OVERLAY_CACHE")"
+    status="$(gui_check)"
+    [[ "$status" == *'CATALOG_STATUS=cached'* ]] || fail 'truncated download did not use the working catalog'
+    [ "$(sha256_of "$OVERLAY_CACHE")" = "$good_catalog" ] || fail 'truncated download replaced the working catalog'
+
+    rm "$OVERLAY_CACHE"
+    fetch_result=1
+    status="$(gui_check)"
+    [[ "$status" == *'CATALOG_STATUS=unavailable'* && "$status" == *'CAN_INSTALL=no'* ]] || fail 'missing offline catalog still offered installation'
+    [ ! -e "$OVERLAY_CACHE" ] || fail 'failed download created a catalog'
+    [ "$(sha256_of "${NATIVE}/${TARGET_NAME}")" = "$game_before" ] || fail 'catalog checks changed the game file'
+    [ "$(sha256_of "$STATE_FILE")" = "$state_before" ] || fail 'catalog checks changed installation state'
+)
+printf 'PASS: mac launch/check refresh catalogs with validated offline fallback\n'
