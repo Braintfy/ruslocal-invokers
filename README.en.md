@@ -39,9 +39,9 @@ If EN/UK changed after installation, do not manually delete state or backups. Up
 
 ### macOS
 
-The observed native client has launcher `1.0.319`, game `0.61.1506`, and downloaded language tables `Prod_0.61.1_3`. Mac app `3.1.0` uses script `2.11.0`; **Проверить** also checks for script updates. A compatible installed app receives script and translation catalog updates without replacing the DMG manually.
+The current translation is verified against EN `Prod_0.62.2_21` / UK `Prod_0.62.2_18`: 45,826 translation rows apply, three service strings retain English, and 438 source entries are empty. Mac app `3.1.0` with script `2.12.0` checks and downloads the current catalog on startup and **Проверить**. Select **Установить перевод** to apply it; replacing the DMG is unnecessary.
 
-English and Ukrainian table revisions may differ: the catalog also covers EN `Prod_0.61.1_3` with UK `Prod_0.61.1_5`. The patcher checks their shared content family and validates rows during composition.
+English and Ukrainian table revisions may differ: EN `_21` and UK `_18` share the `0.62.2` content family. The patcher checks that family and validates rows during composition. The Mac catalog contains only current game keys so the CLI in existing installed apps accepts it.
 
 The Mac DMG is in the [separate macOS release](https://github.com/Braintfy/ruslocal-invokers/releases/tag/invokersru-update-channel-v1); existing direct download links remain valid.
 

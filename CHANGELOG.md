@@ -1,5 +1,12 @@
 # Changelog
 
+## macOS translation catalog 0.62.2 — 2026-10-26
+
+- Updated the translation for EN `Prod_0.62.2_21` / UK `Prod_0.62.2_18`, including Sedula, Frightfest, Endless Battle, Spires, equipment settings and the revised skill mechanics. Added 4,651 records and refreshed 4,919 changed English source bindings; unchanged Russian wording is preserved.
+- Composition applies 45,826 translation rows with zero validation errors, three service-text English fallbacks and 438 empty source entries. New and revised translations remain community-preview drafts.
+- Removed 1,592 retired keys from the shared Mac catalog so the CLI in existing app bundles accepts the startup download. The separately prepared Windows catalog retains all 42,834 previous source/context pairs unchanged, including retired keys and historical variants.
+- Verified catalog validation, installation detection and byte-exact original restoration with the already installed Mac CLI on copied 0.62.2 files. The output matches composition with the Windows CLI source. Existing bundles receive the catalog through their current startup/check URL; no new DMG or patcher script is needed.
+
 ## macOS script 2.12.0 — 2026-10-16
 
 - Check and download the translation catalog when the Mac app opens and whenever the player clicks **Проверить**, using the same entry point already called by compatible installed bundles. Show whether the catalog was downloaded, updated, already current or kept from the local cache.
