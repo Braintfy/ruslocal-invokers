@@ -1,5 +1,12 @@
 # Changelog
 
+## Translation data 15 — 2026-11-09
+
+- Updated the translation for the observed EN `Prod_0.62.4_5` / UK `Prod_0.62.4_1` and the prefetched EN/UK `Prod_0.62.5_16` packages. Relative to the 0.62.2 shared catalog, 0.62.4 adds 537 records and refreshes 71 changed English sources (69 Russian wording changes); 0.62.5 adds 798 records and refreshes 80 sources (78 wording changes). Unaffected translations and the seven compact equipment labels are preserved.
+- Refreshed Ukrainian hint bindings and retained source/context-bound historical variants from the verified signed data 14 catalog and the 0.62.2 shared catalog. The Windows package has 48,216 unique IDs and 22,078 historical variants, including 1,592 retired IDs; the current plain catalog has 46,624 records.
+- Rebuilt six exact profiles without validation errors, retaining the 0.61.1 UK revisions 3/5/7 and 0.61.2 revision 10, alongside 0.62.4 revision 1 and 0.62.5 revision 16. The observed EN 0.62.4 revision 5 / UK revision 1 tuple uses the existing compatible-revision path: 46,297 Russian rows are applied, and 66 officially null Ukrainian slots remain null. The full 0.62.5 tuple applies 46,624 rows.
+- Translation-only update for the existing Windows 3.1.15 patcher; no installer, Unity resources, font assets or application-update channel changes. Installation and original restoration are verified only on isolated copies, never by modifying the live game.
+
 ## macOS translation catalog 0.62.2 — 2026-10-26
 
 - Updated the translation for EN `Prod_0.62.2_21` / UK `Prod_0.62.2_18`, including Sedula, Frightfest, Endless Battle, Spires, equipment settings and the revised skill mechanics. Added 4,651 records and refreshed 4,919 changed English source bindings; unchanged Russian wording is preserved.

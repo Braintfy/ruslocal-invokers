@@ -19,7 +19,7 @@ Only Windows and macOS builds are currently distributed. Legacy Android tools re
 
 ### Windows
 
-**Windows 3.1.15:** the patcher prepares a fresh installation after a game update even when obsolete localization metadata cannot be authenticated. It archives that metadata and prepares a verified backup of the current target; it never restores an old backup over a newer game file. Compatible EN/UK tables in the supported format do not need a profile for every revision: translation requires matching IDs, English sources and Ukrainian hints. Other texts remain English and coverage is displayed. Signed translation data 14 for `Prod_0.61.2_10` and historical `0.61.1` variants are unchanged. Damaged files, interrupted transactions and unsupported formats still block writes. Writes remain restricted to the current Windows user's standard game cache; a selected nonstandard folder can be inspected. Do not delete files manually.
+**Windows 3.1.15:** the patcher prepares a fresh installation after a game update even when obsolete localization metadata cannot be authenticated. It archives that metadata and prepares a verified backup of the current target; it never restores an old backup over a newer game file. Compatible EN/UK tables in the supported format do not need a profile for every revision: translation requires matching IDs, English sources and Ukrainian hints. Other texts remain English and coverage is displayed. Signed translation data **15** covers `0.62.4` and the prefetched `0.62.5` packages, retaining historical variants. The observed `0.62.4` files apply 46,297 translation rows; the complete `0.62.5` tuple applies 46,624. Officially empty fields remain unchanged. Damaged files, interrupted transactions and unsupported formats still block writes. Writes remain restricted to the current Windows user's standard game cache; a selected nonstandard folder can be inspected. Do not delete files manually.
 
 An installed translation is now clearly shown as installed. An unavailable update does not mean the existing translation has disappeared.
 
@@ -27,7 +27,7 @@ An installed translation is now clearly shown as installed. An unavailable updat
 2. Select **Ukrainian** in the game, wait for the download, then close the game and launcher completely.
 3. Run the localizer, select **Check**, then install or update the translation.
 
-**After upgrading the game to 0.61:** select English, fully restart the game and wait for the main menu. Repeat with Ukrainian, then close the game and launcher. This downloads both current tables instead of retaining the previous game's English file.
+**After a major game update:** select English, fully restart the game and wait for the main menu. Repeat with Ukrainian, then close the game and launcher. This downloads both current tables instead of retaining the previous game's English file.
 
 **Upgrading an old patcher:** versions 3.1.5–3.1.14 offer **3.1.15** through their updater. The historical-variant catalog requires at least 3.1.14; automatic fresh preparation with obsolete state requires 3.1.15. Install the current EXE over versions 3.1.2–3.1.4 once. It then checks GitHub for application updates on startup and when you click Check. The [previous direct link](https://github.com/Braintfy/ruslocal-invokers/releases/download/v3.1.2-preview/InvokersRu-3.1-Preview-3.1.2-preview-win-x64.exe) is preserved.
 
@@ -39,7 +39,7 @@ If EN/UK changed after installation, do not manually delete state or backups. Up
 
 ### macOS
 
-The current translation is verified against EN `Prod_0.62.2_21` / UK `Prod_0.62.2_18`: 45,826 translation rows apply, three service strings retain English, and 438 source entries are empty. Mac app `3.1.0` with script `2.12.0` checks and downloads the current catalog on startup and **Проверить**. Select **Установить перевод** to apply it; replacing the DMG is unnecessary.
+The last separate native Mac check used EN `Prod_0.62.2_21` / UK `Prod_0.62.2_18`: 45,826 translation rows applied, three service strings retained English, and 438 source entries were empty. Mac app `3.1.0` with script `2.12.0` checks and downloads the current catalog on startup and **Проверить**. Select **Установить перевод** to apply it; replacing the DMG is unnecessary.
 
 English and Ukrainian table revisions may differ: EN `_21` and UK `_18` share the `0.62.2` content family. The patcher checks that family and validates rows during composition. The Mac catalog contains only current game keys so the CLI in existing installed apps accepts it.
 
