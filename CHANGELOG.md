@@ -1,5 +1,12 @@
 # Changelog
 
+## Windows 3.1.16 Preview / translation data 16 — 2026-11-19
+
+- Compatible runtime-cache composition accepts a Ukrainian key superset when every English key remains present in the same supported LOC1 family. Ukrainian-only strings and null slots remain unchanged, including the observed two additional keys in UK `Prod_0.62.5_42` versus EN `Prod_0.62.5_33`. Missing/replaced English keys, different families and malformed tables remain refusals. Exact profiles retain their original full-keyset rules.
+- Keep the complete Ukrainian target count/keyset, source/target/stamp hashes, source snapshots and output pins throughout inspection, installation, state reconstruction and restoration. Source keys are matched by ID, not by array index. A changed additional key invalidates the inspection just like a changed translated entry.
+- Refresh 17 English source records, add one translated string and update 133 Ukrainian hint bindings for EN `_33` / UK `_42`. The other 46,474 current records and compact equipment labels are preserved. The matching-key UK `_32` revision and historical variants remain available; seven exact profiles are rebuilt from the same signed catalog.
+- Current EN `_33` / UK `_42` composition applies 46,625 Russian strings and preserves 234 entries, including the two Ukrainian-only keys. The shared current catalog has 46,625 records; the signed Windows catalog retains 48,217 unique IDs and 22,237 historical variants. Data 16 requires patcher 3.1.16 and is delivered after the app update through the existing channels and download links.
+
 ## Translation data 15 — 2026-11-09
 
 - Updated the translation for the observed EN `Prod_0.62.4_5` / UK `Prod_0.62.4_1` and the prefetched EN/UK `Prod_0.62.5_16` packages. Relative to the 0.62.2 shared catalog, 0.62.4 adds 537 records and refreshes 71 changed English sources (69 Russian wording changes); 0.62.5 adds 798 records and refreshes 80 sources (78 wording changes). Unaffected translations and the seven compact equipment labels are preserved.

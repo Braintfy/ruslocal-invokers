@@ -28,6 +28,7 @@ namespace InvokersRu.SmokeTests
             RuntimeCacheSourceStampSmokeTests.Run(passed);
             CompatibleResolutionFailureSmokeTests.Run(passed);
             SignedCompatibleObsoleteStateSmokeTests.Run(passed);
+            AdditionalUkrainianKeysSmokeTests.Run(passed);
             string profilePath = Path.Combine(AppContext.BaseDirectory, CurrentProfileFileName);
             CurrentProfileStrictParsingCheck(profilePath);
             passed("0.60.1247 profile strict parsing, community policy, and fallback pins");
@@ -798,6 +799,15 @@ namespace InvokersRu.SmokeTests
                 File.WriteAllBytes(basePath, baseRaw);
 
                 byte[] changedKeys = CreateLoc1(8, 169, 0xD7A0FEFB, baseValues.Concat(new[] { "Новий ключ" }).ToArray(), "Prod_synthetic_169");
+                File.WriteAllBytes(basePath, changedKeys);
+                CompatibleRevisionProfileBuild additionalTarget = CompatibleRevisionProfileBuilder.Build(
+                    englishPath, basePath, stampPath, family, catalogBytes,
+                    Hashing.Sha256Bytes(catalogBytes), "community-preview-all-drafts");
+                Require(additionalTarget.Profile.EntryCount == baseValues.Length + 1,
+                    "An additional Ukrainian key was not retained in the compatible target.");
+                // Extra target keys are supported, but replacing a source key is not.
+                int keyTableOffset = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(changedKeys.AsSpan(0x20, 8)));
+                WriteUInt64(changedKeys, keyTableOffset, 0);
                 File.WriteAllBytes(basePath, changedKeys);
                 ExpectCompatibleRejected(() => CompatibleRevisionProfileBuilder.Build(
                     englishPath, basePath, stampPath, family, catalogBytes,

@@ -28,9 +28,10 @@ namespace InvokersRu.Core.Translations
             bool excludeNeedsReview = false,
             bool allowPerLocaleContentVersion = false,
             Func<TranslationRecord, string, bool>? eligibility = null,
-            bool requireExactHint = false)
+            bool requireExactHint = false,
+            bool allowAdditionalBaseKeys = false)
         {
-            Loc1Compatibility.RequireComposableCorpus(english, baseLocale, allowPerLocaleContentVersion);
+            Loc1Compatibility.RequireComposableCorpus(english, baseLocale, allowPerLocaleContentVersion, allowAdditionalBaseKeys);
 
             Dictionary<ulong, Loc1Entry> englishByHash = english.IndexByHash();
             var summary = new CompositionSummary();

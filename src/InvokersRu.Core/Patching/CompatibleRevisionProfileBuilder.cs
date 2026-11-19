@@ -118,7 +118,8 @@ namespace InvokersRu.Core.Patching
             Loc1Document baseLocale = ParseRaw(baseBytes, "base LOC1");
             if (english.Entries.Count is < 1 or > 100_000 || baseLocale.Entries.Count is < 1 or > 100_000)
                 throw new InvalidDataException("Compatible-revision LOC1 entry count is outside the supported bounds.");
-            Loc1Compatibility.RequireComposableCorpus(english, baseLocale, allowPerLocaleContentVersion: true);
+            Loc1Compatibility.RequireComposableCorpus(english, baseLocale, allowPerLocaleContentVersion: true,
+                allowAdditionalBaseKeys: true);
             RequireFamilyIdentity(english, baseLocale, trustedContentGuid);
 
             string stampValue;
@@ -156,7 +157,8 @@ namespace InvokersRu.Core.Patching
                 includeDraft,
                 baseLocale,
                 releaseApproved ? ValidationProfile.Release : ValidationProfile.Preview,
-                allowPerLocaleContentVersion: true);
+                allowPerLocaleContentVersion: true,
+                allowAdditionalBaseKeys: true);
 
             CompositionSummary composition = TranslationComposer.Apply(
                 english,
@@ -171,7 +173,8 @@ namespace InvokersRu.Core.Patching
                     : releaseApproved
                         ? (record, source) => TranslationValidator.IsReleaseReady(record, source, out _)
                         : null,
-                requireExactHint: true);
+                requireExactHint: true,
+                allowAdditionalBaseKeys: true);
             bool emptyDiagnostic = composition.AppliedTranslations < 1;
             if (emptyDiagnostic && !allowEmptyDiagnostic)
             {

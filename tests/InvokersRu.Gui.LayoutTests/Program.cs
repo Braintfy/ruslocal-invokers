@@ -122,7 +122,7 @@ internal static class Program
         object plan = Activator.CreateInstance(planType)!;
         MainFormType.GetField("_lastPlan", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(form, plan);
         Set(plan, "Status", "UnknownBuild");
-        Set(plan, "PatcherVersion", "3.1.15");
+        Set(plan, "PatcherVersion", "3.1.16");
         Set(plan, "PlanAction", "REFUSE_UNKNOWN_OR_INCONSISTENT");
         Set(plan, "UpdateProblemBlocksApply", true);
         object protection = planType.GetProperty("ProtectionCheck")!.GetValue(plan)!;

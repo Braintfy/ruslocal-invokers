@@ -68,11 +68,12 @@ namespace InvokersRu.Core.Translations
             bool includeDraft,
             Loc1Document? ukrainianHint = null,
             ValidationProfile profile = ValidationProfile.Preview,
-            bool allowPerLocaleContentVersion = false)
+            bool allowPerLocaleContentVersion = false,
+            bool allowAdditionalBaseKeys = false)
         {
             if (ukrainianHint != null)
             {
-                Loc1Compatibility.RequireComposableCorpus(english, ukrainianHint, allowPerLocaleContentVersion);
+                Loc1Compatibility.RequireComposableCorpus(english, ukrainianHint, allowPerLocaleContentVersion, allowAdditionalBaseKeys);
             }
 
             Dictionary<ulong, Loc1Entry> sourceByHash = english.IndexByHash();

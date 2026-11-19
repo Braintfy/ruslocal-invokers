@@ -41,22 +41,44 @@ namespace InvokersRu.Core.Loc1
         public static void RequireComposableCorpus(
             Loc1Document english,
             Loc1Document baseLocale,
-            bool allowPerLocaleContentVersion = false)
+            bool allowPerLocaleContentVersion = false,
+            bool allowAdditionalBaseKeys = false)
         {
             bool sameGuid = string.Equals(english.ContentGuid, baseLocale.ContentGuid, StringComparison.Ordinal);
             bool sameSchema = english.FormatVersion == baseLocale.FormatVersion;
             bool sameKeys = english.Entries.Count == baseLocale.Entries.Count
                 && english.Entries.Select(entry => entry.KeyHash)
                     .SequenceEqual(baseLocale.Entries.Select(entry => entry.KeyHash));
+            bool compatibleKeys = sameKeys || (allowAdditionalBaseKeys && IsSourceKeySubset(english, baseLocale));
             bool sameVersion = string.Equals(english.ContentVersion, baseLocale.ContentVersion, StringComparison.Ordinal);
 
-            if (!sameGuid || !sameSchema || !sameKeys || (!allowPerLocaleContentVersion && !sameVersion))
+            if (!sameGuid || !sameSchema || !compatibleKeys || (!allowPerLocaleContentVersion && !sameVersion))
             {
                 string versionRule = allowPerLocaleContentVersion
-                    ? "ContentVersion may differ only when GUID, schema, and the complete ordered key set match"
+                    ? allowAdditionalBaseKeys
+                        ? "ContentVersion may differ only when GUID/schema match and every English key exists in the base locale"
+                        : "ContentVersion may differ only when GUID, schema, and the complete ordered key set match"
                     : "ContentVersion must also match";
                 throw new InvalidOperationException($"English and base locale packages are not composable. {versionRule}.");
             }
+        }
+
+        // Both documents have canonical sorted unique keys from the LOC1 parser. A target
+        // superset is safe only in explicitly opted-in paths: no source key may disappear,
+        // and target-only entries are retained by the composer rather than synthesized.
+        private static bool IsSourceKeySubset(Loc1Document english, Loc1Document baseLocale)
+        {
+            if (english.Entries.Count < 1 || english.Entries.Count > baseLocale.Entries.Count) return false;
+            int targetIndex = 0;
+            foreach (Loc1Entry source in english.Entries)
+            {
+                while (targetIndex < baseLocale.Entries.Count
+                    && baseLocale.Entries[targetIndex].KeyHash < source.KeyHash) targetIndex++;
+                if (targetIndex == baseLocale.Entries.Count
+                    || baseLocale.Entries[targetIndex].KeyHash != source.KeyHash) return false;
+                targetIndex++;
+            }
+            return true;
         }
     }
 }

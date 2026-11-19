@@ -110,7 +110,8 @@ namespace InvokersRu.Core.Patching
             byte[] stampBytes = BoundedArtifactReader.ReadRuntimeStamp(stampPath, "runtime-cache version stamp");
             Loc1Document english = Loc1Codec.Parse(englishBytes);
             baseLocale = Loc1Codec.Parse(baseBytes);
-            Loc1Compatibility.RequireComposableCorpus(english, baseLocale, allowPerLocaleContentVersion: true);
+            Loc1Compatibility.RequireComposableCorpus(english, baseLocale, allowPerLocaleContentVersion: true,
+                allowAdditionalBaseKeys: true);
             string stampValue = new UTF8Encoding(false, true).GetString(stampBytes);
             // The stamp is the game's own version marker and becomes this profile's identity, so a corrupted
             // or padded file must fail here rather than produce a profile that describes nothing real.
@@ -144,7 +145,7 @@ namespace InvokersRu.Core.Patching
                 BaseLocaleId = baseLocale.LocaleId,
                 BaseLocaleRevision = baseLocale.LocaleRevision,
                 BaseReleaseRevision = baseLocale.ReleaseRevision,
-                EntryCount = english.Entries.Count,
+                EntryCount = baseLocale.Entries.Count,
                 MinimumAppliedTranslations = 1,
                 TranslationPolicy = "supervised-safe-drafts",
                 Readiness = "blocked",
@@ -582,7 +583,8 @@ namespace InvokersRu.Core.Patching
             ValidationReport validation = TranslationValidator.Validate(
                 english, catalog, includeDraft, baseLocale,
                 releaseApproved ? ValidationProfile.Release : ValidationProfile.Preview,
-                allowPerLocaleContentVersion: true);
+                allowPerLocaleContentVersion: true,
+                allowAdditionalBaseKeys: compatibleRevision);
             if (validation.ErrorCount > 0 && !compatibleRevision)
             {
                 throw new InvalidDataException($"Translation catalog has {validation.ErrorCount} blocking validation errors.");
@@ -599,7 +601,8 @@ namespace InvokersRu.Core.Patching
                     : releaseApproved
                         ? (record, source) => TranslationValidator.IsReleaseReady(record, source, out _)
                         : null,
-                requireExactHint: compatibleRevision);
+                requireExactHint: compatibleRevision,
+                allowAdditionalBaseKeys: compatibleRevision);
             if (composition.AppliedTranslations < profile.MinimumAppliedTranslations)
             {
                 throw new InvalidDataException("Runtime-cache output is below the pinned minimum translation count.");
@@ -1572,9 +1575,14 @@ namespace InvokersRu.Core.Patching
                 || english.LocaleId != profile.EnglishLocaleId
                 || english.LocaleRevision != profile.EnglishLocaleRevision
                 || english.ReleaseRevision != profile.EnglishReleaseRevision
-                || english.Entries.Count != profile.EntryCount)
+                || (profile.Mode == CompatibleRevisionProfileBuilder.Mode
+                    ? english.Entries.Count < 1 || english.Entries.Count > profile.EntryCount
+                    : english.Entries.Count != profile.EntryCount))
                 throw new InvalidDataException("Pinned English runtime-cache LOC1 identity changed.");
-            if (profile.Mode == CompatibleRevisionProfileBuilder.Mode
+            // The source hash pins its complete bytes independently. With target-only keys,
+            // the target keyset pin is not an English keyset pin; VerifyDocuments below
+            // checks the source-subset relationship against the pinned target.
+            if (profile.Mode == CompatibleRevisionProfileBuilder.Mode && english.Entries.Count == profile.EntryCount
                 && (profile.OrderedKeysetSha256 == null
                     || !Hashing.FixedEqualsHex(
                         Loc1Compatibility.ComputeOrderedKeysetSha256(english),
@@ -1585,7 +1593,8 @@ namespace InvokersRu.Core.Patching
 
         private static void VerifyDocuments(Loc1Document english, Loc1Document target, RuntimeCacheCompatibility profile)
         {
-            Loc1Compatibility.RequireComposableCorpus(english, target, allowPerLocaleContentVersion: true);
+            Loc1Compatibility.RequireComposableCorpus(english, target, allowPerLocaleContentVersion: true,
+                allowAdditionalBaseKeys: profile.Mode == CompatibleRevisionProfileBuilder.Mode);
             if (english.FormatVersion != 4 || english.ContentGuid != profile.ContentGuid
                 || english.ContentVersion != profile.EnglishContentVersion
                 || english.LocaleId != profile.EnglishLocaleId

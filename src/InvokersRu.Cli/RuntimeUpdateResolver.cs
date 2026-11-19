@@ -827,7 +827,8 @@ namespace InvokersRu.Cli
             }
             try
             {
-                Loc1Compatibility.RequireComposableCorpus(english, baseLocale, allowPerLocaleContentVersion: true);
+                Loc1Compatibility.RequireComposableCorpus(english, baseLocale, allowPerLocaleContentVersion: true,
+                    allowAdditionalBaseKeys: true);
             }
             catch (InvalidOperationException)
             {
